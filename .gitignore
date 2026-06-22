@@ -5,6 +5,8 @@
 .knowhow/
 .superpowers/
 skills/
+docs/
+DESIGN.md
 *.jsonl
 __pycache__/
 *.pyc
