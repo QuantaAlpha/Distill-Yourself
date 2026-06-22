@@ -284,12 +284,21 @@
       .finally(() => { delete evolveStreamAborts[tab]; });
   }
 
+  /** Auto-scroll #evolve-tab-body if user is near the bottom */
+  function _evolveAutoScroll() {
+    const scrollEl = $("#evolve-tab-body");
+    if (!scrollEl) return;
+    if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80) {
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+    }
+  }
+
   function _handleEvolveStreamEvent(evt, tab, state) {
     const container = document.getElementById(`evolve-stream-${tab}`);
     const updatedEl = $("#evolve-tab-updated");
     const esc = window.esc || String;
     if (!container) return;
-    // Only update the header text if this tab is currently visible
+    // Only update the header text and auto-scroll if this tab is currently visible
     const isActiveTab = (tab === evolveActiveTab);
 
     switch (evt.type) {
@@ -317,6 +326,7 @@
           state.runningCard = null;
         }
         if (isActiveTab && updatedEl) updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`;
+        if (isActiveTab) _evolveAutoScroll();
         break;
       }
       case "text":
@@ -329,6 +339,7 @@
         state.textBlock.innerHTML = window.renderMarkdownSimple
           ? window.renderMarkdownSimple(state.blockText)
           : `<pre>${esc(state.blockText)}</pre>`;
+        if (isActiveTab) _evolveAutoScroll();
         break;
       case "result":
         state.blockText = evt.content;
@@ -340,6 +351,7 @@
         state.textBlock.innerHTML = window.renderMarkdownSimple
           ? window.renderMarkdownSimple(evt.content)
           : `<pre>${esc(evt.content)}</pre>`;
+        if (isActiveTab) _evolveAutoScroll();
         break;
       case "evolve_result": {
         const normalized = normalizeEvolveData(tab, evt.data);
