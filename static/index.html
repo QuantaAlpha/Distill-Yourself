@@ -87,11 +87,64 @@
 
       <!-- Right: Content Area -->
       <main id="content">
-        <!-- Empty state when no session selected -->
+        <!-- Welcome state when no session selected -->
         <div id="empty-state">
-          <div style="text-align:center;padding:80px 40px;color:var(--text-muted)">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;margin-bottom:16px"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            <p style="font-size:14px">Select a session to view</p>
+          <div class="welcome-container">
+            <div class="welcome-header">
+              <div class="welcome-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              </div>
+              <h2 class="welcome-title">Chat Viewer</h2>
+              <p class="welcome-subtitle">浏览和分析你的 AI 对话历史</p>
+            </div>
+            <!-- Stats row -->
+            <div class="welcome-stats" id="welcome-stats"></div>
+            <!-- Quick action cards — horizontal grid -->
+            <div class="welcome-grid">
+              <button class="welcome-card" data-action="heatmap">
+                <div class="welcome-card-icon" style="background:var(--bash-bg);color:var(--bash-accent)">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                </div>
+                <span class="welcome-card-title">工具热力图</span>
+                <span class="welcome-card-desc">各工具使用频率趋势</span>
+              </button>
+              <button class="welcome-card" data-action="hotspots">
+                <div class="welcome-card-icon" style="background:var(--edit-bg);color:var(--edit-accent)">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </div>
+                <span class="welcome-card-title">文件热点</span>
+                <span class="welcome-card-desc">最常操作的文件排行</span>
+              </button>
+              <button class="welcome-card" data-action="errors">
+                <div class="welcome-card-icon" style="background:var(--write-bg);color:var(--write-accent)">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                </div>
+                <span class="welcome-card-title">错误模式</span>
+                <span class="welcome-card-desc">高频报错归类分析</span>
+              </button>
+              <button class="welcome-card" data-action="profile">
+                <div class="welcome-card-icon" style="background:var(--agent-bg);color:var(--agent-accent)">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </div>
+                <span class="welcome-card-title">用户画像</span>
+                <span class="welcome-card-desc">AI 分析你的技术偏好</span>
+              </button>
+              <button class="welcome-card" data-action="health">
+                <div class="welcome-card-icon" style="background:var(--result-bg);color:var(--result-accent)">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                </div>
+                <span class="welcome-card-title">项目健康</span>
+                <span class="welcome-card-desc">跨项目活跃度对比</span>
+              </button>
+              <button class="welcome-card" data-action="snippets">
+                <div class="welcome-card-icon" style="background:var(--grep-bg);color:var(--grep-accent)">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                </div>
+                <span class="welcome-card-title">代码片段</span>
+                <span class="welcome-card-desc">对话中产生的代码集锦</span>
+              </button>
+            </div>
+            <p class="welcome-hint">按 <kbd>/</kbd> 搜索 · <kbd>j</kbd><kbd>k</kbd> 切换会话 · <kbd>?</kbd> 查看全部快捷键</p>
           </div>
         </div>
         <!-- Insights view (tabbed: hotspots / heatmap / errors / health / snippets) -->

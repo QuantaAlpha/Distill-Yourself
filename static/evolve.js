@@ -173,6 +173,13 @@
       date: scope.date || "7d",
       project: scope.project || "",
     });
+
+    // AI tabs use SSE streaming for real-time progress
+    if (AI_TABS.has(tab)) {
+      params.set("stream", "1");
+      return _fetchEvolveTabStream(tab, params);
+    }
+
     return fetch(`/api/evolve/${tab}?${params}`)
       .then(r => r.json())
       .then(data => {
@@ -183,14 +190,132 @@
       });
   }
 
+  /** Stream SSE events for AI evolve tabs with live progress */
+  function _fetchEvolveTabStream(tab, params) {
+    const body = $("#evolve-tab-body");
+    const updatedEl = $("#evolve-tab-updated");
+    const esc = window.esc || String;
+
+    // Show streaming progress UI using tool-card / text-block components
+    if (body) {
+      body.innerHTML = '<div class="evolve-stream-progress" id="evolve-stream-container"></div>';
+    }
+    if (updatedEl) updatedEl.textContent = "AI 启动中…";
+
+    const streamState = { accumulated: "", textBlock: null, runningCard: null, stepCount: 0 };
+
+    return fetch(`/api/evolve/${tab}?${params}`)
+      .then(response => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        function pump() {
+          return reader.read().then(({done, value}) => {
+            if (done) return;
+            buffer += decoder.decode(value, {stream: true});
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop();
+            for (const part of parts) {
+              const lines = part.split("\n");
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                try {
+                  const evt = JSON.parse(line.slice(6));
+                  _handleEvolveStreamEvent(evt, tab, streamState);
+                } catch (e) { /* skip */ }
+              }
+            }
+            return pump();
+          });
+        }
+        return pump();
+      });
+  }
+
+  function _handleEvolveStreamEvent(evt, tab, state) {
+    const container = document.getElementById("evolve-stream-container");
+    const updatedEl = $("#evolve-tab-updated");
+    const esc = window.esc || String;
+    if (!container) return;
+
+    switch (evt.type) {
+      case "tool": {
+        if (evt.status === "running") {
+          state.textBlock = null;
+          const card = document.createElement("div");
+          card.className = "tool-card running";
+          const detail = evt.detail ? esc(evt.detail) : "";
+          card.innerHTML = `<div class="tool-card-header"><span class="tool-status-dot"></span><span class="tool-card-name">${esc(evt.name)}</span><span class="tool-card-detail">${detail}</span><span class="tool-card-chevron">›</span></div><div class="tool-card-body"><pre class="tool-card-output"></pre></div>`;
+          container.appendChild(card);
+          state.runningCard = card;
+          state.stepCount++;
+        } else if (evt.status === "done" && state.runningCard) {
+          state.runningCard.classList.remove("running");
+          state.runningCard.classList.add("done");
+          if (evt.detail) {
+            const outputEl = state.runningCard.querySelector(".tool-card-output");
+            if (outputEl) outputEl.textContent = evt.detail;
+          }
+          const rc = state.runningCard;
+          const header = rc.querySelector(".tool-card-header");
+          if (header) header.onclick = () => rc.classList.toggle("expanded");
+          state.runningCard = null;
+        }
+        if (updatedEl) updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`;
+        break;
+      }
+      case "text":
+        state.accumulated += evt.content;
+        if (!state.textBlock) {
+          state.textBlock = document.createElement("div");
+          state.textBlock.className = "text-block";
+          container.appendChild(state.textBlock);
+        }
+        state.textBlock.innerHTML = window.renderMarkdownSimple
+          ? window.renderMarkdownSimple(state.accumulated)
+          : `<pre>${esc(state.accumulated)}</pre>`;
+        break;
+      case "result":
+        state.accumulated = evt.content;
+        if (!state.textBlock) {
+          state.textBlock = document.createElement("div");
+          state.textBlock.className = "text-block";
+          container.appendChild(state.textBlock);
+        }
+        state.textBlock.innerHTML = window.renderMarkdownSimple
+          ? window.renderMarkdownSimple(evt.content)
+          : `<pre>${esc(evt.content)}</pre>`;
+        break;
+      case "evolve_result": {
+        const normalized = normalizeEvolveData(tab, evt.data);
+        setCachedTab(tab, normalized);
+        if (tab === evolveActiveTab) renderEvolveTabContent(tab);
+        updateEvolveOverviewBar();
+        if (updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        break;
+      }
+      case "done":
+        if (updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        break;
+      case "error":
+        if (updatedEl) updatedEl.textContent = `Error: ${evt.message}`;
+        const body = $("#evolve-tab-body");
+        if (body) body.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${esc(evt.message)}</p></div>`;
+        break;
+    }
+  }
+
   function refreshEvolveTab(tab) {
     if (evolveLoading) return;
     evolveLoading = true;
     const body = $("#evolve-tab-body");
     const updatedEl = $("#evolve-tab-updated");
     const isAI = AI_TABS.has(tab);
-    if (body) body.innerHTML = `<div class="evolve-skeleton"><div class="skeleton-bar"></div><div class="skeleton-bar short"></div><div class="skeleton-bar"></div><div class="skeleton-circle"></div></div>`;
-    if (updatedEl) updatedEl.textContent = isAI ? "AI 分析中（可能需要 1-2 分钟）…" : "分析中…";
+    if (!isAI) {
+      if (body) body.innerHTML = `<div class="evolve-skeleton"><div class="skeleton-bar"></div><div class="skeleton-bar short"></div><div class="skeleton-bar"></div><div class="skeleton-circle"></div></div>`;
+      if (updatedEl) updatedEl.textContent = "分析中…";
+    }
 
     _fetchEvolveTab(tab)
       .catch(err => {
@@ -206,11 +331,6 @@
       if (idx >= tabs.length) return;
       const tab = tabs[idx++];
       switchEvolveTab(tab);
-      const body = $("#evolve-tab-body");
-      const updatedEl = $("#evolve-tab-updated");
-      const isAI = AI_TABS.has(tab);
-      if (body) body.innerHTML = '<div class="evolve-skeleton"><div class="skeleton-bar"></div><div class="skeleton-bar short"></div><div class="skeleton-bar"></div><div class="skeleton-circle"></div></div>';
-      if (updatedEl) updatedEl.textContent = isAI ? "AI 分析中（可能需要 1-2 分钟）…" : "分析中…";
 
       _fetchEvolveTab(tab)
         .catch(() => {})

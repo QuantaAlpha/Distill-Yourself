@@ -236,6 +236,35 @@ def _extract_user_text(content) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Shared: truncate tool output (string or list with base64 images)
+# ---------------------------------------------------------------------------
+def _truncate_tool_output(output):
+    """Truncate tool output, handling both string and list (Codex CUA) formats.
+    Strips base64 image data and truncates text content."""
+    if isinstance(output, list):
+        cleaned = []
+        for item in output:
+            if isinstance(item, dict):
+                item_type = item.get("type", "")
+                if item_type in ("input_image", "image") or "image_url" in item:
+                    # Replace base64 image with placeholder
+                    cleaned.append({"type": "image", "alt": "[Screenshot]"})
+                elif "text" in item:
+                    text = item.get("text", "")
+                    if len(text) > MAX_TOOL_RESULT_LEN:
+                        text = text[:MAX_TOOL_RESULT_LEN] + "…[truncated]"
+                    cleaned.append({**item, "text": text})
+                else:
+                    cleaned.append(item)
+            else:
+                cleaned.append(item)
+        return json.dumps(cleaned, ensure_ascii=False)
+    if isinstance(output, str) and len(output) > MAX_TOOL_RESULT_LEN:
+        return output[:MAX_TOOL_RESULT_LEN] + "…[truncated]"
+    return output
+
+
+# ---------------------------------------------------------------------------
 # Codex CLI — helpers
 # ---------------------------------------------------------------------------
 def _load_codex_titles():
@@ -448,8 +477,7 @@ def load_codex_session(session_id: str):
                 # Tool result
                 elif p_type in ("function_call_output", "custom_tool_call_output"):
                     output = payload.get("output", "")
-                    if isinstance(output, str) and len(output) > MAX_TOOL_RESULT_LEN:
-                        output = output[:MAX_TOOL_RESULT_LEN] + "…[truncated]"
+                    output = _truncate_tool_output(output)
                     messages.append({
                         "id": "", "type": "tool_result", "timestamp": ts,
                         "isSidechain": False,
@@ -732,10 +760,7 @@ def _parse_content(content) -> list:
 
         elif btype == "tool_result":
             raw = block.get("content", "")
-            if isinstance(raw, list):
-                raw = json.dumps(raw, ensure_ascii=False)
-            if isinstance(raw, str) and len(raw) > MAX_TOOL_RESULT_LEN:
-                raw = raw[:MAX_TOOL_RESULT_LEN] + "…[truncated]"
+            raw = _truncate_tool_output(raw)
             blocks.append({
                 "type": "tool_result",
                 "toolUseId": block.get("tool_use_id", ""),
@@ -920,6 +945,160 @@ def _run_ai_engine(prompt, allow_write=False, timeout=300):
         )
 
 
+def _run_ai_engine_stream(prompt, allow_write=False, timeout=300):
+    """Execute prompt via detected AI engine, yielding SSE events as JSONL lines arrive.
+
+    Yields dicts: {"type": "tool", "name": ..., "status": ...}
+                  {"type": "text", "content": ...}
+                  {"type": "done", "content": ...}
+                  {"type": "error", "message": ...}
+    """
+    engine = _detect_ai_engine()
+    if not engine:
+        yield {"type": "error", "message": "No AI engine found"}
+        return
+
+    if engine == "codex":
+        sandbox = "workspace-write" if allow_write else "read-only"
+        cmd = ["codex", "--sandbox", sandbox, "--ask-for-approval", "never",
+               "exec", "--json", "--skip-git-repo-check", prompt]
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1, stdin=subprocess.DEVNULL,
+        )
+    else:  # claude
+        cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+
+    accumulated_text = ""
+    try:
+        import select as _select
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                proc.kill()
+                yield {"type": "error", "message": "Timeout"}
+                return
+            # Use select for non-blocking read with timeout
+            ready, _, _ = _select.select([proc.stdout], [], [], min(remaining, 1.0))
+            if ready:
+                line = proc.stdout.readline()
+                if not line:
+                    break  # EOF
+                line = line.strip()
+                if not line:
+                    continue
+                # Parse JSONL event
+                evt = _parse_stream_event(engine, line)
+                if evt:
+                    if evt["type"] == "text":
+                        accumulated_text += evt["content"]
+                    yield evt
+            elif proc.poll() is not None:
+                # Process exited, drain remaining
+                for line in proc.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    evt = _parse_stream_event(engine, line)
+                    if evt:
+                        if evt["type"] == "text":
+                            accumulated_text += evt["content"]
+                        yield evt
+                break
+    except Exception as e:
+        yield {"type": "error", "message": str(e)}
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+
+    # Final done event
+    yield {"type": "done", "content": accumulated_text}
+
+
+def _parse_stream_event(engine: str, line: str) -> dict:
+    """Parse a JSONL line from Codex or Claude into a normalized event."""
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+    if engine == "codex":
+        evt_type = obj.get("type", "")
+        # Tool execution started
+        if evt_type == "item.started":
+            item = obj.get("item", {})
+            if item.get("type") == "command_execution":
+                cmd = item.get("command", "")
+                # Clean up shell wrapper
+                if cmd.startswith("/bin/"):
+                    parts = cmd.split('"', 1)
+                    cmd = parts[1].rstrip('"') if len(parts) > 1 else cmd
+                return {"type": "tool", "name": "Bash", "status": "running",
+                        "detail": cmd[:200]}
+        # Tool execution completed
+        elif evt_type == "item.completed":
+            item = obj.get("item", {})
+            if item.get("type") == "command_execution":
+                output = item.get("aggregated_output", "")
+                return {"type": "tool", "name": "Bash", "status": "done",
+                        "detail": output[:500] if output else ""}
+            elif item.get("type") == "agent_message":
+                text = item.get("text", "")
+                if text:
+                    return {"type": "text", "content": text}
+        # Turn completed (usage stats)
+        elif evt_type == "turn.completed":
+            usage = obj.get("usage", {})
+            return {"type": "usage", "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0)}
+
+    elif engine == "claude":
+        evt_type = obj.get("type", "")
+        # Assistant message with content
+        if evt_type == "assistant":
+            msg = obj.get("message", {})
+            content_blocks = msg.get("content", [])
+            texts = []
+            for blk in content_blocks:
+                if isinstance(blk, dict):
+                    if blk.get("type") == "text":
+                        texts.append(blk.get("text", ""))
+                    elif blk.get("type") == "tool_use":
+                        name = blk.get("name", "")
+                        inp = blk.get("input", {})
+                        detail = ""
+                        if name in ("Bash", "bash"):
+                            detail = inp.get("command", "")[:200]
+                        elif name in ("Read", "read_file"):
+                            detail = inp.get("file_path", "")
+                        elif name in ("Edit", "Write"):
+                            detail = inp.get("file_path", "")
+                        elif name in ("Grep", "Glob"):
+                            detail = inp.get("pattern", "")
+                        return {"type": "tool", "name": name, "status": "running",
+                                "detail": detail}
+            if texts:
+                return {"type": "text", "content": "\n".join(texts)}
+        # Tool result
+        elif evt_type == "user" or (evt_type == "system" and obj.get("subtype") == "tool_result"):
+            return None  # Skip tool results in stream
+        # Final result
+        elif evt_type == "result":
+            result_text = obj.get("result", "")
+            if result_text:
+                return {"type": "result", "content": result_text}
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # HTTP Server
 # ---------------------------------------------------------------------------
@@ -977,7 +1156,11 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 source = params.get("source", ["all"])[0]
                 date = params.get("date", ["7d"])[0]
                 project = params.get("project", [""])[0]
-                self._json_response(self._get_evolve_tab(tab, refresh, source, date, project))
+                stream = params.get("stream", ["0"])[0] == "1"
+                if stream and tab in self._AI_TABS:
+                    self._handle_evolve_stream(tab, source, date, project)
+                else:
+                    self._json_response(self._get_evolve_tab(tab, refresh, source, date, project))
         else:
             # Serve static files (with path traversal protection)
             if path == "/":
@@ -1010,7 +1193,6 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 "project": meta.get("projectName", ""),
                 "date": meta.get("date", ""),
                 "userMessageCount": meta.get("userMessageCount", 0),
-                "preview": meta.get("preview", ""),
                 "fileSize": meta.get("fileSize", 0),
                 "source": meta.get("source", "claude"),
             })
@@ -1134,6 +1316,30 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 
         engine = _detect_ai_engine() or "AI"
         return self._evolve_fallback(tab, f"{engine} did not produce valid output")
+
+    def _handle_evolve_stream(self, tab: str, source: str, date: str, project: str):
+        """SSE streaming for AI evolve tabs (profile/memory)."""
+        cache_path = CACHE_DIR / "evolve" / f"{tab}.json"
+        cli_path = str(Path(__file__).resolve().parent / "analyze.py")
+        prompt = self._build_evolve_prompt(tab, source, date, project, cli_path)
+
+        self._start_sse()
+        try:
+            for evt in _run_ai_engine_stream(prompt, allow_write=True, timeout=300):
+                self._sse_event(evt)
+        except Exception as e:
+            self._sse_event({"type": "error", "message": str(e)})
+
+        # After streaming completes, read the cache file the AI wrote
+        if cache_path.exists():
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    result = json.load(f)
+                self._sse_event({"type": "evolve_result", "data": result})
+            except (json.JSONDecodeError, OSError):
+                self._sse_event({"type": "error", "message": "AI did not produce valid output"})
+        else:
+            self._sse_event({"type": "error", "message": "AI did not write result file"})
 
     def _evolve_fallback(self, tab: str, reason: str) -> dict:
         """Return empty data with error info."""
@@ -1564,16 +1770,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             if len(snippets) >= 300:
                 break
 
-        # Sort: applied first, then by date
-        snippets.sort(key=lambda s: (not s.get("applied", False), s.get("date", "")), reverse=False)
-        snippets.sort(key=lambda s: (-int(s.get("applied", False)), s.get("date", "")), reverse=False)
-        # Re-sort properly
-        snippets.sort(key=lambda s: (-int(s.get("applied", False)), s.get("date", "")))
-        snippets.reverse()
-        # Actually: applied first (desc), then date desc
-        snippets.sort(key=lambda s: (not s.get("applied", False), ""), reverse=False)
+        # Sort: applied first, then newest first (two stable sorts)
         snippets.sort(key=lambda s: s.get("date", ""), reverse=True)
-        snippets.sort(key=lambda s: -int(s.get("applied", False)))
+        snippets.sort(key=lambda s: not s.get("applied", False))
         return {"snippets": snippets[:150]}
 
     def _get_file_evolution(self, file_path: str) -> dict:
@@ -1748,53 +1947,100 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _sse_event(self, data: dict):
+        """Write a single SSE event and flush."""
+        payload = json.dumps(data, ensure_ascii=False)
+        self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+        self.wfile.flush()
+
+    def _start_sse(self):
+        """Send SSE response headers."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/api/chat":
-            content_len = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_len)
-            try:
-                data = json.loads(body)
-            except json.JSONDecodeError:
-                self._error(400, "Invalid JSON")
-                return
 
-            prompt = data.get("prompt", "")
-            context_type = data.get("contextType", "")  # "session" or "global"
-            session_id = data.get("sessionId", "")
-            scope = data.get("scope", {})  # {project, date, source} for global
-
-            if not prompt:
-                self._error(400, "No prompt")
-                return
-
-            # Build context-aware prompt
-            full_prompt = self._build_chat_prompt(prompt, context_type, session_id, scope)
-
-            # Execute AI engine (Codex or claude -p)
-            try:
-                stdout, stderr, _ = _run_ai_engine(full_prompt, allow_write=False, timeout=300)
-                output = stdout.strip()
-                if not output and stderr:
-                    stderr = stderr.strip()
-                    noise = ["plugin manifest", "MCP", "Warning", "shutdown"]
-                    lines = [l for l in stderr.split("\n") if not any(n in l for n in noise)]
-                    if lines:
-                        output = "Error: " + "\n".join(lines[:5])
-                    else:
-                        output = "(No output)"
-                if not output:
-                    output = "(No output)"
-            except FileNotFoundError as e:
-                output = f"Error: {e}"
-            except subprocess.TimeoutExpired:
-                output = "Error: Request timed out (5 min limit)"
-            except Exception as e:
-                output = f"Error: {str(e)}"
-
-            self._json_response({"response": output})
+        if parsed.path == "/api/chat/stream":
+            self._handle_chat_stream()
+        elif parsed.path == "/api/chat":
+            self._handle_chat_legacy()
         else:
             self._error(404, "Not found")
+
+    def _read_post_body(self):
+        content_len = int(self.headers.get("Content-Length", 0))
+        return self.rfile.read(content_len)
+
+    def _handle_chat_stream(self):
+        """SSE streaming chat endpoint."""
+        try:
+            data = json.loads(self._read_post_body())
+        except json.JSONDecodeError:
+            self._error(400, "Invalid JSON")
+            return
+
+        prompt = data.get("prompt", "")
+        context_type = data.get("contextType", "")
+        session_id = data.get("sessionId", "")
+        scope = data.get("scope", {})
+
+        if not prompt:
+            self._error(400, "No prompt")
+            return
+
+        full_prompt = self._build_chat_prompt(prompt, context_type, session_id, scope)
+        self._start_sse()
+
+        try:
+            for evt in _run_ai_engine_stream(full_prompt, allow_write=False, timeout=300):
+                self._sse_event(evt)
+        except Exception as e:
+            self._sse_event({"type": "error", "message": str(e)})
+
+    def _handle_chat_legacy(self):
+        """Original blocking chat endpoint (kept for compatibility)."""
+        try:
+            data = json.loads(self._read_post_body())
+        except json.JSONDecodeError:
+            self._error(400, "Invalid JSON")
+            return
+
+        prompt = data.get("prompt", "")
+        context_type = data.get("contextType", "")
+        session_id = data.get("sessionId", "")
+        scope = data.get("scope", {})
+
+        if not prompt:
+            self._error(400, "No prompt")
+            return
+
+        full_prompt = self._build_chat_prompt(prompt, context_type, session_id, scope)
+
+        try:
+            stdout, stderr, _ = _run_ai_engine(full_prompt, allow_write=False, timeout=300)
+            output = stdout.strip()
+            if not output and stderr:
+                stderr = stderr.strip()
+                noise = ["plugin manifest", "MCP", "Warning", "shutdown"]
+                lines = [l for l in stderr.split("\n") if not any(n in l for n in noise)]
+                if lines:
+                    output = "Error: " + "\n".join(lines[:5])
+                else:
+                    output = "(No output)"
+            if not output:
+                output = "(No output)"
+        except FileNotFoundError as e:
+            output = f"Error: {e}"
+        except subprocess.TimeoutExpired:
+            output = "Error: Request timed out (5 min limit)"
+        except Exception as e:
+            output = f"Error: {str(e)}"
+
+        self._json_response({"response": output})
 
     def _build_chat_prompt(self, prompt: str, context_type: str, session_id: str, scope: dict = None) -> str:
         """Build a context-enriched prompt for the AI engine with rich metadata and CLI tools."""
@@ -1965,6 +2211,18 @@ def main():
     t0 = time.time()
     build_index()
     print(f"Index built in {time.time() - t0:.1f}s")
+
+    # Pre-compute heavy endpoints in background so Insights loads instantly
+    def _precompute_heavy():
+        handler = ChatViewerHandler.__new__(ChatViewerHandler)
+        t1 = time.time()
+        _cached("analytics", handler._get_analytics)
+        print(f"  Analytics pre-computed in {time.time() - t1:.1f}s")
+        t1 = time.time()
+        _cached("snippets", handler._get_snippets)
+        print(f"  Snippets pre-computed in {time.time() - t1:.1f}s")
+    bg = threading.Thread(target=_precompute_heavy, daemon=True)
+    bg.start()
 
     ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer(("127.0.0.1", PORT), ChatViewerHandler)

@@ -15,6 +15,8 @@
   let searchDebounceTimer = null;
   let lastSearchResults = [];
   let lastSearchQuery = "";
+  let _searchAbort = null; // AbortController for search
+  let _sessionAbort = null; // AbortController for session loading
   let outlineVisible = true;
   let _scrollHandler = null;
   let currentMessages = []; // store for export
@@ -73,6 +75,10 @@
   // ── Init ───────────────────────────────────────────────────────
   async function init() {
     bindEvents();
+    // Show loading state immediately
+    sessionList.innerHTML = '<li class="loading-placeholder"><div class="skeleton-line" style="width:70%"></div><div class="skeleton-line short"></div></li>'.repeat(8);
+    searchStats.textContent = "Loading…";
+
     // Load from cached index immediately (server builds index at startup)
     const [projects, sessions] = await Promise.all([
       api("/api/projects"),
@@ -82,6 +88,7 @@
     renderProjects(projects);
     renderSessions(sessions);
     searchStats.textContent = `${sessions.length} sessions`;
+    updateWelcomeStats(sessions, projects);
     // Background refresh: rebuild index and re-render if data changed
     api("/api/refresh").then(() => Promise.all([
       api("/api/projects"),
@@ -92,13 +99,13 @@
         renderProjects(p);
         renderSessions(s);
         searchStats.textContent = `${s.length} sessions`;
+        updateWelcomeStats(s, p);
       }
     }).catch(() => {});
 
     // Restore session from URL hash
     const hash = window.location.hash.slice(1);
     if (hash) {
-      // Switch source tab to match the session
       const match = allSessions.find(s => s.id === hash);
       if (match && match.source) {
         currentSourceFilter = match.source;
@@ -292,7 +299,10 @@
 
   // ── View Switching ─────────────────────────────────────────────
   function showView(name, pushHistory = true) {
-    if (pushHistory && currentView !== name) viewHistory.push(currentView);
+    if (pushHistory && currentView !== name) {
+      viewHistory.push(currentView);
+      if (viewHistory.length > 50) viewHistory = viewHistory.slice(-20);
+    }
     currentView = name;
     const views = {conversation: convView, search: searchResults,
       insights: insightsView, ai: aiView};
@@ -325,6 +335,43 @@
     });
     // (filter bar is now always visible in sidebar)
   }
+
+  // ── Welcome Stats ───────────────────────────────────────────────
+  function updateWelcomeStats(sessions, projects) {
+    const container = $("#welcome-stats");
+    if (!container) return;
+    const projCount = projects ? projects.length : 0;
+    const now = new Date();
+    const weekAgo = new Date(now - 7 * 86400000);
+    const recentCount = sessions.filter(s => s.date && new Date(s.date) >= weekAgo).length;
+    container.innerHTML = `
+      <div class="welcome-stat"><span class="welcome-stat-num">${sessions.length}</span><span class="welcome-stat-label">总会话</span></div>
+      <div class="welcome-stat"><span class="welcome-stat-num">${projCount}</span><span class="welcome-stat-label">项目</span></div>
+      <div class="welcome-stat"><span class="welcome-stat-num">${recentCount}</span><span class="welcome-stat-label">近 7 天</span></div>
+    `;
+  }
+
+  // ── Welcome Card Actions ──────────────────────────────────────
+  function openInsightsTab(tabName) {
+    showView("insights");
+    bindInsightsTabs();
+    insightsActiveTab = tabName;
+    document.querySelectorAll(".insights-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === tabName));
+    loadInsightsTab(tabName);
+  }
+
+  (function bindWelcomeCards() {
+    document.querySelectorAll(".welcome-card").forEach(card => {
+      card.addEventListener("click", () => {
+        const action = card.dataset.action;
+        if (action === "heatmap" || action === "hotspots" || action === "errors" || action === "health" || action === "snippets") {
+          openInsightsTab(action);
+        } else if (action === "profile") {
+          document.querySelector('.sidebar-nav-item[data-view="ai"]')?.click();
+        }
+      });
+    });
+  })();
 
   // ── Projects (dropdown) ─────────────────────────────────────────
   function renderProjects(projects) {
@@ -402,7 +449,7 @@
     const chips = [];
     if (currentSourceFilter !== "all") chips.push(currentSourceFilter.charAt(0).toUpperCase() + currentSourceFilter.slice(1));
     if (currentDateFilter !== "all") {
-      const labels = { "7d": "7d", "30d": "30d", "90d": "90d" };
+      const labels = { "week": "This Week", "month": "This Month", "3months": "3 Months" };
       chips.push(labels[currentDateFilter] || currentDateFilter);
     }
     if (currentProject) chips.push(currentProject.split("/").pop());
@@ -421,20 +468,63 @@
     renderDateFilters();
     updateFilterChips();
 
-    filtered.forEach((s) => {
+    // Render visible sessions (cap at 200 for DOM performance, lazy-load rest on scroll)
+    const RENDER_BATCH = 200;
+    const toRender = filtered.slice(0, RENDER_BATCH);
+    let renderedCount = toRender.length;
+
+    const renderItem = (s) => {
       const li = document.createElement("li");
       li.dataset.id = s.id;
       if (s.id === currentSessionId) li.classList.add("active");
-
       const dateStr = s.date ? formatDate(s.date) : "";
-
+      const srcBadge = s.source === "codex" ? '<span class="src-badge codex">Codex</span>' : '';
+      const msgCount = s.userMessageCount ? `<span class="msg-count">${s.userMessageCount} msgs</span>` : '';
       li.innerHTML = `
         <div class="session-title">${esc(s.title)}</div>
-        <div class="session-meta"><span>${dateStr}</span></div>
+        <div class="session-meta">
+          ${srcBadge}
+          <span class="session-project">${esc(s.project || '')}</span>
+          <span>${dateStr}</span>
+          ${msgCount}
+        </div>
       `;
       li.addEventListener("click", () => { switchSidebarPanel("sessions"); loadSession(s.id); });
-      sessionList.appendChild(li);
-    });
+      return li;
+    };
+
+    toRender.forEach(s => sessionList.appendChild(renderItem(s)));
+
+    // Lazy-load remaining sessions on scroll
+    if (filtered.length > RENDER_BATCH) {
+      const sentinel = document.createElement("li");
+      sentinel.className = "load-more-sentinel";
+      sentinel.textContent = `+ ${filtered.length - RENDER_BATCH} more sessions`;
+      sentinel.style.cssText = "text-align:center;color:var(--text-muted);font-size:12px;padding:12px;cursor:pointer";
+      sessionList.appendChild(sentinel);
+
+      const loadMore = () => {
+        sentinel.remove();
+        const nextBatch = filtered.slice(renderedCount, renderedCount + RENDER_BATCH);
+        nextBatch.forEach(s => sessionList.appendChild(renderItem(s)));
+        renderedCount += nextBatch.length;
+        if (renderedCount < filtered.length) {
+          sentinel.textContent = `+ ${filtered.length - renderedCount} more sessions`;
+          sessionList.appendChild(sentinel);
+        }
+      };
+      sentinel.addEventListener("click", loadMore);
+      // Also auto-load when scrolling near bottom
+      const sidebarContent = document.getElementById("sidebar-content");
+      if (sidebarContent) {
+        const scrollHandler = () => {
+          if (sidebarContent.scrollTop + sidebarContent.clientHeight >= sidebarContent.scrollHeight - 100) {
+            if (renderedCount < filtered.length) loadMore();
+          }
+        };
+        sidebarContent.addEventListener("scroll", scrollHandler, { passive: true });
+      }
+    }
   }
 
   function applySourceFilter(sessions) {
@@ -507,6 +597,10 @@
 
   // ── Load Session ───────────────────────────────────────────────
   async function loadSession(sessionId, jumpToIndex) {
+    // Cancel any in-flight session load
+    if (_sessionAbort) _sessionAbort.abort();
+    _sessionAbort = new AbortController();
+
     currentSessionId = sessionId;
     history.replaceState(null, "", `#${sessionId}`);
     $$('#session-list li').forEach(li => {
@@ -514,10 +608,12 @@
     });
 
     showView("conversation");
-    messagesContainer.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading…</div>';
+    messagesContainer.innerHTML = '<div class="insights-loading"><div class="skeleton-block"></div><div class="skeleton-block" style="width:85%"></div><div class="skeleton-block" style="width:60%"></div></div>';
 
     try {
-      const data = await api(`/api/session/${sessionId}`);
+      const resp = await fetch(`/api/session/${sessionId}`, { signal: _sessionAbort.signal });
+      if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+      const data = await resp.json();
       convTitle.textContent = data.title;
       const metaParts = [`${data.project} · ${formatDate(data.date)} · ${data.messages.length} messages`];
       convMeta.innerHTML = "";
@@ -554,23 +650,29 @@
       // Outline scroll tracking (remove previous listener to prevent leaks)
       const mc = document.getElementById("messages-container");
       if (_scrollHandler) mc.removeEventListener("scroll", _scrollHandler);
+      let _scrollTick = false;
       _scrollHandler = () => {
-        if (!outlineVisible) return;
-        const userMsgs = mc.querySelectorAll(".msg.user-msg");
-        const containerTop = mc.getBoundingClientRect().top;
-        let closest = null;
-        for (const el of userMsgs) {
-          const r = el.getBoundingClientRect();
-          if (r.top <= containerTop + 100) closest = el;
-        }
-        if (closest) highlightOutlineItem(parseInt(closest.dataset.idx));
+        if (_scrollTick || !outlineVisible) return;
+        _scrollTick = true;
+        requestAnimationFrame(() => {
+          _scrollTick = false;
+          const userMsgs = mc.querySelectorAll(".msg.user-msg");
+          const containerTop = mc.getBoundingClientRect().top;
+          let closest = null;
+          for (const el of userMsgs) {
+            const r = el.getBoundingClientRect();
+            if (r.top <= containerTop + 100) closest = el;
+          }
+          if (closest) highlightOutlineItem(parseInt(closest.dataset.idx));
+        });
       };
-      mc.addEventListener("scroll", _scrollHandler);
+      mc.addEventListener("scroll", _scrollHandler, { passive: true });
 
       if (typeof jumpToIndex === "number") {
         setTimeout(() => jumpToMessage(jumpToIndex), 100);
       }
     } catch (err) {
+      if (err.name === "AbortError") return; // superseded by newer load
       messagesContainer.innerHTML = `<div style="padding:40px;text-align:center;color:#e57373">Failed to load session: ${esc(err.message)}</div>`;
     }
   }
@@ -981,13 +1083,20 @@
       return;
     }
 
+    // Cancel any in-flight search
+    if (_searchAbort) _searchAbort.abort();
+    _searchAbort = new AbortController();
+
     showView("search");
     searchResultsList.innerHTML = '<li style="padding:20px;color:var(--text-muted)">Searching…</li>';
 
     let results;
     try {
-      results = await api(`/api/search?q=${encodeURIComponent(query)}`);
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal: _searchAbort.signal });
+      if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+      results = await resp.json();
     } catch (err) {
+      if (err.name === "AbortError") return; // superseded by newer search
       searchResultsList.innerHTML = `<li style="padding:20px;color:#e57373">Search failed: ${esc(err.message)}</li>`;
       return;
     }
@@ -1090,19 +1199,38 @@
 
   function renderMarkdown(text) {
     if (!text) return "";
-    // Basic markdown: code blocks, inline code, bold, links
-    let html = esc(text);
-    // Code blocks ```...```
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g,
-      '<pre style="background:var(--bg-surface2);padding:8px 12px;border-radius:4px;overflow-x:auto;margin:6px 0;font-size:12px"><code>$2</code></pre>');
-    // Inline code
-    html = html.replace(/`([^`]+)`/g,
-      '<code style="background:var(--bg-surface2);padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
+    // Extract code blocks BEFORE escaping to preserve raw content
+    const codeBlocks = [];
+    let s = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+      const idx = codeBlocks.length;
+      codeBlocks.push(`<pre class="md-pre"><code>${esc(code)}</code></pre>`);
+      return `\x00CB${idx}\x00`;
+    });
+    // Extract inline code before escaping
+    const inlineCode = [];
+    s = s.replace(/`([^`]+)`/g, (_, code) => {
+      const idx = inlineCode.length;
+      inlineCode.push(`<code class="md-code">${esc(code)}</code>`);
+      return `\x00IC${idx}\x00`;
+    });
+    // Now escape the rest
+    s = esc(s);
     // Bold
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Headings
+    s = s.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+    s = s.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+    s = s.replace(/^# (.+)$/gm, '<h2>$1</h2>');
+    // List items
+    s = s.replace(/^[*-] (.+)$/gm, '<li>$1</li>');
+    s = s.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+    s = s.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
     // Line breaks
-    html = html.replace(/\n/g, '<br>');
-    return html;
+    s = s.replace(/\n/g, '<br>');
+    // Restore code blocks and inline code
+    s = s.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[+i]);
+    s = s.replace(/\x00IC(\d+)\x00/g, (_, i) => inlineCode[+i]);
+    return s;
   }
 
   // ── Keyboard Navigation (F5) ────────────────────────────────────
@@ -1443,8 +1571,8 @@
       if (currentFilter === "applied") items = items.filter(s => s.applied);
       else if (currentFilter === "suggested") items = items.filter(s => !s.applied);
       if (q) items = items.filter(s =>
-        s.code.toLowerCase().includes(q) || s.context.toLowerCase().includes(q) ||
-        s.language.toLowerCase().includes(q) || s.project.toLowerCase().includes(q)
+        (s.code || '').toLowerCase().includes(q) || (s.context || '').toLowerCase().includes(q) ||
+        (s.language || '').toLowerCase().includes(q) || (s.project || '').toLowerCase().includes(q)
       );
       renderList(items);
     }
@@ -1467,13 +1595,14 @@
     loadInsightsTab(insightsActiveTab);
   }
 
+  let _insightsTabsBound = false;
   function bindInsightsTabs() {
+    if (_insightsTabsBound) return;
+    _insightsTabsBound = true;
     document.querySelectorAll(".insights-tab").forEach(tab => {
-      const newTab = tab.cloneNode(true);
-      tab.parentNode.replaceChild(newTab, tab);
-      newTab.addEventListener("click", () => {
-        insightsActiveTab = newTab.dataset.tab;
-        document.querySelectorAll(".insights-tab").forEach(t => t.classList.toggle("active", t === newTab));
+      tab.addEventListener("click", () => {
+        insightsActiveTab = tab.dataset.tab;
+        document.querySelectorAll(".insights-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === insightsActiveTab));
         loadInsightsTab(insightsActiveTab);
       });
     });
@@ -1482,7 +1611,7 @@
   async function loadInsightsTab(tab) {
     const body = document.getElementById("insights-body");
     if (!body) return;
-    body.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading…</div>';
+    body.innerHTML = '<div class="insights-loading"><div class="skeleton-block"></div><div class="skeleton-block" style="width:80%"></div><div class="skeleton-block" style="width:60%"></div></div>';
 
     try {
       if (tab === "hotspots" || tab === "heatmap" || tab === "errors") {
@@ -1576,12 +1705,22 @@
 
   /** Markdown renderer — handles code blocks, headings, lists, bold, inline code */
   function renderMarkdownSimple(text) {
-    // Escape HTML first
-    let s = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    // Code blocks (preserve content)
-    s = s.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-    // Inline code
-    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Extract code blocks BEFORE escaping to preserve raw content
+    const codeBlocks = [];
+    let s = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+      const idx = codeBlocks.length;
+      codeBlocks.push(`<pre><code>${esc(code)}</code></pre>`);
+      return `\x00CB${idx}\x00`;
+    });
+    // Extract inline code before escaping
+    const inlineCode = [];
+    s = s.replace(/`([^`]+)`/g, (_, code) => {
+      const idx = inlineCode.length;
+      inlineCode.push(`<code>${esc(code)}</code>`);
+      return `\x00IC${idx}\x00`;
+    });
+    // Now escape the rest
+    s = esc(s);
     // Bold
     s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     // Headings (### → h4, ## → h3, # → h2)
@@ -1604,6 +1743,9 @@
     s = s.replace(/<p>\s*<(h[234]|pre|ul|hr)/g, '<$1');
     s = s.replace(/<\/(h[234]|pre|ul|hr)>\s*<\/p>/g, '</$1>');
     s = s.replace(/<p>\s*<\/p>/g, '');
+    // Restore code blocks and inline code
+    s = s.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[+i]);
+    s = s.replace(/\x00IC(\d+)\x00/g, (_, i) => inlineCode[+i]);
     return s;
   }
 
@@ -1685,7 +1827,151 @@
     return el;
   }
 
-  /** Send chat request to backend */
+  // ── Smart auto-scroll ──────────────────────────────────────
+  function _shouldAutoScroll(container) {
+    return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+  }
+  function _autoScroll(container) {
+    if (_shouldAutoScroll(container)) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  /**
+   * Create a ChatGPT-style assistant turn: a vertical stream of
+   * tool-cards and text-blocks, appended as SSE events arrive.
+   * Returns {addTool(evt), updateText(accumulated), finalize(fullText)}
+   */
+  function createAssistantTurn(container) {
+    const turn = document.createElement("div");
+    turn.className = "assistant-turn";
+
+    // Init indicator
+    const initEl = document.createElement("div");
+    initEl.className = "turn-init";
+    initEl.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="turn-init-text">Thinking…</span>';
+    turn.appendChild(initEl);
+
+    container.appendChild(turn);
+    _autoScroll(container);
+
+    let _currentTextBlock = null; // the active .text-block element
+    let _lastText = "";
+    let _textOffset = 0; // chars of accumulated text already rendered in previous blocks
+    let _renderTimer = null;
+    let _started = false;
+    let _runningCard = null; // the currently running tool card
+
+    function _ensureStarted() {
+      if (!_started) {
+        _started = true;
+        if (initEl.parentNode) initEl.remove();
+      }
+    }
+
+    function _ensureTextBlock() {
+      if (!_currentTextBlock) {
+        _currentTextBlock = document.createElement("div");
+        _currentTextBlock.className = "text-block";
+        _currentTextBlock.innerHTML = '<span class="stream-cursor">▍</span>';
+        turn.appendChild(_currentTextBlock);
+      }
+      return _currentTextBlock;
+    }
+
+    return {
+      el: turn,
+
+      addTool(evt) {
+        _ensureStarted();
+
+        if (evt.status === "running") {
+          // Save offset: text already rendered in the previous block
+          _textOffset = _lastText.length;
+          // Close current text block (new tool interrupts text)
+          _currentTextBlock = null;
+          // Create a new tool card
+          const card = document.createElement("div");
+          card.className = "tool-card running";
+          const detail = evt.detail ? esc(evt.detail) : "";
+          card.innerHTML = `<div class="tool-card-header"><span class="tool-status-dot"></span><span class="tool-card-name">${esc(evt.name)}</span><span class="tool-card-detail">${detail}</span><span class="tool-card-chevron">›</span></div><div class="tool-card-body"><pre class="tool-card-output"></pre></div>`;
+          turn.appendChild(card);
+          _runningCard = card;
+        } else if (evt.status === "done" && _runningCard) {
+          // Complete the running card
+          _runningCard.classList.remove("running");
+          _runningCard.classList.add("done");
+          // Update detail if provided
+          if (evt.detail) {
+            const outputEl = _runningCard.querySelector(".tool-card-output");
+            if (outputEl) outputEl.textContent = evt.detail;
+          }
+          // Make it collapsible — click header to toggle
+          const header = _runningCard.querySelector(".tool-card-header");
+          const body = _runningCard.querySelector(".tool-card-body");
+          if (header && body) {
+            header.onclick = () => {
+              _runningCard.classList.toggle("expanded");
+            };
+          }
+          _runningCard = null;
+        }
+        _autoScroll(container);
+      },
+
+      updateText(accumulated) {
+        _ensureStarted();
+        _lastText = accumulated;
+        const block = _ensureTextBlock();
+        if (!_renderTimer) {
+          _renderTimer = requestAnimationFrame(() => {
+            _renderTimer = null;
+            // Only render the portion after the offset (text new to this block)
+            const blockText = _lastText.slice(_textOffset);
+            block.innerHTML = renderMarkdownSimple(blockText) + '<span class="stream-cursor">▍</span>';
+            _autoScroll(container);
+          });
+        }
+      },
+
+      finalize(fullText) {
+        _ensureStarted();
+        turn.classList.add("done");
+        // Render final text (without cursor) — only the last block's portion
+        if (fullText) {
+          const block = _ensureTextBlock();
+          const blockText = fullText.slice(_textOffset);
+          block.innerHTML = renderMarkdownSimple(blockText);
+          // Add action buttons
+          const actions = document.createElement("div");
+          actions.className = "text-block-actions";
+          const expandBtn = document.createElement("button");
+          expandBtn.className = "text-action-btn";
+          expandBtn.textContent = "⤢";
+          expandBtn.title = "Full screen";
+          expandBtn.onclick = (e) => { e.stopPropagation(); openMsgModal(fullText); };
+          actions.appendChild(expandBtn);
+          const copyBtn = document.createElement("button");
+          copyBtn.className = "text-action-btn";
+          copyBtn.textContent = "📋";
+          copyBtn.title = "Copy";
+          copyBtn.onclick = () => {
+            navigator.clipboard.writeText(fullText).then(() => {
+              copyBtn.textContent = "✓";
+              setTimeout(() => { copyBtn.textContent = "📋"; }, 1500);
+            });
+          };
+          actions.appendChild(copyBtn);
+          block.appendChild(actions);
+        } else if (initEl.parentNode) {
+          initEl.remove(); // clean up if no content at all
+        }
+        _autoScroll(container);
+      },
+    };
+  }
+
+  /** Send chat request to backend (legacy non-streaming) */
   function sendChatRequest(prompt, contextType, sessionId, scope) {
     const body = {prompt, contextType, sessionId: sessionId || null};
     if (scope) body.scope = scope;
@@ -1694,6 +1980,94 @@
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)
     }).then(r => r.json());
+  }
+
+  /**
+   * Stream a chat request via SSE. Returns an object with:
+   *   .onText(fn)  — called with accumulated text on each text chunk
+   *   .onTool(fn)  — called with {name, status, detail} for tool events
+   *   .onDone(fn)  — called with final full text
+   *   .onError(fn) — called with error message
+   *   .abort()     — cancel the stream
+   */
+  function sendChatStream(prompt, contextType, sessionId, scope) {
+    const body = {prompt, contextType, sessionId: sessionId || null};
+    if (scope) body.scope = scope;
+    const callbacks = { text: null, tool: null, done: null, error: null };
+    const controller = new AbortController();
+
+    const handle = {
+      onText(fn) { callbacks.text = fn; return handle; },
+      onTool(fn) { callbacks.tool = fn; return handle; },
+      onDone(fn) { callbacks.done = fn; return handle; },
+      onError(fn) { callbacks.error = fn; return handle; },
+      abort() { controller.abort(); },
+    };
+
+    const state = { text: "" }; // accumulator shared across events
+
+    fetch("/api/chat/stream", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    }).then(response => {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      function pump() {
+        return reader.read().then(({done, value}) => {
+          if (done) return;
+          buffer += decoder.decode(value, {stream: true});
+          // Parse SSE events (data: ...\n\n)
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop(); // keep incomplete part
+          for (const part of parts) {
+            const lines = part.split("\n");
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                try {
+                  const evt = JSON.parse(line.slice(6));
+                  _handleStreamEvent(evt, callbacks, state);
+                } catch (e) { /* skip malformed */ }
+              }
+            }
+          }
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(err => {
+      if (err.name !== "AbortError" && callbacks.error) {
+        callbacks.error(err.message);
+      }
+    });
+
+    return handle;
+  }
+
+  function _handleStreamEvent(evt, callbacks, state) {
+    switch (evt.type) {
+      case "text":
+        state.text += evt.content;
+        if (callbacks.text) callbacks.text(state.text);
+        break;
+      case "tool":
+        if (callbacks.tool) callbacks.tool(evt);
+        break;
+      case "result":
+        // Claude's final result — authoritative full text, replace accumulated
+        state.text = evt.content;
+        if (callbacks.text) callbacks.text(state.text);
+        break;
+      case "done":
+        if (callbacks.done) callbacks.done(evt.content || state.text);
+        break;
+      case "error":
+        if (callbacks.error) callbacks.error(evt.message);
+        break;
+    }
   }
 
   // ── Session AI (right panel) ──────────────────────────────────
@@ -1757,31 +2131,40 @@
     const presets = $("#session-ai-presets");
     if (presets) presets.style.display = "none";
 
-    // Show loading
+    // Show streaming bubble
     sessionAiLoading = true;
-    const loadingEl = showChatLoading(container, "正在用 Codex 分析本次对话…");
+    const assistantTurn = currentSessionId === targetSessionId
+      ? createAssistantTurn(container) : null;
+    let accumulated = "";
 
-    sendChatRequest(text, "session", targetSessionId)
-      .then(data => {
-        loadingEl.remove();
-        sessionAiLoading = false;
-        const reply = data.error ? `**Error:** ${data.error}` : (data.response || "(empty response)");
-        // Save to captured cache (correct session even if user switched)
-        cache.messages.push({role: "assistant", content: reply});
-        saveChatToStorage();
-        // Only update UI if still viewing the same session
-        if (currentSessionId === targetSessionId) {
-          appendChatMsg(container, "assistant", reply);
+    sendChatStream(text, "session", targetSessionId)
+      .onText(chunk => {
+        accumulated = chunk; // chunk is accumulated text from server
+        if (assistantTurn && currentSessionId === targetSessionId) {
+          assistantTurn.updateText(accumulated);
         }
       })
-      .catch(err => {
-        loadingEl.remove();
+      .onTool(evt => {
+        if (assistantTurn && currentSessionId === targetSessionId) {
+          assistantTurn.addTool(evt);
+        }
+      })
+      .onDone(fullText => {
         sessionAiLoading = false;
-        const reply = `**Request failed:** ${err.message}`;
+        const reply = fullText || accumulated || "(empty response)";
         cache.messages.push({role: "assistant", content: reply});
         saveChatToStorage();
-        if (currentSessionId === targetSessionId) {
-          appendChatMsg(container, "assistant", reply);
+        if (assistantTurn && currentSessionId === targetSessionId) {
+          assistantTurn.finalize(reply);
+        }
+      })
+      .onError(msg => {
+        sessionAiLoading = false;
+        const reply = `**Error:** ${msg}`;
+        cache.messages.push({role: "assistant", content: reply});
+        saveChatToStorage();
+        if (assistantTurn && currentSessionId === targetSessionId) {
+          assistantTurn.finalize(reply);
         }
       });
   }
@@ -1978,17 +2361,23 @@
     const presets = $("#ai-chat-presets");
     if (presets) presets.style.display = "none";
 
-    // Show loading
+    // Show streaming bubble
     globalAiLoading = true;
-    const scopeFiltered = getFilteredScopeSessions().filter(s => !scope.project || s.project === scope.project);
-    const loadingEl = showChatLoading(container, `正在分析 ${scopeFiltered.length} 个会话，最多需要 5 分钟…`);
+    const assistantTurn = createAssistantTurn(container);
+    let accumulated = "";
 
-    sendChatRequest(text, "global", null, scope)
-      .then(data => {
-        loadingEl.remove();
+    sendChatStream(text, "global", null, scope)
+      .onText(chunk => {
+        accumulated = chunk;
+        assistantTurn.updateText(accumulated);
+      })
+      .onTool(evt => {
+        assistantTurn.addTool(evt);
+      })
+      .onDone(fullText => {
         globalAiLoading = false;
-        const reply = data.error ? `**Error:** ${data.error}` : (data.response || "(empty response)");
-        appendChatMsg(container, "assistant", reply);
+        const reply = fullText || accumulated || "(empty response)";
+        assistantTurn.finalize(reply);
         saveGlobalChatMessage("assistant", reply);
         // Update title
         const chat = globalChatHistory.find(c => c.id === currentGlobalChatId);
@@ -2010,12 +2399,11 @@
         for (const [keyword, tab] of Object.entries(evolveTabMap)) {
           if (text.includes(keyword)) { targetTab = tab; break; }
         }
-        if (targetTab && !data.error) {
+        if (targetTab) {
           const parsed = window.parseEvolveResponseExternal ? window.parseEvolveResponseExternal(targetTab, reply) : null;
           if (parsed && !parsed._parseError) {
             const itemCount = Object.values(parsed).reduce((sum, v) => sum + (Array.isArray(v) ? v.length : 0), 0);
             const summaryText = `✅ 分析完成：发现 ${itemCount} 条结果。3 秒后跳转到 Evolve → ${targetTab}`;
-            // Append summary as a new message instead of replacing
             appendChatMsg(container, "assistant", summaryText);
             setTimeout(() => {
               if (window.navigateToEvolveTab) window.navigateToEvolveTab(targetTab, parsed);
@@ -2023,11 +2411,10 @@
           }
         }
       })
-      .catch(err => {
-        loadingEl.remove();
+      .onError(msg => {
         globalAiLoading = false;
-        const reply = `**Request failed:** ${err.message}`;
-        appendChatMsg(container, "assistant", reply);
+        const reply = `**Error:** ${msg}`;
+        assistantTurn.finalize(reply);
         saveGlobalChatMessage("assistant", reply);
         saveChatToStorage();
       });
