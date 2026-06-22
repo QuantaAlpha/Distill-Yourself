@@ -1264,6 +1264,7 @@ body {
 .sync-result.error { color: var(--danger, #e53e3e); }
 
 #evolve-tab-body { padding: 20px; position: relative; }
+.evolve-tab-panel { width: 100%; }
 
 .evolve-empty-state {
   text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px;
@@ -1367,8 +1368,10 @@ body {
 .evolve-raw-result { padding: 16px; font-size: 13px; line-height: 1.6; }
 
 /* Evolve — Memory tab */
-.evolve-memory-layout { display: flex; gap: 20px; min-height: 350px; }
-.evolve-memory-graph { flex: 1.2; min-width: 300px; }
+.evolve-memory-layout { display: flex; gap: 20px; min-height: 400px; }
+.evolve-memory-graph { flex: 1.2; min-width: 300px; min-height: 350px; position: relative; border: 1px solid var(--border-light); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg-main); }
+.evolve-memory-graph svg { cursor: grab; }
+.evolve-memory-graph svg:active { cursor: grabbing; }
 .evolve-memory-list { flex: 1; max-height: 500px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .evolve-memory-card {
   padding: 10px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-sm);

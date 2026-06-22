@@ -8,8 +8,9 @@
   // ── State ──
   let evolveActiveTab = "profile";
   let evolveCache = {}; // {tab: {updatedAt, data}}
-  let evolveLoading = false;
+  let evolveLoadingTabs = {}; // {tab: true} — per-tab loading state
   let activeSimulation = null;
+  let evolveStreamAborts = {}; // {tab: AbortController} — per-tab stream abort
   let evolveScopeSource = "all";
   let evolveScopeDate = "7d";
   let evolveScopeProject = "";
@@ -27,6 +28,9 @@
     if (scope.source) evolveScopeSource = scope.source;
     if (scope.date) evolveScopeDate = scope.date;
     if (scope.project !== undefined) evolveScopeProject = scope.project;
+    // Clear initial HTML — per-tab panels will be created on demand
+    const body = $("#evolve-tab-body");
+    if (body) body.innerHTML = "";
     bindEvolveEvents();
     switchEvolveTab(evolveActiveTab);
   };
@@ -53,9 +57,54 @@
   function switchEvolveTab(tab) {
     evolveActiveTab = tab;
     $$(".evolve-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === tab));
-    renderEvolveTabContent(tab);
+    // Show/hide per-tab panels instead of re-rendering
+    _ensureTabPanel(tab);
+    $$(".evolve-tab-panel").forEach(p => {
+      p.style.display = p.dataset.tab === tab ? "" : "none";
+    });
+    // Update header to show this tab's status
+    const updatedEl = $("#evolve-tab-updated");
+    if (evolveLoadingTabs[tab]) {
+      if (updatedEl) updatedEl.textContent = "AI 执行中…";
+    } else {
+      const cached = getCachedTab(tab);
+      if (updatedEl) updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : "尚未分析";
+    }
     updateEvolveOverviewBar();
     updateSyncButtonState();
+  }
+
+  /** Ensure a per-tab panel exists inside #evolve-tab-body */
+  function _ensureTabPanel(tab) {
+    const body = $("#evolve-tab-body");
+    if (!body) return null;
+    let panel = body.querySelector(`.evolve-tab-panel[data-tab="${tab}"]`);
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "evolve-tab-panel";
+      panel.dataset.tab = tab;
+      body.appendChild(panel);
+      // Render cached content or empty state
+      _renderTabPanel(tab, panel);
+    }
+    return panel;
+  }
+
+  /** Render tab content into its dedicated panel */
+  function _renderTabPanel(tab, panel) {
+    if (!panel) return;
+    const cached = getCachedTab(tab);
+    if (cached && cached.data) {
+      if (activeSimulation) { activeSimulation.stop(); activeSimulation = null; }
+      panel.innerHTML = "";
+      if (cached.data._error) {
+        panel.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${(window.esc || String)(cached.data._error)}</p><p>点击 🔄 Refresh 重试</p></div>`;
+        return;
+      }
+      renderTabVisualization(tab, cached.data, panel);
+    } else if (!evolveLoadingTabs[tab]) {
+      panel.innerHTML = '<div class="evolve-empty-state"><p>点击 🔄 Refresh 开始分析最近的对话</p></div>';
+    }
   }
 
   // ── Cache ──
@@ -134,27 +183,14 @@
     return `${Math.floor(diff / 86400000)}d ago`;
   }
 
-  // ── Tab content rendering ──
+  // ── Tab content rendering (legacy compat — routes to per-tab panel) ──
   function renderEvolveTabContent(tab) {
-    const body = $("#evolve-tab-body");
+    const panel = _ensureTabPanel(tab);
+    _renderTabPanel(tab, panel);
+    // Update header
     const updatedEl = $("#evolve-tab-updated");
-    if (!body) return;
-
     const cached = getCachedTab(tab);
-    if (cached && cached.data) {
-      if (updatedEl) updatedEl.textContent = `Updated: ${timeAgo(cached.updatedAt)}`;
-      if (activeSimulation) { activeSimulation.stop(); activeSimulation = null; }
-      body.innerHTML = "";
-      // Show backend error if present
-      if (cached.data._error) {
-        body.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${(window.esc || String)(cached.data._error)}</p><p>点击 🔄 Refresh 重试</p></div>`;
-        return;
-      }
-      renderTabVisualization(tab, cached.data, body);
-    } else {
-      if (updatedEl) updatedEl.textContent = "尚未分析";
-      body.innerHTML = '<div class="evolve-empty-state"><p>点击 🔄 Refresh 开始分析最近的对话</p></div>';
-    }
+    if (updatedEl) updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : "尚未分析";
   }
 
   function renderTabVisualization(tab, data, container) {
@@ -192,26 +228,33 @@
       .then(data => {
         const normalized = normalizeEvolveData(tab, data);
         setCachedTab(tab, normalized);
-        if (tab === evolveActiveTab) renderEvolveTabContent(tab);
+        // Re-render this tab's panel
+        const panel = _ensureTabPanel(tab);
+        _renderTabPanel(tab, panel);
         updateEvolveOverviewBar();
       });
   }
 
   /** Stream SSE events for AI evolve tabs with live progress */
   function _fetchEvolveTabStream(tab, params) {
-    const body = $("#evolve-tab-body");
     const updatedEl = $("#evolve-tab-updated");
     const esc = window.esc || String;
 
-    // Show streaming progress UI using tool-card / text-block components
-    if (body) {
-      body.innerHTML = '<div class="evolve-stream-progress" id="evolve-stream-container"></div>';
+    // Ensure tab panel exists and set up streaming container inside it
+    const panel = _ensureTabPanel(tab);
+    if (panel) {
+      panel.innerHTML = `<div class="evolve-stream-progress" id="evolve-stream-${tab}"></div>`;
     }
-    if (updatedEl) updatedEl.textContent = "AI 启动中…";
+    if (tab === evolveActiveTab && updatedEl) updatedEl.textContent = "AI 启动中…";
 
     const streamState = { blockText: "", textBlock: null, runningCard: null, stepCount: 0 };
 
-    return fetch(`/api/evolve/${tab}?${params}`)
+    // Create abort controller for this tab's stream
+    if (evolveStreamAborts[tab]) evolveStreamAborts[tab].abort();
+    const abortCtrl = new AbortController();
+    evolveStreamAborts[tab] = abortCtrl;
+
+    return fetch(`/api/evolve/${tab}?${params}`, { signal: abortCtrl.signal })
       .then(response => {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -237,14 +280,17 @@
           });
         }
         return pump();
-      });
+      })
+      .finally(() => { delete evolveStreamAborts[tab]; });
   }
 
   function _handleEvolveStreamEvent(evt, tab, state) {
-    const container = document.getElementById("evolve-stream-container");
+    const container = document.getElementById(`evolve-stream-${tab}`);
     const updatedEl = $("#evolve-tab-updated");
     const esc = window.esc || String;
     if (!container) return;
+    // Only update the header text if this tab is currently visible
+    const isActiveTab = (tab === evolveActiveTab);
 
     switch (evt.type) {
       case "tool": {
@@ -270,7 +316,7 @@
           if (header) header.onclick = () => rc.classList.toggle("expanded");
           state.runningCard = null;
         }
-        if (updatedEl) updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`;
+        if (isActiveTab && updatedEl) updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`;
         break;
       }
       case "text":
@@ -298,53 +344,64 @@
       case "evolve_result": {
         const normalized = normalizeEvolveData(tab, evt.data);
         setCachedTab(tab, normalized);
-        if (tab === evolveActiveTab) renderEvolveTabContent(tab);
+        // Re-render this tab's panel with the final visualization
+        const panel = _ensureTabPanel(tab);
+        _renderTabPanel(tab, panel);
         updateEvolveOverviewBar();
-        if (updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        if (isActiveTab && updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
         break;
       }
       case "done":
-        if (updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        if (isActiveTab && updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
         break;
       case "error":
-        if (updatedEl) updatedEl.textContent = `Error: ${evt.message}`;
-        const body = $("#evolve-tab-body");
-        if (body) body.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${esc(evt.message)}</p></div>`;
+        if (isActiveTab && updatedEl) updatedEl.textContent = `Error: ${evt.message}`;
+        // Show error in this tab's panel
+        const panel2 = _ensureTabPanel(tab);
+        if (panel2) panel2.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${esc(evt.message)}</p></div>`;
         break;
     }
   }
 
   function refreshEvolveTab(tab) {
-    if (evolveLoading) return;
-    evolveLoading = true;
-    const body = $("#evolve-tab-body");
+    if (evolveLoadingTabs[tab]) return; // only block same tab, not others
+    evolveLoadingTabs[tab] = true;
     const updatedEl = $("#evolve-tab-updated");
     const isAI = AI_TABS.has(tab);
-    if (!isAI) {
-      if (body) body.innerHTML = `<div class="evolve-skeleton"><div class="skeleton-bar"></div><div class="skeleton-bar short"></div><div class="skeleton-bar"></div><div class="skeleton-circle"></div></div>`;
-      if (updatedEl) updatedEl.textContent = "分析中…";
+    const panel = _ensureTabPanel(tab);
+
+    if (!isAI && panel) {
+      panel.innerHTML = `<div class="evolve-skeleton"><div class="skeleton-bar"></div><div class="skeleton-bar short"></div><div class="skeleton-bar"></div><div class="skeleton-circle"></div></div>`;
+      if (tab === evolveActiveTab && updatedEl) updatedEl.textContent = "分析中…";
     }
 
     _fetchEvolveTab(tab)
       .catch(err => {
-        if (body) body.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${(window.esc || String)(err.message)}</p></div>`;
+        if (panel) panel.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${(window.esc || String)(err.message)}</p></div>`;
       })
-      .finally(() => { evolveLoading = false; });
+      .finally(() => { delete evolveLoadingTabs[tab]; });
   }
 
   function refreshAllEvolveTabs() {
     const tabs = ["profile", "memory", "rules", "signals", "patterns"];
-    let idx = 0;
-    function doNext() {
-      if (idx >= tabs.length) return;
-      const tab = tabs[idx++];
-      switchEvolveTab(tab);
+    // Non-AI tabs run in parallel; AI tabs run sequentially (server resource)
+    const nonAI = tabs.filter(t => !AI_TABS.has(t));
+    const ai = tabs.filter(t => AI_TABS.has(t));
 
+    // Fire all non-AI tabs in parallel
+    nonAI.forEach(tab => refreshEvolveTab(tab));
+
+    // AI tabs sequentially (they're expensive)
+    let idx = 0;
+    function doNextAI() {
+      if (idx >= ai.length) return;
+      const tab = ai[idx++];
+      evolveLoadingTabs[tab] = true;
       _fetchEvolveTab(tab)
         .catch(() => {})
-        .finally(() => { setTimeout(doNext, 300); });
+        .finally(() => { delete evolveLoadingTabs[tab]; setTimeout(doNextAI, 300); });
     }
-    doNext();
+    doNextAI();
   }
 
   // ── Parse AI response to structured data (still used by AI Analysis chat in app.js) ──
@@ -604,34 +661,110 @@
   }
 
   function drawForceGraph(container, nodes, links, onNodeClick) {
-    const width = 450, height = 350;
+    const rect = container.getBoundingClientRect();
+    const width = Math.max(rect.width || 450, 300);
+    const height = Math.max(rect.height || 350, 280);
     const typeColors = { preference: "#5856d6", workflow: "#16a34a", tooling: "#d97706", design: "#ea580c", communication: "#2563eb" };
+    const typeLabels = { preference: "偏好", workflow: "工作流", tooling: "工具", design: "设计", communication: "沟通" };
+    const n = nodes.length;
 
+    // ── SVG + zoom layer ──
     const svg = d3.select(container).append("svg")
       .attr("viewBox", `0 0 ${width} ${height}`)
-      .style("width", "100%");
+      .style("width", "100%").style("height", "100%");
 
+    // Defs: glow filter for hover
+    const defs = svg.append("defs");
+    const filter = defs.append("filter").attr("id", "glow").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
+    filter.append("feGaussianBlur").attr("stdDeviation", "3").attr("result", "blur");
+    const merge = filter.append("feMerge");
+    merge.append("feMergeNode").attr("in", "blur");
+    merge.append("feMergeNode").attr("in", "SourceGraphic");
+
+    const g = svg.append("g"); // zoom target
+
+    const zoom = d3.zoom()
+      .scaleExtent([0.3, 4])
+      .on("zoom", (e) => g.attr("transform", e.transform));
+    svg.call(zoom);
+
+    // ── Tooltip ──
+    const tooltip = d3.select(container).append("div")
+      .style("position", "absolute").style("pointer-events", "none")
+      .style("background", "var(--bg-card, #fff)").style("border", "1px solid var(--border-light, #e0e0e0)")
+      .style("border-radius", "6px").style("padding", "6px 10px").style("font-size", "11px")
+      .style("box-shadow", "0 4px 12px rgba(0,0,0,.12)").style("opacity", 0)
+      .style("transition", "opacity .15s").style("z-index", "10").style("max-width", "200px");
+
+    // ── Type clustering: assign cluster center per type ──
+    const types = [...new Set(nodes.map(d => d.type || "preference"))];
+    const angleStep = (2 * Math.PI) / Math.max(types.length, 1);
+    const clusterR = Math.min(width, height) * 0.25;
+    const typeCenters = {};
+    types.forEach((t, i) => {
+      typeCenters[t] = {
+        x: width / 2 + clusterR * Math.cos(angleStep * i - Math.PI / 2),
+        y: height / 2 + clusterR * Math.sin(angleStep * i - Math.PI / 2)
+      };
+    });
+
+    // ── Forces: adaptive to node count ──
     const nodeIds = new Set(nodes.map(n => n.id));
     const validLinks = links.filter(l => nodeIds.has(l.source) && nodeIds.has(l.target));
+    const chargeStrength = n > 30 ? -60 : n > 15 ? -80 : -100;
+    const linkDist = n > 30 ? 40 : n > 15 ? 55 : 70;
 
-    const pad = 20;
     const simulation = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(validLinks).id(d => d.id).distance(50).strength(d => d.strength || 0.5))
-      .force("charge", d3.forceManyBody().strength(-40))
-      .force("x", d3.forceX(width / 2).strength(0.15))
-      .force("y", d3.forceY(height / 2).strength(0.15))
-      .force("collision", d3.forceCollide().radius(d => Math.sqrt(d.frequency || 1) * 4 + 6));
+      .force("link", d3.forceLink(validLinks).id(d => d.id).distance(linkDist).strength(d => d.strength || 0.4))
+      .force("charge", d3.forceManyBody().strength(chargeStrength))
+      .force("x", d3.forceX(d => typeCenters[d.type || "preference"].x).strength(0.08))
+      .force("y", d3.forceY(d => typeCenters[d.type || "preference"].y).strength(0.08))
+      .force("center", d3.forceCenter(width / 2, height / 2).strength(0.02))
+      .force("collision", d3.forceCollide().radius(d => _nodeR(d) + 3));
 
     activeSimulation = simulation;
 
-    const link = svg.append("g").selectAll("line")
-      .data(validLinks).enter().append("line")
-      .style("stroke", "var(--border-light)").style("stroke-width", d => (d.strength || 0.5) * 2);
+    function _nodeR(d) { return Math.sqrt(d.frequency || 1) * 4 + 4; }
 
-    const node = svg.append("g").selectAll("g")
+    // ── Links ──
+    const link = g.append("g").attr("class", "links").selectAll("line")
+      .data(validLinks).enter().append("line")
+      .style("stroke", "var(--border-light, #ddd)").style("stroke-opacity", 0.5)
+      .style("stroke-width", d => Math.max((d.strength || 0.3) * 2, 0.5));
+
+    // ── Nodes ──
+    const node = g.append("g").attr("class", "nodes").selectAll("g")
       .data(nodes).enter().append("g")
       .style("cursor", "pointer")
       .on("click", (e, d) => { if (onNodeClick) onNodeClick(d.id); })
+      .on("mouseenter", (e, d) => {
+        d3.select(e.currentTarget).select("circle").style("filter", "url(#glow)");
+        // Highlight connected links
+        link.style("stroke-opacity", l =>
+          (l.source.id || l.source) === d.id || (l.target.id || l.target) === d.id ? 1 : 0.1
+        ).style("stroke-width", l =>
+          (l.source.id || l.source) === d.id || (l.target.id || l.target) === d.id ? 2.5 : 0.5
+        );
+        node.style("opacity", nd =>
+          nd.id === d.id || validLinks.some(l =>
+            ((l.source.id || l.source) === d.id && (l.target.id || l.target) === nd.id) ||
+            ((l.target.id || l.target) === d.id && (l.source.id || l.source) === nd.id)
+          ) ? 1 : 0.25
+        );
+        // Tooltip
+        const cRect = container.getBoundingClientRect();
+        const type = d.type || "preference";
+        tooltip.html(`<b>${esc(d.label || d.id)}</b><br><span style="color:${typeColors[type]}">${typeLabels[type] || type}</span> · ${d.confidence || "medium"}<br>频次: ${d.frequency || 1}`)
+          .style("left", (e.clientX - cRect.left + 12) + "px")
+          .style("top", (e.clientY - cRect.top - 10) + "px")
+          .style("opacity", 1);
+      })
+      .on("mouseleave", (e) => {
+        d3.select(e.currentTarget).select("circle").style("filter", null);
+        link.style("stroke-opacity", 0.5).style("stroke-width", d => Math.max((d.strength || 0.3) * 2, 0.5));
+        node.style("opacity", 1);
+        tooltip.style("opacity", 0);
+      })
       .call(d3.drag()
         .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
         .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
@@ -639,27 +772,73 @@
       );
 
     node.append("circle")
-      .attr("r", d => Math.sqrt(d.frequency || 1) * 4 + 4)
+      .attr("r", d => _nodeR(d))
       .style("fill", d => typeColors[d.type] || "#5856d6")
-      .style("fill-opacity", d => d.confidence === "high" ? 0.9 : d.confidence === "medium" ? 0.6 : 0.3)
+      .style("fill-opacity", d => d.confidence === "high" ? 0.85 : d.confidence === "medium" ? 0.55 : 0.3)
       .style("stroke", d => typeColors[d.type] || "#5856d6")
-      .style("stroke-width", d => d.confidence === "low" ? "1" : "2")
-      .style("stroke-dasharray", d => d.confidence === "low" ? "3,2" : "none");
+      .style("stroke-width", d => d.confidence === "low" ? 1 : 1.5)
+      .style("stroke-dasharray", d => d.confidence === "low" ? "3,2" : "none")
+      .style("transition", "filter .15s");
 
     node.append("text")
-      .text(d => d.label?.length > 15 ? d.label.substring(0, 15) + "…" : d.label)
-      .attr("dy", d => -(Math.sqrt(d.frequency || 1) * 4 + 8))
+      .text(d => d.label?.length > 12 ? d.label.substring(0, 12) + "…" : d.label)
+      .attr("dy", d => -(_nodeR(d) + 5))
       .attr("text-anchor", "middle")
-      .style("font-size", "9px").style("fill", "var(--text-muted)");
+      .style("font-size", "9px").style("fill", "var(--text-muted)")
+      .style("pointer-events", "none");
 
-    simulation.on("tick", () => {
-      nodes.forEach(d => {
-        d.x = Math.max(pad, Math.min(width - pad, d.x));
-        d.y = Math.max(pad, Math.min(height - pad, d.y));
+    // ── Type legend ──
+    const legend = svg.append("g").attr("transform", `translate(8, ${height - types.length * 16 - 4})`);
+    types.forEach((t, i) => {
+      const lg = legend.append("g").attr("transform", `translate(0, ${i * 16})`);
+      lg.append("circle").attr("r", 4).attr("cx", 4).attr("cy", 0)
+        .style("fill", typeColors[t] || "#5856d6");
+      lg.append("text").attr("x", 12).attr("dy", "0.35em")
+        .text(typeLabels[t] || t)
+        .style("font-size", "9px").style("fill", "var(--text-muted)");
+    });
+
+    // ── Zoom controls ──
+    const controls = d3.select(container).append("div")
+      .style("position", "absolute").style("top", "8px").style("right", "8px")
+      .style("display", "flex").style("flex-direction", "column").style("gap", "4px");
+
+    [{ label: "+", scale: 1.4 }, { label: "−", scale: 1 / 1.4 }, { label: "⊙", scale: 0 }].forEach(btn => {
+      const b = controls.append("button")
+        .text(btn.label)
+        .style("width", "26px").style("height", "26px")
+        .style("border", "1px solid var(--border-light, #ddd)").style("border-radius", "4px")
+        .style("background", "var(--bg-card, #fff)").style("cursor", "pointer")
+        .style("font-size", "14px").style("line-height", "1").style("color", "var(--text-secondary, #666)")
+        .style("display", "flex").style("align-items", "center").style("justify-content", "center");
+      b.on("click", () => {
+        if (btn.scale === 0) {
+          // Fit to view
+          svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity);
+        } else {
+          svg.transition().duration(200).call(zoom.scaleBy, btn.scale);
+        }
       });
+    });
+
+    // ── Tick ──
+    simulation.on("tick", () => {
       link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
         .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
       node.attr("transform", d => `translate(${d.x},${d.y})`);
+    });
+
+    // After stabilization, fit to content
+    simulation.on("end", () => {
+      const xs = nodes.map(d => d.x), ys = nodes.map(d => d.y);
+      const x0 = Math.min(...xs) - 30, x1 = Math.max(...xs) + 30;
+      const y0 = Math.min(...ys) - 30, y1 = Math.max(...ys) + 30;
+      const bw = x1 - x0, bh = y1 - y0;
+      const scale = Math.min(width / bw, height / bh, 1.5);
+      const tx = (width - bw * scale) / 2 - x0 * scale;
+      const ty = (height - bh * scale) / 2 - y0 * scale;
+      svg.transition().duration(600).call(zoom.transform,
+        d3.zoomIdentity.translate(tx, ty).scale(scale));
     });
   }
 
