@@ -503,8 +503,11 @@ def load_codex_session(session_id: str):
 # Index Building (with disk cache)
 # ---------------------------------------------------------------------------
 def build_index(force: bool = False) -> dict:
-    """Scan all JSONL files and build/update the metadata index."""
+    """Scan all JSONL files and build/update the metadata index + SQLite DB."""
     global _index, _index_gen
+
+    import db as _db
+    _db.init_db()
 
     # Discover JSONL files
     jsonl_files = []
@@ -553,7 +556,9 @@ def build_index(force: bool = False) -> dict:
                         meta["project"] = pn
                         meta["projectName"] = pretty_project_name(pn)
                         meta["source"] = "claude"
+                        meta["_mtime"] = current_files.get(fp, 0)
                         new_sessions[meta["id"]] = meta
+                        _db.upsert_session(meta, meta.get("userTexts", []), meta.get("assistantSnippets", []))
                 except Exception as e:
                     print(f"Error parsing {fp}: {e}")
 
@@ -608,7 +613,9 @@ def build_index(force: bool = False) -> dict:
                     if meta:
                         meta["projectName"] = _codex_project_name(meta.get("cwd", ""))
                         meta["project"] = "codex"
+                        meta["_mtime"] = current_files.get(fp, 0)
                         codex_new[meta["id"]] = meta
+                        _db.upsert_session(meta, meta.get("userTexts", []), meta.get("assistantSnippets", []))
                 except Exception as e:
                     print(f"Error parsing Codex {fp}: {e}")
 
@@ -640,6 +647,18 @@ def build_index(force: bool = False) -> dict:
         "_file_mtimes": current_files,
     }
 
+    # Backfill DB from cached sessions (only if DB is missing entries)
+    db_count = _db.get_conn().execute("SELECT count(*) FROM sessions").fetchone()[0]
+    if db_count < len(sessions):
+        backfill_count = 0
+        for sid, meta in sessions.items():
+            exists = _db.get_conn().execute("SELECT 1 FROM sessions WHERE id=?", (sid,)).fetchone()
+            if not exists:
+                _db.upsert_session(meta, meta.get("userTexts", []), meta.get("assistantSnippets", []))
+                backfill_count += 1
+        if backfill_count:
+            print(f"DB backfill: {backfill_count} sessions")
+
     # Save to cache
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -653,7 +672,16 @@ def build_index(force: bool = False) -> dict:
         _index_gen += 1
         _result_cache.clear()
 
-    print(f"Index ready: {len(sessions)} sessions across {len(projects)} projects")
+    # Rebuild DB FTS + aggregates if anything changed
+    if to_parse or codex_to_parse:
+        try:
+            _db.rebuild_fts()
+            _db.refresh_aggregates()
+        except Exception as e:
+            print(f"DB post-process error: {e}")
+
+    db_count = _db.get_conn().execute("SELECT count(*) FROM sessions").fetchone()[0]
+    print(f"Index ready: {len(sessions)} sessions across {len(projects)} projects (DB: {db_count})")
     return index
 
 
