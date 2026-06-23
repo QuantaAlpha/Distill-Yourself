@@ -920,7 +920,8 @@ def _detect_ai_engine():
 
 def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto"):
     """Execute prompt via detected AI engine. Returns (stdout, stderr, returncode).
-    Raises FileNotFoundError if no engine available."""
+    Raises FileNotFoundError if no engine available.
+    Auto-falls back from codex to claude on codex errors."""
     engine = engine_override if engine_override and engine_override != "auto" else _detect_ai_engine()
     if engine == "codex":
         sandbox = "workspace-write" if allow_write else "read-only"
@@ -930,19 +931,23 @@ def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto
             capture_output=True, text=True, timeout=timeout,
             stdin=subprocess.DEVNULL,
         )
-        return r.stdout, r.stderr, r.returncode
-    elif engine == "claude":
+        # Fallback: if codex failed and engine was auto-detected, try claude
+        if r.returncode != 0 and engine_override in ("auto", "", None):
+            print(f"Codex failed (rc={r.returncode}), falling back to claude")
+            engine = "claude"
+        else:
+            return r.stdout, r.stderr, r.returncode
+    if engine == "claude":
         r = subprocess.run(
             ["claude", "-p"],
             input=prompt,
             capture_output=True, text=True, timeout=timeout,
         )
         return r.stdout, r.stderr, r.returncode
-    else:
-        raise FileNotFoundError(
-            "No AI engine found. Install Codex (npm i -g @openai/codex) "
-            "or Claude Code (npm i -g @anthropic-ai/claude-code)."
-        )
+    raise FileNotFoundError(
+        "No AI engine found. Install Codex (npm i -g @openai/codex) "
+        "or Claude Code (npm i -g @anthropic-ai/claude-code)."
+    )
 
 
 def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_override="auto"):
@@ -952,12 +957,48 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
                   {"type": "text", "content": ...}
                   {"type": "done", "content": ...}
                   {"type": "error", "message": ...}
+
+    Auto-falls back from codex to claude on codex errors (e.g. usage limits).
     """
     engine = engine_override if engine_override and engine_override != "auto" else _detect_ai_engine()
     if not engine:
         yield {"type": "error", "message": "No AI engine found"}
         return
 
+    # For codex with auto-detection: buffer early events to detect quick failures,
+    # then fall back to claude if codex errored without producing useful output.
+    if engine == "codex" and engine_override in ("auto", "", None):
+        gen = _run_engine_stream_inner("codex", prompt, allow_write, timeout)
+        early_buf = []
+        codex_ok = False
+        for evt in gen:
+            early_buf.append(evt)
+            if evt["type"] in ("tool", "text"):
+                codex_ok = True
+                break
+            if evt["type"] == "done":
+                break
+
+        if codex_ok:
+            # Codex started working — flush buffer then continue streaming
+            yield from early_buf
+            yield from gen
+        else:
+            # Codex finished/errored without useful output
+            has_error = any(e["type"] == "error" for e in early_buf)
+            if has_error:
+                err_msgs = [e["message"] for e in early_buf if e["type"] == "error"]
+                yield {"type": "text", "content": f"Codex unavailable ({'; '.join(err_msgs)}), falling back to Claude...\n"}
+                yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout)
+            else:
+                yield from early_buf
+        return
+
+    yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout)
+
+
+def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
+    """Core streaming loop for a single engine. Yields event dicts."""
     if engine == "codex":
         sandbox = "workspace-write" if allow_write else "read-only"
         cmd = ["codex", "--sandbox", sandbox, "--ask-for-approval", "never",
@@ -967,7 +1008,8 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
             text=True, bufsize=1, stdin=subprocess.DEVNULL,
         )
     else:  # claude
-        cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+        cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
+               "--allowedTools", "Bash,Read,Grep,Glob,Write,Edit,Agent"]
         proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1,
@@ -985,7 +1027,6 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
                 proc.kill()
                 yield {"type": "error", "message": "Timeout"}
                 return
-            # Use select for non-blocking read with timeout
             ready, _, _ = _select.select([proc.stdout], [], [], min(remaining, 1.0))
             if ready:
                 line = proc.stdout.readline()
@@ -994,23 +1035,27 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
                 line = line.strip()
                 if not line:
                     continue
-                # Parse JSONL event
-                evt = _parse_stream_event(engine, line)
-                if evt:
-                    if evt["type"] == "text":
-                        accumulated_text += evt["content"]
-                    yield evt
+                evts = _parse_stream_event(engine, line)
+                if evts:
+                    if not isinstance(evts, list):
+                        evts = [evts]
+                    for evt in evts:
+                        if evt["type"] == "text":
+                            accumulated_text += evt["content"]
+                        yield evt
             elif proc.poll() is not None:
-                # Process exited, drain remaining
                 for line in proc.stdout:
                     line = line.strip()
                     if not line:
                         continue
-                    evt = _parse_stream_event(engine, line)
-                    if evt:
-                        if evt["type"] == "text":
-                            accumulated_text += evt["content"]
-                        yield evt
+                    evts = _parse_stream_event(engine, line)
+                    if evts:
+                        if not isinstance(evts, list):
+                            evts = [evts]
+                        for evt in evts:
+                            if evt["type"] == "text":
+                                accumulated_text += evt["content"]
+                            yield evt
                 break
     except Exception as e:
         yield {"type": "error", "message": str(e)}
@@ -1019,7 +1064,6 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
             proc.kill()
         proc.wait()
 
-    # Final done event
     yield {"type": "done", "content": accumulated_text}
 
 
@@ -1054,6 +1098,10 @@ def _parse_stream_event(engine: str, line: str) -> dict:
                 text = item.get("text", "")
                 if text:
                     return {"type": "text", "content": text}
+        # Codex error / turn failed (e.g. usage limit)
+        elif evt_type in ("error", "turn.failed"):
+            msg = obj.get("message", "") or obj.get("error", {}).get("message", "")
+            return {"type": "error", "message": f"codex: {msg}" if msg else "codex: unknown error"}
         # Turn completed (usage stats)
         elif evt_type == "turn.completed":
             usage = obj.get("usage", {})
@@ -1062,34 +1110,56 @@ def _parse_stream_event(engine: str, line: str) -> dict:
 
     elif engine == "claude":
         evt_type = obj.get("type", "")
-        # Assistant message with content
+        # Assistant message — may contain multiple content blocks (text + tool_use)
         if evt_type == "assistant":
             msg = obj.get("message", {})
             content_blocks = msg.get("content", [])
-            texts = []
+            events = []
+            pending_text = []
             for blk in content_blocks:
-                if isinstance(blk, dict):
-                    if blk.get("type") == "text":
-                        texts.append(blk.get("text", ""))
-                    elif blk.get("type") == "tool_use":
-                        name = blk.get("name", "")
-                        inp = blk.get("input", {})
-                        detail = ""
-                        if name in ("Bash", "bash"):
-                            detail = inp.get("command", "")[:200]
-                        elif name in ("Read", "read_file"):
-                            detail = inp.get("file_path", "")
-                        elif name in ("Edit", "Write"):
-                            detail = inp.get("file_path", "")
-                        elif name in ("Grep", "Glob"):
-                            detail = inp.get("pattern", "")
-                        return {"type": "tool", "name": name, "status": "running",
-                                "detail": detail}
-            if texts:
-                return {"type": "text", "content": "\n".join(texts)}
-        # Tool result
-        elif evt_type == "user" or (evt_type == "system" and obj.get("subtype") == "tool_result"):
-            return None  # Skip tool results in stream
+                if not isinstance(blk, dict):
+                    continue
+                if blk.get("type") == "text":
+                    pending_text.append(blk.get("text", ""))
+                elif blk.get("type") == "tool_use":
+                    # Flush pending text before tool
+                    if pending_text:
+                        events.append({"type": "text", "content": "\n".join(pending_text)})
+                        pending_text = []
+                    name = blk.get("name", "")
+                    inp = blk.get("input", {})
+                    detail = ""
+                    if name in ("Bash", "bash"):
+                        detail = inp.get("command", "")[:200]
+                    elif name in ("Read", "read_file"):
+                        detail = inp.get("file_path", "")
+                    elif name in ("Edit", "Write"):
+                        detail = inp.get("file_path", "")
+                    elif name in ("Grep", "Glob"):
+                        detail = inp.get("pattern", "")
+                    events.append({"type": "tool", "name": name, "status": "running",
+                                   "detail": detail, "_tool_use_id": blk.get("id", "")})
+            # Flush trailing text
+            if pending_text:
+                events.append({"type": "text", "content": "\n".join(pending_text)})
+            return events if events else None
+        # Tool result — mark corresponding tool as done
+        elif evt_type == "user":
+            msg = obj.get("message", {})
+            content_blocks = msg.get("content", [])
+            events = []
+            for blk in content_blocks:
+                if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                    output = blk.get("content", "")
+                    # Truncate output for display
+                    if isinstance(output, list):
+                        output = " ".join(
+                            b.get("text", "") for b in output if isinstance(b, dict)
+                        )
+                    events.append({"type": "tool", "name": "", "status": "done",
+                                   "detail": str(output)[:500],
+                                   "_tool_use_id": blk.get("tool_use_id", "")})
+            return events if events else None
         # Final result
         elif evt_type == "result":
             result_text = obj.get("result", "")
@@ -1326,7 +1396,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 
         self._start_sse()
         try:
-            for evt in _run_ai_engine_stream(prompt, allow_write=True, timeout=300, engine_override=engine):
+            for evt in _run_ai_engine_stream(prompt, allow_write=True, timeout=600, engine_override=engine):
                 self._sse_event(evt)
         except Exception as e:
             self._sse_event({"type": "error", "message": str(e)})
@@ -1350,14 +1420,45 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         }
         return fallbacks.get(tab, {"_error": reason})
 
-    def _build_evolve_prompt(self, tab: str, source: str, date: str, project: str, cli_path: str) -> str:
-        """Build a prompt that instructs the AI engine to analyze conversations and write results via evolve-write."""
-        # Build CLI flags for data querying
-        cli_flags = f"--date {date} --source {source}"
-        if project:
-            cli_flags += f' --project "{project}"'
+    def _collect_evolve_data(self, source: str, date: str, project: str, cli_path: str) -> dict:
+        """Pre-collect conversation data via analyze.py for embedding in prompt."""
+        import concurrent.futures
 
-        # Get filtered session summary for context
+        cli_base = [sys.executable, cli_path]
+        flags = ["--date", date, "--source", source]
+        if project:
+            flags.extend(["--project", project])
+
+        commands = {
+            "stats": cli_base + ["stats"] + flags,
+            "queries": cli_base + ["queries", "--limit", "500"] + flags,
+            "corrections": cli_base + ["corrections"] + flags,
+            "highlights": cli_base + ["highlights"] + flags,
+            "decisions": cli_base + ["decisions"] + flags,
+        }
+
+        results = {}
+        def run_cmd(name, cmd):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                return name, r.stdout if r.returncode == 0 else ""
+            except Exception:
+                return name, ""
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            futures = [pool.submit(run_cmd, n, c) for n, c in commands.items()]
+            for f in concurrent.futures.as_completed(futures):
+                name, output = f.result()
+                results[name] = output
+
+        return results
+
+    def _build_evolve_prompt(self, tab: str, source: str, date: str, project: str, cli_path: str) -> str:
+        """Build a prompt with pre-collected data so the AI only needs to synthesize and write."""
+        # Pre-collect data
+        data = self._collect_evolve_data(source, date, project, cli_path)
+
+        # Count sessions
         with _index_lock:
             sessions = dict(_index.get("sessions", {}))
         now = datetime.now()
@@ -1382,80 +1483,67 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         write_cmd = f"python3 {cli_path} evolve-write --tab {tab}"
 
         parts = [
-            f"You have a CLI tool for analyzing conversation history: python3 {cli_path} <command> [options]",
-            f"Commands: sessions, read <id> [-s summary], search <query>, queries [--session <id>] [-k keyword], corrections, decisions, errors, stats, files, highlights",
-            f"Each command supports: --date --source --project --limit --json",
-            "",
-            f"Current scope: {cli_flags} ({session_count} sessions)",
-            "",
-            f"STEP 1: Use the CLI to gather data. Example:",
-            f"  python3 {cli_path} queries {cli_flags} --limit 80",
-            f"  python3 {cli_path} highlights {cli_flags}",
-            f"  python3 {cli_path} stats {cli_flags}",
-            "",
-            f"STEP 2: Write your analysis result using the evolve-write command.",
-            f"  The command reads JSON from stdin and validates the schema.",
-            f"  If validation fails, you will see specific error messages — fix the JSON and retry.",
+            f"Analyze the following conversation data ({session_count} sessions, {date} range) and write the result.",
             "",
         ]
 
+        # Embed pre-collected data
+        for name in ["stats", "corrections", "queries", "highlights", "decisions"]:
+            output = data.get(name, "")
+            if output:
+                # Trim very large outputs
+                lines = output.split("\n")
+                if len(lines) > 800:
+                    output = "\n".join(lines[:800]) + f"\n... ({len(lines) - 800} more lines)"
+                parts.extend([f"=== {name.upper()} ===", output, ""])
+
         if tab == "profile":
             parts.extend([
-                f"TASK: Analyze conversation history and extract a user profile.",
+                f"TASK: Build a user profile JSON from the data above.",
                 "",
-                f"Write command (pipe JSON via heredoc):",
-                f'  {write_cmd} --mode replace <<\'EVOLVE_EOF\'',
-                f'  {{your JSON here}}',
-                f'  EVOLVE_EOF',
+                f"Write result via Bash: {write_cmd} --mode replace <<'EVOLVE_EOF'",
+                "<your JSON here>",
+                "EVOLVE_EOF",
                 "",
-                "Required JSON schema:",
-                '{',
-                '  "categories": [',
-                '    {"name": "分类名", "icon": "emoji",',
-                '     "tags": ["标签1", "标签2"],',
-                '     "items": [{"text": "具体描述", "confidence": "high|medium|low"}]',
-                '    }',
-                '  ],',
-                '  "radar": {',
-                '    "dimensions": [',
-                '      {"name": "领域名称", "score": 0.0-1.0, "evidence": "判断依据简述"}',
-                '    ]',
-                '  }',
-                '}',
+                "JSON schema:",
+                '{"categories": [{"name": "分类名", "icon": "emoji", "tags": ["标签"],',
+                '  "items": [{"text": "具体描述", "confidence": "high|medium|low"}]}],',
+                ' "radar": {"dimensions": [{"name": "领域", "score": 0.0-1.0, "evidence": "依据"}]}}',
                 "",
-                "分类规则：",
-                "- 根据对话实际内容自行归类（基本信息、技术栈、沟通风格、工作习惯、当前关注等）",
-                "- tags: 短标签（技术名词等），items: 具体描述句",
-                "- radar: 基于用户涉及的具体能力领域，5-8 个维度，score 基于深度和频率",
+                "质量要求：",
+                "- 目标: 6-8 categories, 30+ items, 丰富的 tags",
+                "- items 必须具体：引用实际项目名、工具名、用户原话（用引号标注），不要泛泛概括",
+                "- 示例：✗「用户关注前端开发」 ✓「反复要求仿 ChatGPT 消息流式布局，对工具卡片折叠、自动滚动等交互细节有明确审美标准」",
+                "- tags 用短标签（技术名词/工具名），items 用完整描述句",
+                "- radar 5-8 维度，score 基于深度和频率，evidence 引用具体事实",
                 "- 所有内容用中文",
             ])
         elif tab == "memory":
             parts.extend([
-                f"TASK: Analyze conversation history and extract user preferences/habits as a memory network.",
+                f"TASK: Extract user preferences and habits as a memory network JSON.",
                 "",
-                f"Write command (pipe JSON via heredoc):",
-                f'  {write_cmd} --mode replace <<\'EVOLVE_EOF\'',
-                f'  {{your JSON here}}',
-                f'  EVOLVE_EOF',
+                f"Write result via Bash: {write_cmd} --mode replace <<'EVOLVE_EOF'",
+                "<your JSON here>",
+                "EVOLVE_EOF",
                 "",
-                "Required JSON schema:",
-                '{',
-                '  "nodes": [{"id": "m1", "label": "偏好简述", "type": "偏好|工作流|工具|设计|沟通", "frequency": N, "confidence": "high|medium|low"}],',
-                '  "links": [{"source": "m1", "target": "m2", "strength": 0.0-1.0}],',
-                '  "cards": [{"id": "m1", "content": "完整描述", "firstSeen": "YYYY-MM-DD", "lastSeen": "YYYY-MM-DD", "evidence": "用户原话引用"}]',
-                '}',
+                "JSON schema:",
+                '{"nodes": [{"id": "m1", "label": "偏好简述", "type": "偏好|工作流|工具|设计|沟通", "frequency": N, "confidence": "high|medium|low"}],',
+                ' "links": [{"source": "m1", "target": "m2", "strength": 0.0-1.0}],',
+                ' "cards": [{"id": "m1", "content": "完整描述", "firstSeen": "YYYY-MM-DD", "lastSeen": "YYYY-MM-DD", "evidence": "用户原话引用"}]}',
                 "",
-                "提取信号：明确偏好、反复选择模式、工具偏好、风格选择、工作流习惯。",
-                "每条记忆要具体可操作，不要泛泛而谈。所有内容用中文。",
-                "nodes 和 cards 的 id 必须一一对应。",
+                "质量要求：",
+                "- 每条记忆必须具体可操作，引用用户原话作为 evidence（用引号标注）",
+                "- 示例：✗「用户喜欢简洁」 ✓「用户多次说『不要过于精简合并』『这个没必要』，对 AI 过度精简和过度设计都敏感」",
+                "- nodes 和 cards 的 id 必须一一对应",
+                "- 所有内容用中文",
             ])
 
         parts.extend([
             "",
-            "IMPORTANT:",
-            "- The evolve-write command validates the JSON schema. If it fails, read the error message and fix.",
-            "- Do NOT output the JSON to stdout. Use the evolve-write command to write it.",
-            "- Analyze sufficient conversations before generating — use queries/highlights/stats first.",
+            "RULES:",
+            "- Write the result in ONE Bash call using evolve-write. That is your ONLY tool call.",
+            "- evolve-write validates JSON schema. If it fails, read the error and fix.",
+            "- Do NOT run any other commands. All data is already provided above.",
         ])
 
         return "\n".join(parts)

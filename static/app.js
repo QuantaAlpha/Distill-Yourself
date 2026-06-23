@@ -1860,7 +1860,7 @@
     let _blockText = ""; // text accumulated for the CURRENT block only
     let _renderTimer = null;
     let _started = false;
-    let _runningCard = null; // the currently running tool card
+    let _runningCards = []; // queue of running tool cards (FIFO for done matching)
 
     function _ensureStarted() {
       if (!_started) {
@@ -1900,25 +1900,22 @@
           const detail = evt.detail ? esc(evt.detail) : "";
           card.innerHTML = `<div class="tool-card-header"><span class="tool-status-dot"></span><span class="tool-card-name">${esc(evt.name)}</span><span class="tool-card-detail">${detail}</span><span class="tool-card-chevron">›</span></div><div class="tool-card-body"><pre class="tool-card-output"></pre></div>`;
           turn.appendChild(card);
-          _runningCard = card;
-        } else if (evt.status === "done" && _runningCard) {
-          // Complete the running card
-          _runningCard.classList.remove("running");
-          _runningCard.classList.add("done");
-          // Update detail if provided
+          _runningCards.push(card);
+        } else if (evt.status === "done" && _runningCards.length) {
+          // Complete the oldest running card (FIFO)
+          const card = _runningCards.shift();
+          card.classList.remove("running");
+          card.classList.add("done");
+          // Update output if provided
           if (evt.detail) {
-            const outputEl = _runningCard.querySelector(".tool-card-output");
+            const outputEl = card.querySelector(".tool-card-output");
             if (outputEl) outputEl.textContent = evt.detail;
           }
-          // Make it collapsible — click header to toggle
-          const header = _runningCard.querySelector(".tool-card-header");
-          const body = _runningCard.querySelector(".tool-card-body");
-          if (header && body) {
-            header.onclick = () => {
-              _runningCard.classList.toggle("expanded");
-            };
+          // Make it collapsible
+          const header = card.querySelector(".tool-card-header");
+          if (header) {
+            header.onclick = () => card.classList.toggle("expanded");
           }
-          _runningCard = null;
         }
         _autoScroll(container);
       },

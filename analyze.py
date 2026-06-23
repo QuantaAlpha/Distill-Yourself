@@ -1505,6 +1505,8 @@ Examples:
                         help="Max results (default: 50)")
     shared.add_argument("--json", action="store_true",
                         help="Output as JSON")
+    shared.add_argument("--save", default="",
+                        help="Save full output to file (prints summary + path instead)")
 
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -1554,7 +1556,27 @@ Examples:
         "evolve-rules": cmd_evolve_rules, "evolve-signals": cmd_evolve_signals,
         "evolve-patterns": cmd_evolve_patterns, "evolve-write": cmd_evolve_write,
     }
-    cmds[args.command](args)
+
+    save_path = getattr(args, "save", "")
+    if save_path:
+        # Capture stdout, save full output to file, print summary
+        import io
+        old_stdout = sys.stdout
+        sys.stdout = buf = io.StringIO()
+        # Remove limit when saving — get all data
+        if hasattr(args, "limit"):
+            args.limit = 99999
+        cmds[args.command](args)
+        full_output = buf.getvalue()
+        sys.stdout = old_stdout
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(full_output)
+        line_count = full_output.count("\n")
+        char_count = len(full_output)
+        print(f"Saved {line_count} lines ({char_count} chars) to {save_path}")
+        print(f"Use: cat {save_path}  or  sed -n '1,100p' {save_path}  to read in segments")
+    else:
+        cmds[args.command](args)
 
 
 if __name__ == "__main__":

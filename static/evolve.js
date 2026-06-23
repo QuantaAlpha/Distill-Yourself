@@ -247,7 +247,7 @@
     }
     if (tab === evolveActiveTab && updatedEl) updatedEl.textContent = "AI 启动中…";
 
-    const streamState = { blockText: "", textBlock: null, runningCard: null, stepCount: 0 };
+    const streamState = { blockText: "", textBlock: null, runningCards: [], stepCount: 0 };
 
     // Create abort controller for this tab's stream
     if (evolveStreamAborts[tab]) evolveStreamAborts[tab].abort();
@@ -311,19 +311,18 @@
           const detail = evt.detail ? esc(evt.detail) : "";
           card.innerHTML = `<div class="tool-card-header"><span class="tool-status-dot"></span><span class="tool-card-name">${esc(evt.name)}</span><span class="tool-card-detail">${detail}</span><span class="tool-card-chevron">›</span></div><div class="tool-card-body"><pre class="tool-card-output"></pre></div>`;
           container.appendChild(card);
-          state.runningCard = card;
+          state.runningCards.push(card);
           state.stepCount++;
-        } else if (evt.status === "done" && state.runningCard) {
-          state.runningCard.classList.remove("running");
-          state.runningCard.classList.add("done");
+        } else if (evt.status === "done" && state.runningCards.length) {
+          const card = state.runningCards.shift();
+          card.classList.remove("running");
+          card.classList.add("done");
           if (evt.detail) {
-            const outputEl = state.runningCard.querySelector(".tool-card-output");
+            const outputEl = card.querySelector(".tool-card-output");
             if (outputEl) outputEl.textContent = evt.detail;
           }
-          const rc = state.runningCard;
-          const header = rc.querySelector(".tool-card-header");
-          if (header) header.onclick = () => rc.classList.toggle("expanded");
-          state.runningCard = null;
+          const header = card.querySelector(".tool-card-header");
+          if (header) header.onclick = () => card.classList.toggle("expanded");
         }
         if (isActiveTab && updatedEl) updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`;
         if (isActiveTab) _evolveAutoScroll();
