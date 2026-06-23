@@ -965,33 +965,34 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
         yield {"type": "error", "message": "No AI engine found"}
         return
 
-    # For codex with auto-detection: buffer early events to detect quick failures,
-    # then fall back to claude if codex errored without producing useful output.
+    # For codex with auto-detection: quick health check before committing.
+    # Codex retries internally (5x WS + 5x HTTP) which can take 30-60s.
+    # Instead, run a fast test with a tiny prompt + 8s timeout.
     if engine == "codex" and engine_override in ("auto", "", None):
-        gen = _run_engine_stream_inner("codex", prompt, allow_write, timeout)
-        early_buf = []
-        codex_ok = False
-        for evt in gen:
-            early_buf.append(evt)
-            if evt["type"] in ("tool", "text"):
-                codex_ok = True
-                break
-            if evt["type"] == "done":
-                break
-
-        if codex_ok:
-            # Codex started working — flush buffer then continue streaming
-            yield from early_buf
-            yield from gen
-        else:
-            # Codex finished/errored without useful output
-            has_error = any(e["type"] == "error" for e in early_buf)
-            if has_error:
-                err_msgs = [e["message"] for e in early_buf if e["type"] == "error"]
-                yield {"type": "text", "content": f"Codex unavailable ({'; '.join(err_msgs)}), falling back to Claude...\n"}
-                yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout)
-            else:
-                yield from early_buf
+        try:
+            test = subprocess.run(
+                ["codex", "--sandbox", "read-only", "--ask-for-approval", "never",
+                 "exec", "--json", "--skip-git-repo-check", "echo ok"],
+                capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
+            )
+            # Check for error events in output
+            has_error = False
+            for line in test.stdout.strip().split("\n"):
+                try:
+                    obj = json.loads(line)
+                    if obj.get("type") in ("error", "turn.failed"):
+                        has_error = True
+                        break
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            if test.returncode != 0 or has_error:
+                raise RuntimeError("codex health check failed")
+        except (subprocess.TimeoutExpired, RuntimeError, FileNotFoundError, OSError) as e:
+            yield {"type": "text", "content": f"Codex unavailable, falling back to Claude...\n"}
+            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout)
+            return
+        # Codex passed health check — use it
+        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout)
         return
 
     yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout)
