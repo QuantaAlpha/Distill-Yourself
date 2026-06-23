@@ -902,11 +902,11 @@ _ai_engine_cache = None  # "codex" | "claude" | ""
 
 
 def _detect_ai_engine():
-    """Auto-detect available AI CLI: Codex first, then claude -p."""
+    """Auto-detect available AI CLI: Claude Code first, then Codex."""
     global _ai_engine_cache
     if _ai_engine_cache is not None:
         return _ai_engine_cache
-    for name, cmd in [("codex", ["codex", "--version"]), ("claude", ["claude", "--version"])]:
+    for name, cmd in [("claude", ["claude", "--version"]), ("codex", ["codex", "--version"])]:
         try:
             subprocess.run(cmd, capture_output=True, timeout=5)
             _ai_engine_cache = name
@@ -1015,8 +1015,16 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1,
         )
-        proc.stdin.write(prompt)
-        proc.stdin.close()
+        # Write prompt in a thread to avoid blocking on large prompts
+        # (macOS pipe buffer is ~64KB, prompt can be 100KB+)
+        import threading
+        def _feed_stdin():
+            try:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+        threading.Thread(target=_feed_stdin, daemon=True).start()
 
     accumulated_text = ""
     try:
@@ -1421,43 +1429,25 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         }
         return fallbacks.get(tab, {"_error": reason})
 
-    def _collect_evolve_data(self, source: str, date: str, project: str, cli_path: str) -> dict:
-        """Pre-collect conversation data via analyze.py for embedding in prompt."""
-        import concurrent.futures
-
-        cli_base = [sys.executable, cli_path]
-        flags = ["--date", date, "--source", source]
+    def _collect_stats(self, source: str, date: str, project: str, cli_path: str) -> str:
+        """Pre-collect stats only (small, ~1KB) for embedding in prompt."""
+        cmd = [sys.executable, cli_path, "stats", "--date", date, "--source", source]
         if project:
-            flags.extend(["--project", project])
-
-        commands = {
-            "stats": cli_base + ["stats"] + flags,
-            "queries": cli_base + ["queries", "--limit", "500"] + flags,
-            "corrections": cli_base + ["corrections"] + flags,
-            "highlights": cli_base + ["highlights"] + flags,
-            "decisions": cli_base + ["decisions"] + flags,
-        }
-
-        results = {}
-        def run_cmd(name, cmd):
-            try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                return name, r.stdout if r.returncode == 0 else ""
-            except Exception:
-                return name, ""
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-            futures = [pool.submit(run_cmd, n, c) for n, c in commands.items()]
-            for f in concurrent.futures.as_completed(futures):
-                name, output = f.result()
-                results[name] = output
-
-        return results
+            cmd.extend(["--project", project])
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            return r.stdout if r.returncode == 0 else ""
+        except Exception:
+            return ""
 
     def _build_evolve_prompt(self, tab: str, source: str, date: str, project: str, cli_path: str) -> str:
-        """Build a prompt with pre-collected data so the AI only needs to synthesize and write."""
-        # Pre-collect data
-        data = self._collect_evolve_data(source, date, project, cli_path)
+        """Build a prompt that instructs the AI to progressively explore data via CLI tools."""
+        cli_flags = f"--date {date} --source {source}"
+        if project:
+            cli_flags += f' --project "{project}"'
+
+        # Pre-collect stats only (small data for immediate context)
+        stats = self._collect_stats(source, date, project, cli_path)
 
         # Count sessions
         with _index_lock:
@@ -1484,67 +1474,72 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         write_cmd = f"python3 {cli_path} evolve-write --tab {tab}"
 
         parts = [
-            f"Analyze the following conversation data ({session_count} sessions, {date} range) and write the result.",
+            f"CLI for analyzing conversation history: python3 {cli_path} <command> [options]",
+            f"Commands: stats, queries, corrections, highlights, decisions, files, sessions, read <id>, search <query>",
+            f"Options: --date --source --project --limit",
+            f"Scope: {cli_flags} ({session_count} sessions)",
             "",
         ]
 
-        # Embed pre-collected data
-        for name in ["stats", "corrections", "queries", "highlights", "decisions"]:
-            output = data.get(name, "")
-            if output:
-                # Trim very large outputs
-                lines = output.split("\n")
-                if len(lines) > 800:
-                    output = "\n".join(lines[:800]) + f"\n... ({len(lines) - 800} more lines)"
-                parts.extend([f"=== {name.upper()} ===", output, ""])
+        # Embed stats (tiny, gives immediate context)
+        if stats:
+            parts.extend(["=== STATS ===", stats, ""])
+
+        claude_dir = str(Path.home() / ".claude" / "projects")
+        codex_dir = str(Path.home() / ".codex")
+        parts.extend([
+            "Dispatch multiple sub-agents (via Agent tool) in parallel to collect and analyze data.",
+            "Each agent's prompt MUST include:",
+            f"  - CLI tool: python3 {cli_path} <command> {cli_flags}",
+            f"  - Data sources: conversation history ONLY — the CLI above, or files under {claude_dir} and {codex_dir}. Do NOT access any other directories or personal files.",
+            "",
+            "Let each agent decide what to explore. Don't prescribe fixed dimensions.",
+            "After all agents return, synthesize their findings and write the result.",
+            "IMPORTANT: wait for ALL agent results before writing. Do not end your turn until evolve-write succeeds.",
+            "",
+        ])
 
         if tab == "profile":
             parts.extend([
-                f"TASK: Build a user profile JSON from the data above.",
+                "TASK: Build a USER PROFILE — about the PERSON, not their projects.",
+                "Profile should cover: who they are, how they work, what they care about, their style and preferences.",
+                "Projects are evidence, not categories. Focus on behavioral patterns across projects.",
                 "",
-                f"Write result via Bash: {write_cmd} --mode replace <<'EVOLVE_EOF'",
-                "<your JSON here>",
-                "EVOLVE_EOF",
-                "",
+                f"Write result via: {write_cmd} --mode replace <<'EVOLVE_EOF'",
                 "JSON schema:",
                 '{"categories": [{"name": "分类名", "icon": "emoji", "tags": ["标签"],',
                 '  "items": [{"text": "具体描述", "confidence": "high|medium|low"}]}],',
-                ' "radar": {"dimensions": [{"name": "领域", "score": 0.0-1.0, "evidence": "依据"}]}}',
+                ' "radar": {"dimensions": [{"name": "领域", "score": 0.0-1.0, "evidence": "简述依据"}]}}',
                 "",
+                "分类方向（参考，不限于此）：职业身份、工作风格、AI协作偏好、沟通与决策习惯、技术审美、工程标准等",
                 "质量要求：",
-                "- 目标: 6-8 categories, 30+ items, 丰富的 tags",
-                "- items 必须具体：引用实际项目名、工具名、用户原话（用引号标注），不要泛泛概括",
-                "- 示例：✗「用户关注前端开发」 ✓「反复要求仿 ChatGPT 消息流式布局，对工具卡片折叠、自动滚动等交互细节有明确审美标准」",
-                "- tags 用短标签（技术名词/工具名），items 用完整描述句",
-                "- radar 5-8 维度，score 基于深度和频率，evidence 引用具体事实",
-                "- 所有内容用中文",
+                "- 6-8 categories, 30+ items, 丰富的 tags",
+                "- items 要具体，提到行为模式和偏好，不要泛泛概括",
+                "- 示例：✗「用户关注前端开发」 ✓「反复要求仿 ChatGPT 消息流式布局，重视工具卡片折叠、自动滚动等交互细节」",
+                "- 所有内容用中文，不需要引用用户原话",
             ])
         elif tab == "memory":
             parts.extend([
-                f"TASK: Extract user preferences and habits as a memory network JSON.",
+                "TASK: Extract user preferences and habits as a memory network.",
                 "",
-                f"Write result via Bash: {write_cmd} --mode replace <<'EVOLVE_EOF'",
-                "<your JSON here>",
-                "EVOLVE_EOF",
-                "",
+                f"Write result via: {write_cmd} --mode replace <<'EVOLVE_EOF'",
                 "JSON schema:",
                 '{"nodes": [{"id": "m1", "label": "偏好简述", "type": "偏好|工作流|工具|设计|沟通", "frequency": N, "confidence": "high|medium|low"}],',
                 ' "links": [{"source": "m1", "target": "m2", "strength": 0.0-1.0}],',
                 ' "cards": [{"id": "m1", "content": "完整描述", "firstSeen": "YYYY-MM-DD", "lastSeen": "YYYY-MM-DD", "evidence": "用户原话引用"}]}',
                 "",
                 "质量要求：",
-                "- 每条记忆必须具体可操作，引用用户原话作为 evidence（用引号标注）",
-                "- 示例：✗「用户喜欢简洁」 ✓「用户多次说『不要过于精简合并』『这个没必要』，对 AI 过度精简和过度设计都敏感」",
+                "- 每条记忆要具体可操作，描述清楚行为模式",
+                "- 示例：✗「用户喜欢简洁」 ✓「对 AI 过度精简和过度设计都敏感，偏好适度详细」",
                 "- nodes 和 cards 的 id 必须一一对应",
-                "- 所有内容用中文",
+                "- 所有内容用中文，evidence 简述依据即可，不需要引用原话",
             ])
 
         parts.extend([
             "",
             "RULES:",
-            "- Write the result in ONE Bash call using evolve-write. That is your ONLY tool call.",
+            "- NEVER truncate CLI output with head/tail. Use --limit if output is too large.",
             "- evolve-write validates JSON schema. If it fails, read the error and fix.",
-            "- Do NOT run any other commands. All data is already provided above.",
         ])
 
         return "\n".join(parts)

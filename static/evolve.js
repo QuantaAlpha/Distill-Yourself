@@ -284,6 +284,19 @@
       .finally(() => { delete evolveStreamAborts[tab]; });
   }
 
+  /** Show a "thinking" indicator below the last text block */
+  function _evolveShowThinking(container, state) {
+    _evolveHideThinking(container);
+    const el = document.createElement("div");
+    el.className = "evolve-thinking";
+    el.innerHTML = '<span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">AI 分析生成中…</span>';
+    container.appendChild(el);
+  }
+  function _evolveHideThinking(container) {
+    const el = container && container.querySelector(".evolve-thinking");
+    if (el) el.remove();
+  }
+
   /** Auto-scroll #evolve-tab-body if user is near the bottom */
   function _evolveAutoScroll() {
     const scrollEl = $("#evolve-tab-body");
@@ -306,6 +319,7 @@
         if (evt.status === "running") {
           state.textBlock = null;
           state.blockText = "";
+          _evolveHideThinking(container);
           const card = document.createElement("div");
           card.className = "tool-card running";
           const detail = evt.detail ? esc(evt.detail) : "";
@@ -338,9 +352,12 @@
         state.textBlock.innerHTML = window.renderMarkdownSimple
           ? window.renderMarkdownSimple(state.blockText)
           : `<pre>${esc(state.blockText)}</pre>`;
+        // Show a thinking indicator after text — tool generation can take 60s+
+        _evolveShowThinking(container, state);
         if (isActiveTab) _evolveAutoScroll();
         break;
       case "result":
+        _evolveHideThinking(container);
         state.blockText = evt.content;
         if (!state.textBlock) {
           state.textBlock = document.createElement("div");
@@ -363,9 +380,11 @@
         break;
       }
       case "done":
+        _evolveHideThinking(container);
         if (isActiveTab && updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
         break;
       case "error":
+        _evolveHideThinking(container);
         if (isActiveTab && updatedEl) updatedEl.textContent = `Error: ${evt.message}`;
         // Show error in this tab's panel
         const panel2 = _ensureTabPanel(tab);
