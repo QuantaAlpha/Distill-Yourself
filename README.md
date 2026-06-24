@@ -23,20 +23,6 @@
 
 <br>
 
-## ✦ The Problem
-
-Every day, millions of developers have rich conversations with AI coding assistants — architecture decisions, debugging sessions, preference corrections, technical tradeoffs. Then the terminal closes and all of it vanishes into raw JSONL log files.
-
-**The numbers tell the story:**
-- 51% of developers use AI tools daily, yet only 29% trust the output ([source](https://uvik.net/blog/ai-coding-assistant-statistics/))
-- Context rebuild costs ~1 hour/week per developer — 2-3 engineering days per 10-person sprint ([source](https://smarterarticles.co.uk/when-coding-agents-forget-the-hidden-cost-of-ai-context-degradation))
-- 6+ open-source session viewers exist, but they're all **read-only** — no analytics, no self-evolution
-- Enterprise observability tools (LangSmith, Braintrust) raised $80M+ but don't serve individual CLI users
-
-ConvoLab closes this gap with three layers: **See** your history → **Understand** patterns → **Feed it back** to make AI smarter. All running locally — your data never leaves your machine.
-
-<br>
-
 ## ✦ Quick Start
 
 ```bash

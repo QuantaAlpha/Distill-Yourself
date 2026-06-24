@@ -1773,6 +1773,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 "  ✓ Memory: trigger='AI修bug时准备顺便改相邻代码', instruction='仅做请求的改动，不扩展范围'",
                 "- 矛盾处理：发现两条 memory 表面冲突时，用 trigger 区分适用场景，用 conflictsWith 标注关联",
                 "  例：'先方案后执行' 和 '端到端自主授权' 不冲突——前者适用于开放设计任务，后者适用于用户明确授权时",
+                "- 只提取跨项目通用的偏好",
                 "- 所有描述用中文",
             ])
         elif tab == "rules":
@@ -1791,6 +1792,8 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 "2. 为每个模式生成规则：规则内容 | 触发场景 | 来源频次",
                 "3. 按出现频率排序，标注优先级 P0/P1/P2",
                 "4. 格式参考 CLAUDE.md 规则写法（可直接粘贴使用）",
+                "",
+                "5. 只提取跨项目通用的规则，如果某条规则只在单一项目/技术栈中出现且换个项目不适用，不要入选",
                 "",
                 "每条规则附至少一条原始纠正引用（用户原话）和 session ID 作为证据。",
                 "",
