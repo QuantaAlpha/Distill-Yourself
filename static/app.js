@@ -1000,6 +1000,11 @@
       else if (block.input.description) summary = block.input.description.substring(0, 60);
       else if (block.input.prompt) summary = block.input.prompt.substring(0, 60);
     }
+    // For Agent, show only the prompt in body
+    const isAgent = (block.name || "").toLowerCase() === "agent";
+    const bodyContent = isAgent && block.input && block.input.prompt
+      ? block.input.prompt
+      : inputStr;
     return `
       <div class="tool-block ${toolClass}">
         <div class="tool-header">
@@ -1008,7 +1013,7 @@
           ${summary ? `<span style="color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:400px">${esc(summary)}</span>` : ""}
           <span class="tool-toggle">▶</span>
         </div>
-        <div class="tool-body" style="display:none">${esc(inputStr)}</div>
+        <div class="tool-body${isAgent ? ' agent-prompt' : ''}" style="display:none">${esc(bodyContent)}</div>
       </div>`;
   }
 

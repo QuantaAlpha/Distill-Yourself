@@ -703,9 +703,19 @@ def load_session(session_id: str) :
     if not os.path.exists(filepath):
         return None
 
-    messages = []
     title = meta.get("title", "Untitled")
+    project = meta.get("projectName", "")
+    date = meta.get("date", "")
+    return load_session_from_file(filepath, session_id, title, project, date)
 
+
+def load_session_from_file(filepath: str, session_id: str, title: str = "",
+                           project: str = "", date: str = ""):
+    """Load and parse a full conversation from a JSONL file path."""
+    if not os.path.exists(filepath):
+        return None
+
+    messages = []
     with open(filepath, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
@@ -733,8 +743,8 @@ def load_session(session_id: str) :
     return {
         "id": session_id,
         "title": title,
-        "project": meta.get("projectName", ""),
-        "date": meta.get("date", ""),
+        "project": project,
+        "date": date,
         "filePath": filepath,
         "messages": messages,
     }
@@ -772,11 +782,15 @@ def _parse_content(content) -> list:
 
         elif btype == "tool_use":
             inp = block.get("input", {})
-            # Truncate large input values
+            tool_name = block.get("name", "")
+            # Truncate large input values (but keep Agent prompt intact)
             inp_display = {}
             for k, v in inp.items():
                 if isinstance(v, str) and len(v) > 500:
-                    inp_display[k] = v[:500] + "…[truncated]"
+                    if tool_name == "Agent" and k == "prompt":
+                        inp_display[k] = v
+                    else:
+                        inp_display[k] = v[:500] + "…[truncated]"
                 else:
                     inp_display[k] = v
             blocks.append({
@@ -1130,7 +1144,7 @@ def _parse_stream_event(engine: str, line: str) -> dict:
             if item.get("type") == "command_execution":
                 output = item.get("aggregated_output", "")
                 return {"type": "tool", "name": "Bash", "status": "done",
-                        "detail": output[:500] if output else ""}
+                        "detail": output or ""}
             elif item.get("type") == "agent_message":
                 text = item.get("text", "")
                 if text:
@@ -1174,8 +1188,15 @@ def _parse_stream_event(engine: str, line: str) -> dict:
                         detail = inp.get("file_path", "")
                     elif name in ("Grep", "Glob"):
                         detail = inp.get("pattern", "")
-                    events.append({"type": "tool", "name": name, "status": "running",
-                                   "detail": detail, "_tool_use_id": blk.get("id", "")})
+                    elif name == "Agent":
+                        desc = inp.get("description", "")
+                        prompt = inp.get("prompt", "")
+                        detail = desc if desc else (prompt[:300] if prompt else "")
+                    event = {"type": "tool", "name": name, "status": "running",
+                             "detail": detail, "_tool_use_id": blk.get("id", "")}
+                    if name == "Agent" and inp.get("prompt"):
+                        event["prompt"] = inp["prompt"]
+                    events.append(event)
             # Flush trailing text
             if pending_text:
                 events.append({"type": "text", "content": "\n".join(pending_text)})
@@ -1194,7 +1215,7 @@ def _parse_stream_event(engine: str, line: str) -> dict:
                             b.get("text", "") for b in output if isinstance(b, dict)
                         )
                     events.append({"type": "tool", "name": "", "status": "done",
-                                   "detail": str(output)[:500],
+                                   "detail": str(output),
                                    "_tool_use_id": blk.get("tool_use_id", "")})
             return events if events else None
         # Final result
@@ -1355,9 +1376,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             }
 
     # Tabs that use direct Python analysis (no AI engine needed)
-    _DIRECT_TABS = {"rules", "signals", "patterns"}
+    _DIRECT_TABS = set()
     # Tabs that need AI (Codex / claude -p) to generate
-    _AI_TABS = {"profile", "memory"}
+    _AI_TABS = {"profile", "memory", "rules", "signals", "patterns"}
 
     def _get_evolve_tab(self, tab: str, refresh: bool, source: str, date: str, project: str, engine: str = "auto") -> dict:
         """Get evolve tab data: serve cache or run analyze.py / AI engine to generate."""
@@ -1435,25 +1456,36 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         try:
             for evt in _run_ai_engine_stream(prompt, allow_write=True, timeout=600, engine_override=engine):
                 self._sse_event(evt)
+        except BrokenPipeError:
+            return
         except Exception as e:
-            self._sse_event({"type": "error", "message": str(e)})
+            try:
+                self._sse_event({"type": "error", "message": str(e)})
+            except BrokenPipeError:
+                return
 
         # After streaming completes, read the cache file the AI wrote
-        if cache_path.exists():
-            try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    result = json.load(f)
-                self._sse_event({"type": "evolve_result", "data": result})
-            except (json.JSONDecodeError, OSError):
-                self._sse_event({"type": "error", "message": "AI did not produce valid output"})
-        else:
-            self._sse_event({"type": "error", "message": "AI did not write result file"})
+        try:
+            if cache_path.exists():
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        result = json.load(f)
+                    self._sse_event({"type": "evolve_result", "data": result})
+                except (json.JSONDecodeError, OSError):
+                    self._sse_event({"type": "error", "message": "AI did not produce valid output"})
+            else:
+                self._sse_event({"type": "error", "message": "AI did not write result file"})
+        except BrokenPipeError:
+            return
 
     def _evolve_fallback(self, tab: str, reason: str) -> dict:
         """Return empty data with error info."""
         fallbacks = {
             "profile": {"categories": [], "radar": {"dimensions": []}, "_error": reason},
             "memory": {"nodes": [], "links": [], "cards": [], "_error": reason},
+            "rules": {"rules": [], "_error": reason},
+            "signals": {"timeline": [], "events": [], "_error": reason},
+            "patterns": {"bubbles": [], "cards": [], "_error": reason},
         }
         return fallbacks.get(tab, {"_error": reason})
 
@@ -1468,14 +1500,39 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         except Exception:
             return ""
 
+    def _collect_aggregates(self) -> str:
+        """Pre-collect trimmed aggregates (~2KB) for embedding in prompt."""
+        import db as _db
+        try:
+            _db.init_db()
+            parts = []
+            # Top 15 projects by session count
+            pd_raw = _db.get_aggregate("project_distribution")
+            if pd_raw:
+                pd = json.loads(pd_raw)
+                top = sorted(pd, key=lambda x: -x["count"])[:15]
+                parts.append("Project distribution (top 15):")
+                parts.append(json.dumps(top, ensure_ascii=False))
+            # Daily activity (last 14 days)
+            da_raw = _db.get_aggregate("daily_activity")
+            if da_raw:
+                da = json.loads(da_raw)
+                recent = da[-14:] if len(da) > 14 else da
+                parts.append("Daily activity (last 14d):")
+                parts.append(json.dumps(recent, ensure_ascii=False))
+            return "\n".join(parts)
+        except Exception:
+            return ""
+
     def _build_evolve_prompt(self, tab: str, source: str, date: str, project: str, cli_path: str) -> str:
         """Build a prompt that instructs the AI to progressively explore data via CLI tools."""
         cli_flags = f"--date {date} --source {source}"
         if project:
             cli_flags += f' --project "{project}"'
 
-        # Pre-collect stats only (small data for immediate context)
+        # Pre-collect stats + aggregates (small data for immediate context)
         stats = self._collect_stats(source, date, project, cli_path)
+        aggregates = self._collect_aggregates()
 
         # Count sessions
         with _index_lock:
@@ -1502,27 +1559,64 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         write_cmd = f"python3 {cli_path} evolve-write --tab {tab}"
 
         parts = [
-            f"CLI for analyzing conversation history: python3 {cli_path} <command> [options]",
-            f"Commands: stats, queries, corrections, highlights, decisions, files, aggregates, sessions, read <id>, search <query>",
-            f"Options: --date --source --project --limit",
-            "Tip: 'aggregates' returns pre-computed project distribution + daily activity as JSON (fastest, <100ms).",
-            f"Scope: {cli_flags} ({session_count} sessions)",
+            "# Background",
+            "",
+            "You are part of an AI self-evolution system called 'Chat Viewer Evolve'.",
+            "It analyzes a user's past AI conversation history (from Claude Code and Codex CLI sessions)",
+            "to extract insights about the user — their preferences, work patterns, recurring mistakes, and collaboration style.",
+            "",
+            "The conversation data is stored as JSONL files under ~/.claude/projects/ (Claude Code) and ~/.codex/ (Codex CLI).",
+            "Each 'session' is one conversation between the user and an AI assistant. Sessions contain:",
+            "- User messages (requests, questions, feedback, corrections)",
+            "- Assistant messages (responses, code, explanations)",
+            "- Tool calls (Bash commands, file reads/edits, web searches)",
+            "",
+            "Your job: explore this conversation history using the CLI tool below, find patterns, and produce structured JSON output.",
+            "",
+            "# CLI Tool",
+            "",
+            f"  python3 {cli_path} <command> [options]",
+            "",
+            "Commands:",
+            "  stats        — Overview: session count, message count, date range, top projects",
+            "  sessions     — List sessions with titles, dates, message counts",
+            "  queries      — Extract user questions/requests across sessions",
+            "  corrections  — Find where the user corrected/rejected AI output (50+ signal words)",
+            "  highlights   — Sessions ranked by correction frequency (high corr = friction)",
+            "  decisions    — Key decisions and turning points in conversations",
+            "  files        — Most frequently touched files across sessions",
+            "  aggregates   — Pre-computed project distribution + daily activity (JSON, fast)",
+            "  read <id>    — Read full conversation of a specific session (use -s for summary)",
+            "  search <q>   — Full-text search across all sessions",
+            "",
+            f"Options: --date {date} --source {source}" + (f' --project "{project}"' if project else "") + " --limit N",
+            f"Scope: {session_count} sessions in range",
             "",
         ]
 
-        # Embed stats (tiny, gives immediate context)
+        # Embed stats + aggregates (gives immediate context, saves agent first-round)
         if stats:
-            parts.extend(["=== STATS ===", stats, ""])
+            parts.extend(["# Pre-collected Data (do NOT re-run these)", "", "=== STATS ===", stats, ""])
+        if aggregates:
+            parts.extend(["=== AGGREGATES ===", aggregates, ""])
 
         claude_dir = str(Path.home() / ".claude" / "projects")
         codex_dir = str(Path.home() / ".codex")
         parts.extend([
-            "Dispatch multiple sub-agents (via Agent tool) in parallel to collect and analyze data.",
+            "# Execution Strategy",
+            "",
+            "Dispatch 2-3 sub-agents (via Agent tool) in parallel. Use the stats and aggregates above to decide the split — do NOT re-run stats/aggregates in agents.",
             "Each agent's prompt MUST include:",
             f"  - CLI tool: python3 {cli_path} <command> {cli_flags}",
             f"  - Data sources: conversation history ONLY — the CLI above, or files under {claude_dir} and {codex_dir}. Do NOT access any other directories or personal files.",
+            "  - Background context: briefly explain that they are analyzing AI conversation history to find user patterns/preferences.",
             "",
-            "Let each agent decide what to explore. Don't prescribe fixed dimensions.",
+            "Efficiency rules for agents:",
+            "- Batch multiple CLI commands in one Bash call (e.g. echo '=== queries ==='; python3 ... queries --limit 80; echo '=== corrections ==='; python3 ... corrections --limit 80).",
+            "- Use `read -s <id>` to get context for interesting sessions. Use `search <keyword>` for targeted exploration.",
+            "- Do NOT run stats or aggregates — that data is already provided above.",
+            "",
+            "Each agent must have a DISTINCT focus area — no overlap. Split based on the overview data, not a fixed template.",
             "After all agents return, synthesize their findings and write the result.",
             "IMPORTANT: wait for ALL agent results before writing. Do not end your turn until evolve-write succeeds.",
             "",
@@ -1562,6 +1656,89 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 "- 示例：✗「用户喜欢简洁」 ✓「对 AI 过度精简和过度设计都敏感，偏好适度详细」",
                 "- nodes 和 cards 的 id 必须一一对应",
                 "- 所有内容用中文，evidence 简述依据即可，不需要引用原话",
+            ])
+        elif tab == "rules":
+            # Same prompt as the "规则生成" preset in app.js
+            parts.extend([
+                "分析所有对话中用户纠正AI的场景，自动生成CLAUDE.md规则。",
+                "",
+                "**工作流（按顺序执行）**：",
+                "1. 先运行 `corrections` 获取所有纠正样本（已含50+种中英文信号词检测）",
+                "2. 运行 `highlights` 找高纠正数的会话（corr≥3的重点关注）",
+                "3. 对高纠正会话运行 `read -s <id>` 看上下文（理解纠正原因）",
+                "4. 补充搜索 `search \"不行\"` `search \"太精简\"` `search \"应该是\"` 等关键词",
+                "",
+                "**输出要求**：",
+                "1. 聚类相似纠正，提取模式",
+                "2. 为每个模式生成规则：规则内容 | 触发场景 | 来源频次",
+                "3. 按出现频率排序，标注优先级 P0/P1/P2",
+                "4. 格式参考 CLAUDE.md 规则写法（可直接粘贴使用）",
+                "",
+                "每条规则附至少一条原始纠正引用（用户原话）和 session ID 作为证据。",
+                "",
+                f"最终结果通过以下命令写入：{write_cmd} --mode replace <<'EVOLVE_EOF'",
+                "JSON schema:",
+                '{"rules": [{"id": "r1", "priority": "P0|P1|P2", "category": "准确性|风格|范围|工作流",',
+                '  "rule": "规则标题", "why": "来源场景", "frequency": N,',
+                '  "evidence": [{"quote": "用户原话", "session": "session-id"}]}]}',
+            ])
+        elif tab == "signals":
+            parts.extend([
+                "TASK: 提取用户纠正 AI 的信号事件，构建纠正时间线。",
+                "",
+                "**工作流**：",
+                "1. 运行 `corrections` 获取所有纠正样本",
+                "2. 运行 `highlights` 找高纠正频次的会话",
+                "3. 对关键会话运行 `read -s <id>` 看具体上下文",
+                "4. 补充 `search` 搜索关键纠正词（如「不对」「不行」「太复杂」「应该是」）",
+                "",
+                "**分析重点**：",
+                "- 每个纠正事件归类：style（风格）、scope（范围）、accuracy（准确性）、workflow（工作流）、overengineering（过度工程）",
+                "- 按日期聚合为时间线（每天各类型纠正数），观察趋势变化",
+                "- 关联到具体的 session ID 和用户原话",
+                "",
+                f"最终结果通过以下命令写入：{write_cmd} --mode replace <<'EVOLVE_EOF'",
+                "JSON schema:",
+                '{"timeline": [{"date": "YYYY-MM-DD", "counts": {"style": N, "scope": N, "accuracy": N, "workflow": N}}],',
+                ' "events": [{"id": "s1", "date": "YYYY-MM-DD", "session": "session-id",',
+                '   "type": "style|scope|accuracy|workflow|overengineering",',
+                '   "userQuote": "用户原话", "aiIssue": "AI做错了什么", "correction": "应该怎么做",',
+                '   "linkedRule": null}]}',
+                "",
+                "质量要求：",
+                "- events 按时间倒序，每个附 session ID + 用户原话",
+                "- timeline 覆盖查询日期范围内每天的统计",
+                "- 所有描述用中文",
+            ])
+        elif tab == "patterns":
+            parts.extend([
+                "TASK: 发现用户与 AI 协作中的重复模式 — 反复出现的问题、低效环节、知识盲区。",
+                "",
+                "**工作流**：",
+                "1. 运行 `corrections` 和 `highlights` 获取纠正数据",
+                "2. 运行 `queries` 看用户高频提问模式",
+                "3. 运行 `files` 看热点文件（反复修改暗示问题模式）",
+                "4. 对有趣的会话运行 `read -s <id>` 深入分析",
+                "5. 用 `search` 搜索重复出现的关键词",
+                "",
+                "**分析重点**：",
+                "- 归类模式：error（反复犯错）、efficiency（低效环节）、knowledge_gap（知识盲区）、workflow（工作流瓶颈）",
+                "- 量化频率，判断趋势（increasing/stable/decreasing）",
+                "- 给出改进建议和估算成本（如「每次多花 5 分钟调试」）",
+                "",
+                f"最终结果通过以下命令写入：{write_cmd} --mode replace <<'EVOLVE_EOF'",
+                "JSON schema:",
+                '{"bubbles": [{"id": "p1", "label": "模式名称", "type": "error|efficiency|knowledge_gap|workflow",',
+                '   "frequency": N, "trend": "increasing|stable|decreasing"}],',
+                ' "cards": [{"id": "p1", "description": "详细描述", "frequency": N,',
+                '   "trend": "increasing|stable|decreasing", "cost": "估算影响",',
+                '   "suggestion": "改进建议", "sessions": ["session-id"]}]}',
+                "",
+                "质量要求：",
+                "- bubbles 和 cards 的 id 一一对应",
+                "- 每个模式附具体 session 引用",
+                "- 关注真正反复出现的模式（≥2次），不要列一次性事件",
+                "- 所有内容用中文",
             ])
 
         parts.extend([
@@ -2570,31 +2747,6 @@ def _kill_existing(port):
         pass
 
 
-def _watch_and_reload(server):
-    """Watch source files for changes and auto-restart."""
-    watch_files = [
-        Path(__file__).resolve(),
-        STATIC_DIR / "app.js",
-        STATIC_DIR / "evolve.js",
-        STATIC_DIR / "style.css",
-        STATIC_DIR / "index.html",
-    ]
-    mtimes = {str(f): f.stat().st_mtime for f in watch_files if f.exists()}
-
-    while True:
-        time.sleep(1.5)
-        for f in watch_files:
-            if not f.exists():
-                continue
-            cur = f.stat().st_mtime
-            key = str(f)
-            if key in mtimes and cur != mtimes[key]:
-                print(f"\n  ⟳ {f.name} changed — restarting...")
-                server.shutdown()
-                os.execv(sys.argv[0] if sys.argv[0].endswith('.py') else sys.executable,
-                         [sys.executable, str(Path(__file__).resolve())] + sys.argv[1:])
-            mtimes[key] = cur
-
 
 def main():
     print(f"Claude Chat Viewer")
@@ -2620,12 +2772,7 @@ def main():
 
     ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer(("127.0.0.1", PORT), ChatViewerHandler)
-    print(f"\n  → http://localhost:{PORT}")
-    print(f"  Auto-reload: watching source files for changes\n")
-
-    # Start file watcher in background
-    watcher = threading.Thread(target=_watch_and_reload, args=(server,), daemon=True)
-    watcher.start()
+    print(f"\n  → http://localhost:{PORT}\n")
 
     try:
         server.serve_forever()

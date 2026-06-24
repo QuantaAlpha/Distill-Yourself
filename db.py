@@ -9,6 +9,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -69,8 +70,9 @@ def init_db():
             ts         TEXT,
             FOREIGN KEY (session_id) REFERENCES sessions(id)
         );
-        CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-        CREATE INDEX IF NOT EXISTS idx_messages_role    ON messages(role);
+        CREATE INDEX IF NOT EXISTS idx_messages_session      ON messages(session_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_role         ON messages(role);
+        CREATE INDEX IF NOT EXISTS idx_messages_session_role ON messages(session_id, role);
 
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
             text,
@@ -250,6 +252,39 @@ def search_fts(query: str, limit=50) -> list:
     except sqlite3.OperationalError:
         # Invalid FTS query syntax — return empty
         return []
+
+
+# ---------------------------------------------------------------------------
+# Single-session lookups
+# ---------------------------------------------------------------------------
+def get_session_meta(session_id: str) -> Optional[dict]:
+    """Return a single session dict by exact or partial ID match."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+    if row:
+        return dict(row)
+    # Partial match fallback
+    rows = conn.execute(
+        "SELECT * FROM sessions WHERE id LIKE ? LIMIT 1",
+        (f"%{session_id}%",),
+    ).fetchall()
+    return dict(rows[0]) if rows else None
+
+
+def get_session_messages(session_id: str, role: str = "") -> list:
+    """Return messages for a session, optionally filtered by role."""
+    conn = get_conn()
+    if role:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE session_id=? AND role=? ORDER BY idx",
+            (session_id, role),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE session_id=? ORDER BY idx",
+            (session_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -124,66 +124,102 @@ def _get_messages_db(args, role="user", limit=99999) -> list:
 
 def cmd_sessions(args):
     """List sessions matching filters."""
-    filtered = _get_filtered(args)
-    items = sorted(filtered.values(), key=lambda m: m.get("date", ""), reverse=True)
-    items = items[:args.limit]
+    db_sessions = _get_filtered_db(args)
+    total = len(db_sessions)
+    items = db_sessions[:args.limit]
 
     if args.json:
         out = [{
             "id": m.get("id", ""), "title": m.get("title", ""),
-            "project": m.get("projectName", ""), "source": m.get("source", "claude"),
-            "date": m.get("date", "")[:19], "messages": m.get("userMessageCount", 0),
-            "fileSize": m.get("fileSize", 0), "filePath": m.get("filePath", ""),
+            "project": m.get("project_name", ""), "source": m.get("source", "claude"),
+            "date": (m.get("date") or "")[:19], "messages": m.get("user_message_count", 0),
+            "fileSize": m.get("file_size", 0), "filePath": m.get("file_path", ""),
         } for m in items]
         print(json.dumps(out, ensure_ascii=False, indent=2))
     else:
-        print(f"Found {len(filtered)} sessions (showing {len(items)}):\n")
+        print(f"Found {total} sessions (showing {len(items)}):\n")
         for m in items:
-            src = m.get("source", "claude")[:3]
-            date = m.get("date", "")[:10]
-            title = m.get("title", "Untitled")[:55]
-            msgs = m.get("userMessageCount", 0)
+            src = (m.get("source") or "claude")[:3]
+            date = (m.get("date") or "")[:10]
+            title = (m.get("title") or "Untitled")[:55]
+            msgs = m.get("user_message_count") or 0
             sid = m.get("id", "")
             print(f"  [{src}] {date} {title:55s} {msgs:3d}msg  id:{sid}")
 
 
 def cmd_read(args):
     """Read a session in human-readable format."""
-    _init_index()
+    import db as _db
+    _db.init_db()
 
     session_id = args.session
-    data = server.load_session(session_id)
+    summary_mode = getattr(args, "summary", False)
 
-    # Fallback: partial ID or path match
-    if not data:
-        with server._index_lock:
-            sessions = server._index.get("sessions", {})
-        for sid, m in sessions.items():
-            if session_id in sid or session_id in m.get("filePath", ""):
-                data = server.load_session(sid)
-                if data:
-                    break
-
-    if not data:
+    # Resolve session meta from DB (supports partial ID match)
+    meta = _db.get_session_meta(session_id)
+    if not meta:
         print(f"Session not found: {session_id}", file=sys.stderr)
         sys.exit(1)
 
-    # Summary mode: user messages + last assistant text only (no tools at all)
-    summary_mode = getattr(args, "summary", False)
+    sid = meta["id"]
+    title = meta.get("title") or "Untitled"
+    project = meta.get("project_name") or ""
+    date = (meta.get("date") or "")[:19]
+
+    # Summary mode: read directly from DB messages (no JSONL needed)
+    if summary_mode:
+        messages = _db.get_session_messages(sid)
+        turns = []
+        for msg in messages:
+            role = msg.get("role", "")
+            text = (msg.get("text") or "").strip()
+            if not text:
+                continue
+            ts = (msg.get("ts") or "")[:16]
+            if role == "user":
+                turns.append((0, f"\n--- USER [{ts}] ---\n{text[:600]}"))
+            elif role == "assistant":
+                turns.append((1, f"\n--- ASSISTANT ---\n{text[:600]}"))
+
+        header = f"# {title}\n# {project} | {date} | {len(messages)} messages (summary)"
+        output = [header]
+        used = len(header)
+        max_chars = 12000
+
+        for priority, text in turns:
+            if used + len(text) > max_chars:
+                text = text[:max(200, max_chars - used)] + "\n[...]"
+            output.append(text)
+            used += len(text)
+            if used > max_chars:
+                output.append(f"\n[TRUNCATED — {used} chars shown]")
+                break
+
+        print("\n".join(output))
+        return
+
+    # Full mode: load from JSONL file (need tool details)
+    filepath = meta.get("file_path", "")
+    if not filepath or not os.path.exists(filepath):
+        print(f"Session file not found: {filepath}", file=sys.stderr)
+        sys.exit(1)
+
+    data = server.load_session_from_file(filepath, sid, title, project, date)
+    if not data:
+        print(f"Failed to load session: {session_id}", file=sys.stderr)
+        sys.exit(1)
 
     # Smart truncation: keep user messages + assistant text, fold tools
-    # Pass 1: collect all turns with priority tagging
-    turns = []  # [(priority, text)]  priority: 0=user, 1=assistant_text, 2=tool_summary
-    tool_batch = []  # accumulate consecutive tools into one folded line
+    turns = []
+    tool_batch = []
 
     def flush_tools():
         if tool_batch:
-            if not summary_mode:
-                names = {}
-                for t in tool_batch:
-                    names[t] = names.get(t, 0) + 1
-                summary = ", ".join(f"{n}×{c}" if c > 1 else n for n, c in names.items())
-                turns.append((2, f"  [tools: {summary}]"))
+            names = {}
+            for t in tool_batch:
+                names[t] = names.get(t, 0) + 1
+            summary = ", ".join(f"{n}×{c}" if c > 1 else n for n, c in names.items())
+            turns.append((2, f"  [tools: {summary}]"))
             tool_batch.clear()
 
     for msg in data.get("messages", []):
@@ -202,29 +238,26 @@ def cmd_read(args):
             for b in content:
                 if b.get("type") == "text" and b.get("text", "").strip():
                     flush_tools()
-                    max_len = 600 if summary_mode else 1200
-                    turns.append((1, f"\n--- ASSISTANT ---\n{b['text'][:max_len]}"))
+                    turns.append((1, f"\n--- ASSISTANT ---\n{b['text'][:1200]}"))
                 elif b.get("type") == "tool_use":
                     tool_batch.append(b.get("name", "?"))
                 elif b.get("type") == "thinking":
                     tool_batch.append("thinking")
 
         elif msg_type == "tool_result":
-            pass  # folded into tool_batch above
+            pass
 
     flush_tools()
 
-    # Pass 2: assemble output within budget
     max_chars = 12000
-    header = f"# {data['title']}\n# {data.get('project', '')} | {data.get('date', '')[:19]} | {len(data.get('messages', []))} messages"
+    header = f"# {title}\n# {project} | {date} | {len(data.get('messages', []))} messages"
     output = [header]
     used = len(header)
 
     for priority, text in turns:
         if used + len(text) > max_chars:
-            # Over budget: skip tools first, then truncate text
             if priority == 2:
-                continue  # drop tool summaries first
+                continue
             text = text[:max(200, max_chars - used)] + "\n[...]"
         output.append(text)
         used += len(text)
@@ -236,29 +269,26 @@ def cmd_read(args):
 
 
 def cmd_search(args):
-    """Search user messages across sessions."""
-    _init_index()
-    results = server.search_sessions(args.query)
+    """Search user messages across sessions (via FTS)."""
+    import db as _db
+    _db.init_db()
 
-    # Apply additional filters
-    with server._index_lock:
-        sessions = server._index.get("sessions", {})
+    # Use FTS for the core search
+    fts_results = _db.search_fts(args.query, limit=500)
 
+    # Apply CLI filters (source/project/date)
     now = datetime.now()
     days_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
     out = []
 
-    for r in results:
-        sid = r.get("sessionId", "")
-        meta = sessions.get(sid, {})
-
+    for r in fts_results:
         if args.source and args.source != "all":
-            if meta.get("source", "claude") != args.source:
+            if (r.get("source") or "claude") != args.source:
                 continue
-        if args.project and args.project.lower() not in meta.get("projectName", "").lower():
+        if args.project and args.project.lower() not in (r.get("project_name") or "").lower():
             continue
         if args.date and args.date != "all":
-            date_str = meta.get("date", "")
+            date_str = r.get("ts") or ""
             if date_str:
                 try:
                     d = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
@@ -266,7 +296,19 @@ def cmd_search(args):
                         continue
                 except Exception:
                     pass
-        out.append(r)
+        # Build output record
+        text = r.get("text", "")
+        snippet = text[:200] if text else ""
+        out.append({
+            "sessionId": r.get("session_id", ""),
+            "title": r.get("title", ""),
+            "project": r.get("project_name", ""),
+            "date": (r.get("ts") or "")[:19],
+            "messageIndex": r.get("idx", 0),
+            "snippet": snippet,
+            "matchType": r.get("role", "content"),
+            "score": 0,
+        })
 
     if args.json:
         print(json.dumps(out[:args.limit], ensure_ascii=False, indent=2))
@@ -285,26 +327,20 @@ def cmd_queries(args):
     """Extract user queries/messages only — across sessions or from one session."""
     # Single session mode
     if args.session:
-        _init_index()
-        with server._index_lock:
-            sessions = server._index.get("sessions", {})
-        # Find session
-        target = None
-        for sid, m in sessions.items():
-            if args.session in sid or args.session in m.get("filePath", ""):
-                target = m
-                break
-        if not target:
+        import db as _db
+        _db.init_db()
+        meta = _db.get_session_meta(args.session)
+        if not meta:
             print(f"Session not found: {args.session}", file=sys.stderr)
             sys.exit(1)
 
-        user_texts = target.get("userTexts", [])
-        title = target.get("title", "Untitled")
+        user_msgs = _db.get_session_messages(meta["id"], role="user")
+        title = meta.get("title") or "Untitled"
         print(f"# User queries from: {title}")
-        print(f"# {len(user_texts)} messages\n")
-        for i, ut in enumerate(user_texts):
-            ts = ut.get("ts", "")[:19]
-            text = ut.get("text", "")
+        print(f"# {len(user_msgs)} messages\n")
+        for i, msg in enumerate(user_msgs):
+            ts = (msg.get("ts") or "")[:19]
+            text = msg.get("text", "")
             if args.keyword and args.keyword.lower() not in text.lower():
                 continue
             print(f"[{i+1}] {ts}")
@@ -1401,7 +1437,7 @@ _EVOLVE_SCHEMAS = {
     },
     "rules": {
         "top_fields": {"rules": list},
-        "rule": {"required": {"id": str, "rule": str}, "optional": {"priority": str, "category": str, "why": str, "positive": str, "negative": str, "evidence": list, "frequency": (int, float)}},
+        "rule": {"required": {"id": str, "rule": str}, "optional": {"priority": str, "category": str, "content": str, "why": str, "positive": str, "negative": str, "evidence": list, "frequency": (int, float)}},
         "id_field": "id",
     },
     "signals": {

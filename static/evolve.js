@@ -65,10 +65,10 @@
     // Update header to show this tab's status
     const updatedEl = $("#evolve-tab-updated");
     if (evolveLoadingTabs[tab]) {
-      if (updatedEl) updatedEl.textContent = "AI 执行中…";
+      if (updatedEl) { updatedEl.textContent = "AI 执行中…"; updatedEl.classList.add("loading"); }
     } else {
       const cached = getCachedTab(tab);
-      if (updatedEl) updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : "尚未分析";
+      if (updatedEl) { updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : "尚未分析"; updatedEl.classList.remove("loading"); }
     }
     updateEvolveOverviewBar();
     updateSyncButtonState();
@@ -205,7 +205,7 @@
 
   // ── API call for analysis (unified: all tabs go through /api/evolve/{tab}) ──
   // AI tabs (profile, memory) may take longer since they run Codex on the backend
-  const AI_TABS = new Set(["profile", "memory"]);
+  const AI_TABS = new Set(["profile", "memory", "rules", "signals", "patterns"]);
 
   function _fetchEvolveTab(tab) {
     const scope = getEvolveScope();
@@ -243,11 +243,11 @@
     // Ensure tab panel exists and set up streaming container inside it
     const panel = _ensureTabPanel(tab);
     if (panel) {
-      panel.innerHTML = `<div class="evolve-stream-progress" id="evolve-stream-${tab}"></div>`;
+      panel.innerHTML = `<div class="evolve-stream-progress" id="evolve-stream-${tab}"><div class="evolve-thinking"><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">AI 启动中…</span></div></div>`;
     }
-    if (tab === evolveActiveTab && updatedEl) updatedEl.textContent = "AI 启动中…";
+    if (tab === evolveActiveTab && updatedEl) { updatedEl.textContent = "AI 启动中…"; updatedEl.classList.add("loading"); }
 
-    const streamState = { blockText: "", textBlock: null, runningCards: [], stepCount: 0 };
+    const streamState = { blockText: "", textBlock: null, runningCards: [], stepCount: 0, currentToolGroup: null, toolGroupCounts: {}, toolGroupRunning: 0, toolGroupTotal: 0, toolGroupCollapseTimer: null };
 
     // Create abort controller for this tab's stream
     if (evolveStreamAborts[tab]) evolveStreamAborts[tab].abort();
@@ -306,6 +306,37 @@
     }
   }
 
+  /** Create a new tool-group container */
+  function _createToolGroup(parentContainer) {
+    const group = document.createElement("div");
+    group.className = "evolve-tool-group expanded running";
+    group.innerHTML = `<div class="evolve-tg-header"><span class="evolve-tg-dot"></span><span class="evolve-tg-summary"></span><span class="evolve-tg-chevron">›</span></div><div class="evolve-tg-body"></div>`;
+    group.querySelector(".evolve-tg-header").onclick = () => group.classList.toggle("expanded");
+    parentContainer.appendChild(group);
+    return group;
+  }
+
+  /** Update tool-group header summary text */
+  function _updateToolGroupHeader(state) {
+    const group = state.currentToolGroup;
+    if (!group) return;
+    const el = group.querySelector(".evolve-tg-summary");
+    if (!el) return;
+    const parts = Object.entries(state.toolGroupCounts).map(([name, count]) => `${count} ${name}`);
+    el.innerHTML = `<span class="evolve-tg-count">⚡ ${state.toolGroupTotal} tools</span> · ${parts.join(" · ")}`;
+  }
+
+  /** Close (collapse) the current tool group */
+  function _finalizeToolGroup(state) {
+    if (state.toolGroupCollapseTimer) { clearTimeout(state.toolGroupCollapseTimer); state.toolGroupCollapseTimer = null; }
+    if (state.currentToolGroup) {
+      _updateToolGroupHeader(state);
+      state.currentToolGroup.classList.remove("expanded", "running");
+      state.currentToolGroup.classList.add("done");
+      state.currentToolGroup = null;
+    }
+  }
+
   function _handleEvolveStreamEvent(evt, tab, state) {
     const container = document.getElementById(`evolve-stream-${tab}`);
     const updatedEl = $("#evolve-tab-updated");
@@ -320,29 +351,72 @@
           state.textBlock = null;
           state.blockText = "";
           _evolveHideThinking(container);
+          if (state.toolGroupCollapseTimer) { clearTimeout(state.toolGroupCollapseTimer); state.toolGroupCollapseTimer = null; }
+          if (!state.currentToolGroup) {
+            state.currentToolGroup = _createToolGroup(container);
+            state.toolGroupCounts = {};
+            state.toolGroupRunning = 0;
+            state.toolGroupTotal = 0;
+          }
           const card = document.createElement("div");
           card.className = "tool-card running";
           const detail = evt.detail ? esc(evt.detail) : "";
-          card.innerHTML = `<div class="tool-card-header"><span class="tool-status-dot"></span><span class="tool-card-name">${esc(evt.name)}</span><span class="tool-card-detail">${detail}</span><span class="tool-card-chevron">›</span></div><div class="tool-card-body"><pre class="tool-card-output"></pre></div>`;
-          container.appendChild(card);
+          card.innerHTML = `<div class="tool-card-header"><span class="tool-status-dot"></span><span class="tool-card-name">${esc(evt.name)}</span><span class="tool-card-detail">${detail}</span><span class="tool-card-chevron">›</span></div><div class="tool-card-body"><div class="tool-card-cmd"></div><pre class="tool-card-output"></pre></div>`;
+          // For Agent cards, show the full prompt in the body
+          if (evt.name === "Agent" && evt.prompt) {
+            const cmdEl = card.querySelector(".tool-card-cmd");
+            if (cmdEl) {
+              cmdEl.textContent = evt.prompt;
+              cmdEl.classList.add("agent-prompt");
+            }
+          }
+          state.currentToolGroup.querySelector(".evolve-tg-body").appendChild(card);
           state.runningCards.push(card);
           state.stepCount++;
+          state.toolGroupTotal++;
+          state.toolGroupRunning++;
+          const toolName = evt.name || "Tool";
+          state.toolGroupCounts[toolName] = (state.toolGroupCounts[toolName] || 0) + 1;
+          _updateToolGroupHeader(state);
+          state.currentToolGroup.classList.add("expanded", "running");
+          state.currentToolGroup.classList.remove("done");
         } else if (evt.status === "done" && state.runningCards.length) {
           const card = state.runningCards.shift();
           card.classList.remove("running");
           card.classList.add("done");
-          if (evt.detail) {
+          // Show full command/prompt in body
+          const cmdEl = card.querySelector(".tool-card-cmd");
+          const detailEl = card.querySelector(".tool-card-detail");
+          const cardName = card.querySelector(".tool-card-name")?.textContent || "";
+          const isAgent = cardName === "Agent";
+          if (!isAgent && cmdEl && detailEl && detailEl.textContent) {
+            cmdEl.textContent = detailEl.textContent;
+          }
+          if (!isAgent && evt.detail) {
             const outputEl = card.querySelector(".tool-card-output");
             if (outputEl) outputEl.textContent = evt.detail;
           }
           const header = card.querySelector(".tool-card-header");
           if (header) header.onclick = () => card.classList.toggle("expanded");
+          state.toolGroupRunning = Math.max(0, state.toolGroupRunning - 1);
+          _updateToolGroupHeader(state);
+          if (state.toolGroupRunning === 0 && state.currentToolGroup) {
+            state.currentToolGroup.classList.remove("running");
+            state.currentToolGroup.classList.add("done");
+            const grp = state.currentToolGroup;
+            state.toolGroupCollapseTimer = setTimeout(() => {
+              grp.classList.remove("expanded");
+              if (state.currentToolGroup === grp) state.currentToolGroup = null;
+              state.toolGroupCollapseTimer = null;
+            }, 800);
+          }
         }
-        if (isActiveTab && updatedEl) updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`;
+        if (isActiveTab && updatedEl) { updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`; updatedEl.classList.add("loading"); }
         if (isActiveTab) _evolveAutoScroll();
         break;
       }
       case "text":
+        _finalizeToolGroup(state);
         state.blockText += evt.content;
         if (!state.textBlock) {
           state.textBlock = document.createElement("div");
@@ -357,6 +431,7 @@
         if (isActiveTab) _evolveAutoScroll();
         break;
       case "result":
+        _finalizeToolGroup(state);
         _evolveHideThinking(container);
         state.blockText = evt.content;
         if (!state.textBlock) {
@@ -370,22 +445,25 @@
         if (isActiveTab) _evolveAutoScroll();
         break;
       case "evolve_result": {
+        _finalizeToolGroup(state);
         const normalized = normalizeEvolveData(tab, evt.data);
         setCachedTab(tab, normalized);
         // Re-render this tab's panel with the final visualization
         const panel = _ensureTabPanel(tab);
         _renderTabPanel(tab, panel);
         updateEvolveOverviewBar();
-        if (isActiveTab && updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
         break;
       }
       case "done":
+        _finalizeToolGroup(state);
         _evolveHideThinking(container);
-        if (isActiveTab && updatedEl) updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
         break;
       case "error":
+        _finalizeToolGroup(state);
         _evolveHideThinking(container);
-        if (isActiveTab && updatedEl) updatedEl.textContent = `Error: ${evt.message}`;
+        if (isActiveTab && updatedEl) { updatedEl.textContent = `Error: ${evt.message}`; updatedEl.classList.remove("loading"); }
         // Show error in this tab's panel
         const panel2 = _ensureTabPanel(tab);
         if (panel2) panel2.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${esc(evt.message)}</p></div>`;
@@ -881,11 +959,30 @@
     const rules = data.rules || [];
     if (!rules.length) { container.innerHTML = '<div class="evolve-empty-state"><p>暂无规则建议</p></div>'; return; }
 
+    // Top bar: category filter + copy all
+    const topBar = document.createElement("div");
+    topBar.className = "rules-top-bar";
+    container.appendChild(topBar);
+
     // Category filter
     const categories = [...new Set(rules.map(r => r.category))];
     const filterBar = document.createElement("div");
     filterBar.className = "rules-filter-bar";
     let activeFilter = "all";
+    topBar.appendChild(filterBar);
+
+    // Copy all button
+    const copyAllBtn = document.createElement("button");
+    copyAllBtn.className = "rules-copy-all-btn";
+    copyAllBtn.innerHTML = '<span class="rules-copy-icon">📋</span> Copy All';
+    copyAllBtn.onclick = () => {
+      const filtered = activeFilter === "all" ? rules : rules.filter(r => r.category === activeFilter);
+      filtered.sort((a, b) => ({"P0":0,"P1":1,"P2":2}[a.priority]??9) - ({"P0":0,"P1":1,"P2":2}[b.priority]??9));
+      const allText = filtered.map(r => r.rule || "").join("\n\n");
+      _copyToClipboard(allText, copyAllBtn);
+    };
+    topBar.appendChild(copyAllBtn);
+
     function renderFilter() {
       filterBar.innerHTML = "";
       [{ key: "all", label: "All" }, ...categories.map(c => ({ key: c, label: c }))].forEach(f => {
@@ -896,7 +993,6 @@
         filterBar.appendChild(btn);
       });
     }
-    container.appendChild(filterBar);
 
     const cardsContainer = document.createElement("div");
     cardsContainer.className = "rules-card-list";
@@ -912,26 +1008,54 @@
       filtered.forEach(rule => {
         const card = document.createElement("div");
         card.className = `rule-card priority-${(rule.priority || "P2").toLowerCase()}`;
+
+        // Header: priority + category + frequency + copy button
         const evidenceHtml = (rule.evidence || []).map(e =>
           `<div class="rule-evidence-item"><span class="rule-quote">"${esc(e.quote)}"</span>${e.session ? ` <a class="rule-session-link" href="#${e.session}">→ session</a>` : ""}</div>`
         ).join("");
+
+        const whyText = rule.why || "";
+
         card.innerHTML = `<div class="rule-card-header">
             <span class="rule-priority-badge">${esc(rule.priority || "P2")}</span>
             <span class="rule-category">${esc(rule.category || "")}</span>
             ${rule.frequency ? `<span class="rule-freq">${rule.frequency}x</span>` : ""}
+            <button class="rule-copy-btn" title="复制规则">📋</button>
           </div>
           <div class="rule-text">${esc(rule.rule)}</div>
-          ${rule.why ? `<div class="rule-why"><strong>Why:</strong> ${esc(rule.why)}</div>` : ""}
-          <div class="rule-examples">
-            ${rule.positive ? `<div class="rule-example good">✓ ${esc(rule.positive)}</div>` : ""}
-            ${rule.negative ? `<div class="rule-example bad">✗ ${esc(rule.negative)}</div>` : ""}
-          </div>
+          ${whyText ? `<details class="rule-why-details"><summary>Why</summary><div class="rule-why-text">${esc(whyText)}</div></details>` : ""}
           ${evidenceHtml ? `<details class="rule-evidence"><summary>Evidence (${rule.evidence.length})</summary>${evidenceHtml}</details>` : ""}`;
+
+        // Bind copy button — only copy rule text
+        const copyBtn = card.querySelector(".rule-copy-btn");
+        if (copyBtn) copyBtn.onclick = (e) => { e.stopPropagation(); _copyToClipboard(rule.rule || "", copyBtn); };
+
         cardsContainer.appendChild(card);
       });
     }
     renderFilter();
     renderCards();
+  }
+
+  /** Copy text to clipboard and show feedback on the button */
+  function _copyToClipboard(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.innerHTML;
+      btn.innerHTML = btn.classList.contains("rules-copy-all-btn") ? '<span class="rules-copy-icon">✓</span> Copied!' : "✓";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.innerHTML = orig; btn.classList.remove("copied"); }, 1500);
+    }).catch(() => {
+      // Fallback for non-HTTPS
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      const orig = btn.innerHTML;
+      btn.innerHTML = btn.classList.contains("rules-copy-all-btn") ? '<span class="rules-copy-icon">✓</span> Copied!' : "✓";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.innerHTML = orig; btn.classList.remove("copied"); }, 1500);
+    });
   }
 
   function renderSignalsTab(data, container) {
