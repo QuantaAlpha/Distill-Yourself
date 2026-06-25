@@ -1,6 +1,7 @@
 /**
  * Digital Twin — Cognitive Model UI
- * Wiki-style navigation: Overview → Dimension detail → Item trace
+ * Rich streaming analysis + wiki-style navigation
+ * Reuses evolve.js streaming patterns (tool groups, text blocks, thinking dots)
  */
 (function () {
   "use strict";
@@ -24,10 +25,22 @@
 
   // ── State ──
   let overviewData = null;
+  let analysisAbort = null;
+  let analysisRunning = false;
+  let eventsInited = false;
 
   // ── Init ──
   window.initTwinView = function () {
-    bindEvents();
+    if (!eventsInited) { bindEvents(); eventsInited = true; }
+    if (analysisRunning) {
+      // Analysis in progress — just make sure the progress area is visible
+      hide("twin-overview");
+      hide("twin-detail");
+      hide("twin-policies-view");
+      hide("twin-item-view");
+      show("twin-analysis-progress");
+      return;
+    }
     loadOverview();
   };
 
@@ -38,13 +51,53 @@
     if (btnSync) btnSync.onclick = startSync;
   }
 
+  // ── Stats Bar ──
+  function renderStatsBar(data) {
+    const bar = document.getElementById("twin-stats-bar");
+    if (!bar) return;
+    const allDims = [...DIMENSIONS, { key: "policies", icon: "⚡", label: "策略", color: "#1e293b" }];
+    bar.innerHTML = "";
+    let totalItems = 0;
+    allDims.forEach(dim => {
+      const info = data[dim.key] || { count: 0 };
+      const count = info.count || 0;
+      totalItems += count;
+      const card = document.createElement("div");
+      card.className = "twin-stat-card";
+      card.innerHTML = `<span class="twin-stat-icon">${dim.icon}</span><span class="twin-stat-count">${count}</span><span class="twin-stat-label">${dim.label}</span>`;
+      card.onclick = () => {
+        if (dim.key === "policies") loadPolicies();
+        else loadDimension(dim.key);
+      };
+      bar.appendChild(card);
+    });
+    // Episode count
+    const epInfo = data.episodes || { count: 0 };
+    if (epInfo.count > 0) {
+      const epCard = document.createElement("div");
+      epCard.className = "twin-stat-card";
+      epCard.innerHTML = `<span class="twin-stat-icon">📝</span><span class="twin-stat-count">${epInfo.count}</span><span class="twin-stat-label">事件</span>`;
+      bar.insertBefore(epCard, bar.firstChild);
+    }
+    // Last analyzed info
+    const updatedEl = document.getElementById("twin-last-analyzed");
+    if (updatedEl) {
+      updatedEl.textContent = totalItems > 0 ? `${totalItems} 条认知记录` : "尚未分析";
+    }
+  }
+
   // ── Overview ──
   function loadOverview() {
-    fetch("/api/twin/overview")
-      .then((r) => r.json())
-      .then((data) => {
-        overviewData = data;
-        renderOverview(data);
+    Promise.all([
+      fetch("/api/twin/overview").then(r => r.json()),
+      fetch("/api/twin/stats").then(r => r.json())
+    ])
+      .then(([overview, stats]) => {
+        overviewData = { ...overview, episodes: stats.episodes || { count: 0 } };
+        // Merge policy count into overview
+        if (stats.cm_policies) overviewData.policies = { ...overviewData.policies, count: stats.cm_policies.count };
+        renderStatsBar(overviewData);
+        renderOverview(overviewData);
       })
       .catch(() => renderOverviewEmpty());
   }
@@ -53,11 +106,11 @@
     const container = document.getElementById("twin-overview");
     if (!container) return;
 
-    // Show overview, hide others
     container.classList.remove("hidden");
     hide("twin-detail");
     hide("twin-policies-view");
     hide("twin-item-view");
+    hide("twin-analysis-progress");
     setBreadcrumb([]);
 
     let html = '<div class="twin-cards-grid">';
@@ -85,6 +138,9 @@
             <span class="twin-dim-item-text">${esc(text)}</span>
             ${conf !== null ? `<span class="twin-dim-item-conf">${conf}%</span>` : ""}
           </div>`;
+        }
+        if (count > 3) {
+          html += `<div class="twin-dim-more">+${count - 3} more</div>`;
         }
       }
 
@@ -116,11 +172,8 @@
     container.querySelectorAll(".twin-dim-card").forEach((card) => {
       card.onclick = () => {
         const dim = card.dataset.dim;
-        if (dim === "policies") {
-          loadPolicies();
-        } else {
-          loadDimension(dim);
-        }
+        if (dim === "policies") loadPolicies();
+        else loadDimension(dim);
       };
     });
   }
@@ -132,7 +185,7 @@
       <p>🧠 Digital Twin 认知模型</p>
       <p>点击 <b>Analyze</b> 开始从对话历史中提取认知模型</p>
       <p style="color:var(--text-muted);font-size:0.85em;margin-top:12px">
-        或使用 CLI：<code>python3 analyze.py twin-stats</code>
+        3 阶段流水线：事件提取 → 认知推断 → 策略编译
       </p>
     </div>`;
   }
@@ -165,6 +218,7 @@
     hide("twin-overview");
     hide("twin-policies-view");
     hide("twin-item-view");
+    hide("twin-analysis-progress");
     const container = show("twin-detail");
     setBreadcrumb([{ label: dim.label, onclick: () => loadDimension(dim.key) }]);
 
@@ -186,7 +240,6 @@
     html += "</div>";
     container.innerHTML = html;
 
-    // Item click → load detail with trace
     container.querySelectorAll("[data-item-id]").forEach((el) => {
       el.onclick = () => loadItemDetail(dim.key, el.dataset.itemId);
     });
@@ -255,6 +308,7 @@
     const dim = DIMENSIONS.find((d) => d.key === dimKey);
     hide("twin-overview");
     hide("twin-policies-view");
+    hide("twin-analysis-progress");
     const detailContainer = show("twin-detail");
     const container = show("twin-item-view");
     setBreadcrumb([
@@ -262,7 +316,6 @@
       { label: data.item?.id || "detail" },
     ]);
 
-    // Hide the list, show item view
     detailContainer.classList.add("hidden");
 
     const item = data.item || {};
@@ -277,7 +330,6 @@
         ${renderDimensionItem(dimKey, item)}
       </div>`;
 
-    // Episodes
     if (episodes.length) {
       html += `<div class="twin-trace-section">
         <h4>📎 支撑事件 (${episodes.length})</h4>`;
@@ -315,6 +367,7 @@
     hide("twin-overview");
     hide("twin-detail");
     hide("twin-item-view");
+    hide("twin-analysis-progress");
     const container = show("twin-policies-view");
     setBreadcrumb([{ label: "执行策略" }]);
 
@@ -343,13 +396,12 @@
     }
 
     if (!items.length) {
-      html += '<div class="twin-dim-empty" style="padding:24px">暂无策略。先运行 Analyze，然后通过 CLI 执行 <code>python3 analyze.py twin-compile</code> 编译策略。</div>';
+      html += '<div class="twin-dim-empty" style="padding:24px">暂无策略。先运行 Analyze 提取认知模型。</div>';
     }
 
     html += "</div>";
     container.innerHTML = html;
 
-    // Policy click → trace
     container.querySelectorAll("[data-policy-id]").forEach((el) => {
       el.onclick = () => loadPolicyTrace(el.dataset.policyId);
     });
@@ -360,7 +412,6 @@
       .then((r) => r.json())
       .then((data) => {
         if (data.source) {
-          // Determine dimKey from source_type
           const typeMap = {
             principle: "principles", tension: "tensions", tradeoff: "tradeoffs",
             communication: "communication", role: "roles", expertise: "expertise",
@@ -372,49 +423,90 @@
       .catch((e) => console.error("Failed to load trace:", e));
   }
 
-  // ── Analysis (SSE streaming) ──
+  // ══════════════════════════════════════════════════════════════════
+  // ── Analysis (SSE streaming with rich UI — mirrors evolve.js) ──
+  // ══════════════════════════════════════════════════════════════════
+
   function startAnalysis() {
+    if (analysisRunning) return; // prevent double-start
+    analysisRunning = true;
+
     const btn = document.getElementById("twin-btn-analyze");
     if (btn) { btn.disabled = true; btn.textContent = "⏳ Analyzing..."; }
 
-    const progress = show("twin-analysis-progress");
-    if (progress) progress.innerHTML = '<div class="twin-stream-log"></div>';
-    const log = progress?.querySelector(".twin-stream-log");
+    const updatedEl = document.getElementById("twin-last-analyzed");
+    if (updatedEl) { updatedEl.textContent = "AI 启动中…"; updatedEl.classList.add("loading"); }
 
-    fetch("/api/twin/analyze", { method: "POST" })
-      .then((r) => {
-        const reader = r.body.getReader();
+    // Show progress area inline in twin-body, hide other views
+    hide("twin-overview");
+    hide("twin-detail");
+    hide("twin-policies-view");
+    hide("twin-item-view");
+    setBreadcrumb([{ label: "分析中…" }]);
+
+    const progress = show("twin-analysis-progress");
+    if (progress) {
+      progress.innerHTML = `<div class="twin-stream-container" id="twin-stream-output">
+        <div class="evolve-thinking">
+          <span class="evolve-thinking-dot"></span>
+          <span class="evolve-thinking-dot"></span>
+          <span class="evolve-thinking-dot"></span>
+          <span class="evolve-thinking-label">AI 启动中…</span>
+        </div>
+      </div>`;
+    }
+
+    const streamState = {
+      blockText: "",
+      textBlock: null,
+      runningCards: [],
+      stepCount: 0,
+      currentToolGroup: null,
+      toolGroupCounts: {},
+      toolGroupRunning: 0,
+      toolGroupTotal: 0,
+      toolGroupCollapseTimer: null,
+    };
+
+    // Abort previous if any
+    if (analysisAbort) analysisAbort.abort();
+    const abortCtrl = new AbortController();
+    analysisAbort = abortCtrl;
+
+    fetch("/api/twin/analyze", { method: "POST", signal: abortCtrl.signal })
+      .then((response) => {
+        const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
 
         function pump() {
           return reader.read().then(({ done, value }) => {
             if (done) {
-              if (btn) { btn.disabled = false; btn.textContent = "🔄 Analyze"; }
-              loadOverview();
+              _finishAnalysis(btn, updatedEl, streamState);
               return;
             }
             buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-            for (const line of lines) {
-              if (line.startsWith("data: ")) {
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop();
+            for (const part of parts) {
+              const lines = part.split("\n");
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
                 try {
                   const evt = JSON.parse(line.slice(6));
-                  if (log) {
-                    if (evt.type === "text") {
-                      log.innerHTML += esc(evt.content || "");
-                    } else if (evt.type === "tool") {
-                      log.innerHTML += `<div class="twin-stream-tool">[${esc(evt.name || "")}] ${esc(evt.status || "")}</div>`;
-                    } else if (evt.type === "error") {
-                      log.innerHTML += `<div class="twin-stream-error">❌ ${esc(evt.message || "")}</div>`;
-                    } else if (evt.type === "done") {
-                      log.innerHTML += `<div class="twin-stream-done">✅ ${esc(evt.content || "完成")}</div>`;
-                    }
-                    log.scrollTop = log.scrollHeight;
-                  }
-                } catch {}
+                  _handleStreamEvent(evt, streamState, updatedEl);
+                } catch (e) { /* skip */ }
               }
+            }
+            // Also handle single \n separated events (server may not double-newline)
+            const singleLines = buffer.split("\n");
+            buffer = singleLines.pop() || "";
+            for (const line of singleLines) {
+              if (!line.startsWith("data: ")) continue;
+              try {
+                const evt = JSON.parse(line.slice(6));
+                _handleStreamEvent(evt, streamState, updatedEl);
+              } catch (e) { /* skip */ }
             }
             return pump();
           });
@@ -422,9 +514,241 @@
         return pump();
       })
       .catch((e) => {
-        if (log) log.innerHTML += `<div class="twin-stream-error">❌ ${esc(String(e))}</div>`;
-        if (btn) { btn.disabled = false; btn.textContent = "🔄 Analyze"; }
-      });
+        if (e.name === "AbortError") { analysisRunning = false; return; }
+        const container = document.getElementById("twin-stream-output");
+        if (container) {
+          _hideThinking(container);
+          const errDiv = document.createElement("div");
+          errDiv.className = "twin-stream-error";
+          errDiv.textContent = `❌ ${String(e)}`;
+          container.appendChild(errDiv);
+        }
+        _finishAnalysis(btn, updatedEl, streamState);
+      })
+      .finally(() => { analysisAbort = null; });
+  }
+
+  function _finishAnalysis(btn, updatedEl, state) {
+    analysisRunning = false;
+    _finalizeToolGroup(state);
+    if (btn) { btn.disabled = false; btn.textContent = "🔄 Analyze"; }
+    if (updatedEl) { updatedEl.classList.remove("loading"); }
+    setBreadcrumb([{ label: "分析完成" }]);
+    // Reload overview data in background
+    loadOverview();
+  }
+
+  /** Handle a single SSE event — renders tool cards, text blocks, thinking dots */
+  function _handleStreamEvent(evt, state, updatedEl) {
+    const container = document.getElementById("twin-stream-output");
+    if (!container) return;
+
+    switch (evt.type) {
+      case "tool": {
+        if (evt.status === "running") {
+          state.textBlock = null;
+          state.blockText = "";
+          _hideThinking(container);
+
+          if (state.toolGroupCollapseTimer) {
+            clearTimeout(state.toolGroupCollapseTimer);
+            state.toolGroupCollapseTimer = null;
+          }
+
+          if (!state.currentToolGroup) {
+            state.currentToolGroup = _createToolGroup(container);
+            state.toolGroupCounts = {};
+            state.toolGroupRunning = 0;
+            state.toolGroupTotal = 0;
+          }
+
+          const card = document.createElement("div");
+          card.className = "tool-card running";
+          const detail = evt.detail ? esc(evt.detail) : "";
+          card.innerHTML = `<div class="tool-card-header">
+            <span class="tool-status-dot"></span>
+            <span class="tool-card-name">${esc(evt.name)}</span>
+            <span class="tool-card-detail">${detail}</span>
+            <span class="tool-card-chevron">›</span>
+          </div>
+          <div class="tool-card-body">
+            <div class="tool-card-cmd"></div>
+            <pre class="tool-card-output"></pre>
+          </div>`;
+
+          // Agent cards: show prompt
+          if (evt.name === "Agent" && evt.prompt) {
+            const cmdEl = card.querySelector(".tool-card-cmd");
+            if (cmdEl) { cmdEl.textContent = evt.prompt; cmdEl.classList.add("agent-prompt"); }
+          }
+
+          state.currentToolGroup.querySelector(".evolve-tg-body").appendChild(card);
+          state.runningCards.push(card);
+          state.stepCount++;
+          state.toolGroupTotal++;
+          state.toolGroupRunning++;
+
+          const toolName = evt.name || "Tool";
+          state.toolGroupCounts[toolName] = (state.toolGroupCounts[toolName] || 0) + 1;
+          _updateToolGroupHeader(state);
+          state.currentToolGroup.classList.add("expanded", "running");
+          state.currentToolGroup.classList.remove("done");
+
+        } else if (evt.status === "done" && state.runningCards.length) {
+          const card = state.runningCards.shift();
+          card.classList.remove("running");
+          card.classList.add("done");
+
+          const cmdEl = card.querySelector(".tool-card-cmd");
+          const detailEl = card.querySelector(".tool-card-detail");
+          const cardName = card.querySelector(".tool-card-name")?.textContent || "";
+          const isAgent = cardName === "Agent";
+
+          if (!isAgent && cmdEl && detailEl && detailEl.textContent) {
+            cmdEl.textContent = detailEl.textContent;
+          }
+          if (!isAgent && evt.detail) {
+            const outputEl = card.querySelector(".tool-card-output");
+            if (outputEl) outputEl.textContent = evt.detail;
+          }
+
+          const header = card.querySelector(".tool-card-header");
+          if (header) header.onclick = () => card.classList.toggle("expanded");
+
+          state.toolGroupRunning = Math.max(0, state.toolGroupRunning - 1);
+          _updateToolGroupHeader(state);
+
+          if (state.toolGroupRunning === 0 && state.currentToolGroup) {
+            state.currentToolGroup.classList.remove("running");
+            state.currentToolGroup.classList.add("done");
+            const grp = state.currentToolGroup;
+            state.toolGroupCollapseTimer = setTimeout(() => {
+              grp.classList.remove("expanded");
+              if (state.currentToolGroup === grp) state.currentToolGroup = null;
+              state.toolGroupCollapseTimer = null;
+            }, 800);
+          }
+        }
+        if (updatedEl) {
+          updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`;
+          updatedEl.classList.add("loading");
+        }
+        _autoScroll();
+        break;
+      }
+
+      case "text":
+        _finalizeToolGroup(state);
+        state.blockText += evt.content;
+        if (!state.textBlock) {
+          state.textBlock = document.createElement("div");
+          state.textBlock.className = "text-block";
+          container.appendChild(state.textBlock);
+        }
+        state.textBlock.innerHTML = window.renderMarkdownSimple
+          ? window.renderMarkdownSimple(state.blockText)
+          : `<pre>${esc(state.blockText)}</pre>`;
+        _showThinking(container);
+        _autoScroll();
+        break;
+
+      case "result":
+        _finalizeToolGroup(state);
+        _hideThinking(container);
+        state.blockText = evt.content;
+        if (!state.textBlock) {
+          state.textBlock = document.createElement("div");
+          state.textBlock.className = "text-block";
+          container.appendChild(state.textBlock);
+        }
+        state.textBlock.innerHTML = window.renderMarkdownSimple
+          ? window.renderMarkdownSimple(evt.content)
+          : `<pre>${esc(evt.content)}</pre>`;
+        _autoScroll();
+        break;
+
+      case "done":
+        _finalizeToolGroup(state);
+        _hideThinking(container);
+        if (updatedEl) {
+          updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+          updatedEl.classList.remove("loading");
+        }
+        break;
+
+      case "error":
+        _finalizeToolGroup(state);
+        _hideThinking(container);
+        const errDiv = document.createElement("div");
+        errDiv.className = "twin-stream-error";
+        errDiv.innerHTML = `❌ ${esc(evt.message || "Unknown error")}`;
+        container.appendChild(errDiv);
+        if (updatedEl) {
+          updatedEl.textContent = `Error: ${evt.message || ""}`;
+          updatedEl.classList.remove("loading");
+        }
+        _autoScroll();
+        break;
+    }
+  }
+
+  // ── Streaming UI helpers (mirroring evolve.js) ──
+
+  function _createToolGroup(parentContainer) {
+    const group = document.createElement("div");
+    group.className = "evolve-tool-group expanded running";
+    group.innerHTML = `<div class="evolve-tg-header">
+      <span class="evolve-tg-dot"></span>
+      <span class="evolve-tg-summary"></span>
+      <span class="evolve-tg-chevron">›</span>
+    </div>
+    <div class="evolve-tg-body"></div>`;
+    group.querySelector(".evolve-tg-header").onclick = () => group.classList.toggle("expanded");
+    parentContainer.appendChild(group);
+    return group;
+  }
+
+  function _updateToolGroupHeader(state) {
+    const group = state.currentToolGroup;
+    if (!group) return;
+    const el = group.querySelector(".evolve-tg-summary");
+    if (!el) return;
+    const parts = Object.entries(state.toolGroupCounts).map(([name, count]) => `${count} ${name}`);
+    el.innerHTML = `<span class="evolve-tg-count">⚡ ${state.toolGroupTotal} tools</span> · ${parts.join(" · ")}`;
+  }
+
+  function _finalizeToolGroup(state) {
+    if (state.toolGroupCollapseTimer) {
+      clearTimeout(state.toolGroupCollapseTimer);
+      state.toolGroupCollapseTimer = null;
+    }
+    if (state.currentToolGroup) {
+      _updateToolGroupHeader(state);
+      state.currentToolGroup.classList.remove("expanded", "running");
+      state.currentToolGroup.classList.add("done");
+      state.currentToolGroup = null;
+    }
+  }
+
+  function _showThinking(container) {
+    _hideThinking(container);
+    const el = document.createElement("div");
+    el.className = "evolve-thinking";
+    el.innerHTML = '<span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">AI 分析生成中…</span>';
+    container.appendChild(el);
+  }
+
+  function _hideThinking(container) {
+    const el = container && container.querySelector(".evolve-thinking");
+    if (el) el.remove();
+  }
+
+  function _autoScroll() {
+    const scrollEl = document.getElementById("twin-body");
+    if (!scrollEl) return;
+    if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80) {
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+    }
   }
 
   // ── Sync ──
@@ -456,7 +780,6 @@
       }
     }
     bc.innerHTML = html;
-    // Re-bind click handlers
     const links = bc.querySelectorAll(".twin-bc-link");
     links.forEach((link, i) => {
       if (parts[i] && parts[i].onclick) {

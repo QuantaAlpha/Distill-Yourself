@@ -174,7 +174,8 @@
             </div>
           </div>
           <div id="twin-body">
-            <!-- Overview: 7 dimension cards + policies card -->
+            <!-- Overview: stats bar + 7 dimension cards + policies card -->
+            <div id="twin-stats-bar"></div>
             <div id="twin-overview"></div>
             <!-- Dimension detail (hidden until drilled in) -->
             <div id="twin-detail" class="hidden"></div>
@@ -182,9 +183,9 @@
             <div id="twin-policies-view" class="hidden"></div>
             <!-- Item detail with trace (hidden until clicked) -->
             <div id="twin-item-view" class="hidden"></div>
+            <!-- Analysis progress (SSE stream, renders inline in body) -->
+            <div id="twin-analysis-progress" class="hidden"></div>
           </div>
-          <!-- Analysis progress (SSE stream) -->
-          <div id="twin-analysis-progress" class="hidden"></div>
         </div>
 
         <!-- AI view (Evolve + AI Chat combined) -->

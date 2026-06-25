@@ -183,6 +183,7 @@
         if (view === "sessions") { showView("sessions"); }
         else if (view === "insights") { openInsights(); }
         else if (view === "ai") { showView("ai"); initAiPage(); }
+        else if (view === "twin") { showView("twin"); }
       });
     });
 
