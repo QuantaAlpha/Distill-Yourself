@@ -2512,10 +2512,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         elif parsed.path == "/api/evolve/sync":
             self._handle_evolve_sync()
         elif parsed.path == "/api/twin/analyze":
-            self._json_response({
-                "ok": True,
-                "message": "Analysis pipeline not yet implemented — use CLI: python3 analyze.py twin-*",
-            })
+            self._handle_twin_analyze()
         elif parsed.path == "/api/twin/sync":
             self._handle_twin_sync()
         else:
@@ -2748,6 +2745,297 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         result["ok"] = all("error" not in v for v in result.values() if isinstance(v, dict))
         self._json_response(result)
 
+    def _handle_twin_analyze(self):
+        """POST /api/twin/analyze — run 2-stage cognitive model extraction via AI."""
+        import db as _db
+        cli_path = str(Path(__file__).resolve().parent / "analyze.py")
+
+        self._start_sse()
+
+        # Stage 1: Episode extraction
+        self._sse_event({"type": "text", "content": "Stage 1/3: 从对话历史中提取事件记录 (Episodes)...\n"})
+
+        stage1_prompt = self._build_twin_stage1_prompt(cli_path)
+        try:
+            for evt in _run_ai_engine_stream(stage1_prompt, allow_write=True, timeout=600):
+                self._sse_event(evt)
+        except BrokenPipeError:
+            return
+        except Exception as e:
+            try:
+                self._sse_event({"type": "error", "message": f"Stage 1 failed: {e}"})
+            except BrokenPipeError:
+                return
+
+        # Stage 2: Cognitive model inference (7 dimensions)
+        self._sse_event({"type": "text", "content": "\n\nStage 2/3: 从事件中推断认知模型 (7 维度)...\n"})
+
+        stage2_prompt = self._build_twin_stage2_prompt(cli_path)
+        try:
+            for evt in _run_ai_engine_stream(stage2_prompt, allow_write=True, timeout=600):
+                self._sse_event(evt)
+        except BrokenPipeError:
+            return
+        except Exception as e:
+            try:
+                self._sse_event({"type": "error", "message": f"Stage 2 failed: {e}"})
+            except BrokenPipeError:
+                return
+
+        # Stage 3: Compile policies (pure Python, no AI)
+        self._sse_event({"type": "text", "content": "\n\nStage 3/3: 编译策略 (twin-compile)...\n"})
+        try:
+            r = subprocess.run(
+                [sys.executable, cli_path, "twin-compile"],
+                capture_output=True, text=True, timeout=30,
+            )
+            self._sse_event({"type": "text", "content": r.stdout or "(no output)"})
+            if r.returncode != 0 and r.stderr:
+                self._sse_event({"type": "text", "content": f"\nWarning: {r.stderr[:200]}"})
+        except Exception as e:
+            self._sse_event({"type": "text", "content": f"\ntwin-compile error: {e}"})
+
+        # Summary
+        _db.init_db()
+        stats = _db.get_twin_stats()
+        summary_parts = []
+        for t in ["episodes", "cm_tensions", "cm_principles", "cm_tradeoffs",
+                   "cm_reasoning", "cm_communication", "cm_roles", "cm_expertise", "cm_policies"]:
+            count = stats.get(t, {}).get("count", 0)
+            if count > 0:
+                label = t.replace("cm_", "")
+                summary_parts.append(f"{label}: {count}")
+
+        summary = ", ".join(summary_parts) if summary_parts else "暂无数据"
+        try:
+            self._sse_event({"type": "text", "content": f"\n\n✅ 分析完成 — {summary}"})
+            self._sse_event({"type": "done", "content": summary})
+        except BrokenPipeError:
+            pass
+
+    def _build_twin_stage1_prompt(self, cli_path: str) -> str:
+        """Build prompt for Stage 1: Episode extraction from conversation history."""
+        digest = self._collect_profile_digest("all", "all", "", cli_path)
+
+        return f"""# Background
+
+You are extracting structured EPISODES from a user's AI conversation history.
+An episode is a record of: what the AI did → how the user reacted → what lesson was learned.
+
+# CLI Tool
+
+  python3 {cli_path} <command> [options]
+
+Commands for exploration:
+  corrections    — Find where the user corrected/rejected AI output (50+ signal words)
+  queries        — Extract user questions/requests across sessions
+  highlights     — Sessions ranked by correction frequency
+  read <id> -s   — Read a specific session (summary mode)
+  search <q>     — Full-text search across sessions
+
+Commands for writing:
+  twin-write     — Write episodes to database (reads JSON from stdin)
+  twin-episodes  — List existing episodes (to check for duplicates)
+
+# Pre-computed Profile Digest
+
+{digest}
+
+# Task
+
+1. First, run `python3 {cli_path} twin-episodes --limit 10` to see what episodes already exist (avoid duplicates).
+2. Run `python3 {cli_path} corrections --limit 100` to get all correction events.
+3. Run `python3 {cli_path} highlights --limit 20` to find high-signal sessions.
+4. For the top 5-8 most interesting sessions, run `python3 {cli_path} read <id> -s` to understand context.
+5. Also run `python3 {cli_path} queries --limit 50` and look for acceptance patterns — cases where the user did NOT correct the AI (positive signals).
+
+From these, extract 20-40 structured episodes. Each episode captures one meaningful interaction:
+
+For EACH episode, write it using twin-write:
+
+python3 {cli_path} twin-write <<'TWIN_EOF'
+{{"table": "episodes", "operations": [
+  {{"action": "insert", "data": {{
+    "session_id": "actual-session-id",
+    "event_index": 1,
+    "task_type": "coding|review|design|research|communication",
+    "ai_action": "AI did what (1 sentence)",
+    "user_reaction": "User reacted how (1 sentence)",
+    "resolution": "What happened in the end",
+    "lesson": "What we learned from this (reusable insight)",
+    "signal_type": "correction|acceptance|escalation|question",
+    "signal_intensity": 0.0-1.0,
+    "domain": "domain tag (e.g., coding/scope, review/verification, design/architecture)"
+  }}}}
+]}}
+TWIN_EOF
+
+Quality requirements:
+- MUST include real session_id from the corrections/highlights data
+- signal_intensity: 0.9+ for explicit strong corrections, 0.5-0.8 for mild corrections, 0.3-0.5 for acceptance signals
+- domain: use slash format like "coding/scope", "review/neutrality", "design/simplicity"
+- lesson: write as a reusable insight, not specific to one case
+- Balance: include BOTH correction episodes AND acceptance episodes (positive signals)
+- Check existing episodes first to avoid duplicates (same session_id + similar event)
+- All text in Chinese
+"""
+
+    def _build_twin_stage2_prompt(self, cli_path: str) -> str:
+        """Build prompt for Stage 2: Cognitive model inference from episodes."""
+        import db as _db
+        _db.init_db()
+
+        # Get existing data for dedup
+        existing_tensions = _db.cm_get_all("cm_tensions", limit=100)
+        existing_principles = _db.cm_get_all("cm_principles", limit=200)
+        existing_tradeoffs = _db.cm_get_all("cm_tradeoffs", limit=50)
+        existing_reasoning = _db.cm_get_all("cm_reasoning", limit=20)
+        existing_communication = _db.cm_get_all("cm_communication", limit=50)
+        existing_roles = _db.cm_get_all("cm_roles", limit=20)
+        existing_expertise = _db.cm_get_all("cm_expertise", limit=30)
+
+        # Get episodes
+        episodes = _db.cm_get_all("episodes", order="created_at DESC", limit=100)
+        episodes_json = json.dumps([dict(e) for e in episodes], ensure_ascii=False, default=str)
+
+        # Get existing Profile/Memory as supplementary input
+        profile_cache = CACHE_DIR / "evolve" / "profile.json"
+        memory_cache = CACHE_DIR / "evolve" / "memory.json"
+        profile_summary = ""
+        memory_summary = ""
+        try:
+            if profile_cache.exists():
+                with open(profile_cache) as f:
+                    pd = json.load(f)
+                cats = [c.get("name", "") for c in pd.get("categories", [])]
+                profile_summary = f"Existing Profile categories: {', '.join(cats)}"
+        except Exception:
+            pass
+        try:
+            if memory_cache.exists():
+                with open(memory_cache) as f:
+                    md = json.load(f)
+                labels = [n.get("label", "") for n in md.get("nodes", [])]
+                memory_summary = f"Existing Memory labels: {', '.join(labels)}"
+        except Exception:
+            pass
+
+        def _fmt_existing(table_name, items, fields):
+            if not items:
+                return f"  (empty — no existing {table_name})"
+            lines = []
+            for item in items[:20]:
+                parts = [f"{f}={json.dumps(item.get(f,''), ensure_ascii=False)}" for f in fields]
+                lines.append(f"  id={item.get('id','')} {' '.join(parts)}")
+            return "\n".join(lines)
+
+        existing_data = f"""
+=== Existing Cognitive Model Data (for dedup — merge if similar, insert if new) ===
+
+Tensions ({len(existing_tensions)}):
+{_fmt_existing("tensions", existing_tensions, ["value_a", "value_b", "status", "confidence"])}
+
+Principles ({len(existing_principles)}):
+{_fmt_existing("principles", existing_principles, ["statement", "status", "confidence"])}
+
+Tradeoffs ({len(existing_tradeoffs)}):
+{_fmt_existing("tradeoffs", existing_tradeoffs, ["context", "confidence"])}
+
+Reasoning ({len(existing_reasoning)}):
+{_fmt_existing("reasoning", existing_reasoning, ["dimension", "description"])}
+
+Communication ({len(existing_communication)}):
+{_fmt_existing("communication", existing_communication, ["category", "description"])}
+
+Roles ({len(existing_roles)}):
+{_fmt_existing("roles", existing_roles, ["role", "behavior_profile"])}
+
+Expertise ({len(existing_expertise)}):
+{_fmt_existing("expertise", existing_expertise, ["domain", "depth"])}
+"""
+
+        return f"""# Background
+
+You are building a COGNITIVE MODEL from structured episodes extracted from a user's AI conversation history.
+The cognitive model has 7 dimensions. For each dimension, you analyze episodes to infer patterns.
+
+# CLI Tool
+
+  python3 {cli_path} twin-write    — Write cognitive model data (reads JSON from stdin)
+  python3 {cli_path} twin-dimensions --dimension <name>  — Check existing items
+
+# Episodes (input data)
+
+{episodes_json}
+
+# Supplementary data
+
+{profile_summary}
+{memory_summary}
+
+{existing_data}
+
+# Task
+
+Analyze the episodes above and extract insights for ALL 7 dimensions.
+For each item, FIRST check the existing data above. If a similar item exists, use "update" to merge (add evidence, update confidence). If it's genuinely new, use "insert".
+
+Write ALL dimensions in a SINGLE twin-write call per dimension (batch operations).
+
+## Dimension 1: Tensions (cm_tensions)
+Value conflicts the user resolves repeatedly.
+```
+python3 {cli_path} twin-write <<'TWIN_EOF'
+{{"table": "cm_tensions", "operations": [
+  {{"action": "insert|update", "id": "t1", "data": {{
+    "value_a": "价值A", "value_b": "价值B",
+    "default_resolution": "默认保护哪一端",
+    "context_overrides": "[{{\\"context\\": \\"例外场景\\", \\"resolution\\": \\"此时保护另一端\\"}}]",
+    "confidence": 0.0-1.0, "episode_count": N, "status": "hypothesis|emerging|confirmed"
+  }}}}
+]}}
+TWIN_EOF
+```
+
+## Dimension 2: Principles (cm_principles)
+Causal beliefs connecting values to rules. Format: "Because X (cause), therefore Y (effect)."
+Fields: statement, cause, effect, domain, tension_ids (JSON array of related tension ids), confidence, status, episode_count
+
+## Dimension 3: Tradeoffs (cm_tradeoffs)
+Context-specific protect/sacrifice decisions.
+Fields: context, protect (JSON array), sacrifice (JSON array), strategy, confidence, episode_count
+
+## Dimension 4: Reasoning (cm_reasoning)
+How the user thinks: evidence-first? bottom-up? explicit-uncertainty?
+Fields: dimension (label), description, evidence (JSON array of quotes), confidence
+
+## Dimension 5: Communication (cm_communication)
+What the AI must do / must avoid / must verify.
+Fields: category (must_do|must_avoid|must_verify), description, domain, confidence, episode_count
+
+## Dimension 6: Roles (cm_roles)
+Different behavior modes for different task types.
+Fields: role (architect|debugger|reviewer|writer|researcher), behavior_profile, key_preferences (JSON), autonomy_level (high|medium|low), confidence, episode_count
+
+## Dimension 7: Expertise (cm_expertise)
+Domain knowledge depth and autonomy boundaries.
+Fields: domain, depth (expert|proficient|familiar|novice), session_count, key_patterns (JSON), autonomy_boundary, confidence
+
+# Quality requirements
+- Extract 5-15 items per dimension (fewer for stable dimensions like reasoning/roles)
+- All text in Chinese
+- Status rules: first appearance → "hypothesis"; if supported by 2+ episodes from different contexts → "emerging"; if 3+ episodes across projects → "confirmed"
+- For "update" actions: merge evidence, increase episode_count, possibly upgrade status
+- Episode refs: after writing all dimensions, link episodes to items using episode_refs:
+```
+python3 {cli_path} twin-write <<'TWIN_EOF'
+{{"table": "episode_refs", "operations": [
+  {{"action": "insert", "data": {{"episode_id": "ep_xxx", "target_type": "principle", "target_id": "p1"}}}}
+]}}
+TWIN_EOF
+```
+"""
+
     def _handle_twin_sync(self):
         """POST /api/twin/sync — compile runtime pack from cm_policies into CLAUDE.md and memory files."""
         import db as _db
@@ -2770,18 +3058,21 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         # Build CLAUDE.md section
         lines = [CM_MARKER_START, "## Cognitive Model Policies (Auto-sync)", ""]
         for p in policies:
-            trigger = p.get("trigger", "") or ""
-            instruction = p.get("instruction", "") or ""
-            avoid = p.get("avoid", "") or ""
-            label = p.get("label", p.get("id", ""))
+            condition = p.get("condition", "") or ""
+            action = p.get("action", "") or ""
+            exception = p.get("exception", "") or ""
+            rationale = p.get("rationale", "") or ""
+            pid = p.get("id", "")
             conf = p.get("confidence", 0)
-            lines.append(f"### {label} (confidence: {conf:.2f})" if isinstance(conf, float) else f"### {label}")
-            if trigger:
-                lines.append(f"When: {trigger}")
-            if instruction:
-                lines.append(f"Do: {instruction}")
-            if avoid:
-                lines.append(f"Avoid: {avoid}")
+            lines.append(f"### {pid} (confidence: {conf:.2f})" if isinstance(conf, (int, float)) else f"### {pid}")
+            if condition:
+                lines.append(f"When: {condition}")
+            if action:
+                lines.append(f"Do: {action}")
+            if exception:
+                lines.append(f"Unless: {exception}")
+            if rationale:
+                lines.append(f"Why: {rationale}")
             lines.append("")
         lines.append(CM_MARKER_END)
         section = "\n".join(lines) + "\n"
@@ -2808,26 +3099,31 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             pid = p.get("id", "")
             if not pid:
                 continue
-            label = p.get("label", pid)
-            name_kebab = _sanitize_filename(label)
+            condition = p.get("condition", "") or ""
+            action_text = p.get("action", "") or ""
+            exception = p.get("exception", "") or ""
+            rationale = p.get("rationale", "") or ""
+            desc = condition or pid
+            name_kebab = _sanitize_filename(desc)
             fname = f"cognitive_{pid}.md"
             fpath = MEMORY_DIR / fname
             is_update = fpath.exists()
 
-            trigger = p.get("trigger", "") or ""
-            instruction = p.get("instruction", "") or ""
-            avoid = p.get("avoid", "") or ""
-            if trigger and instruction:
-                body = f"When: {trigger}\nDo: {instruction}"
-                if avoid:
-                    body += f"\nAvoid: {avoid}"
-            else:
-                body = label
+            body = ""
+            if condition:
+                body += f"When: {condition}\n"
+            if action_text:
+                body += f"Do: {action_text}\n"
+            if exception:
+                body += f"Unless: {exception}\n"
+            if rationale:
+                body += f"Why: {rationale}\n"
+            body = body.strip() or desc
 
             content_lines = [
                 "---",
                 f"name: {name_kebab}",
-                f"description: {label}",
+                f"description: {desc}",
                 "type: policy",
                 "source: twin-sync",
                 "---",

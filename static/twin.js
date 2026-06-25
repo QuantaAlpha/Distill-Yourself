@@ -372,16 +372,59 @@
       .catch((e) => console.error("Failed to load trace:", e));
   }
 
-  // ── Analysis ──
+  // ── Analysis (SSE streaming) ──
   function startAnalysis() {
+    const btn = document.getElementById("twin-btn-analyze");
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Analyzing..."; }
+
+    const progress = show("twin-analysis-progress");
+    if (progress) progress.innerHTML = '<div class="twin-stream-log"></div>';
+    const log = progress?.querySelector(".twin-stream-log");
+
     fetch("/api/twin/analyze", { method: "POST" })
-      .then((r) => r.json())
-      .then((data) => {
-        const msg = data.message || "Analysis complete";
-        alert(msg);
-        loadOverview();
+      .then((r) => {
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        function pump() {
+          return reader.read().then(({ done, value }) => {
+            if (done) {
+              if (btn) { btn.disabled = false; btn.textContent = "🔄 Analyze"; }
+              loadOverview();
+              return;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                try {
+                  const evt = JSON.parse(line.slice(6));
+                  if (log) {
+                    if (evt.type === "text") {
+                      log.innerHTML += esc(evt.content || "");
+                    } else if (evt.type === "tool") {
+                      log.innerHTML += `<div class="twin-stream-tool">[${esc(evt.name || "")}] ${esc(evt.status || "")}</div>`;
+                    } else if (evt.type === "error") {
+                      log.innerHTML += `<div class="twin-stream-error">❌ ${esc(evt.message || "")}</div>`;
+                    } else if (evt.type === "done") {
+                      log.innerHTML += `<div class="twin-stream-done">✅ ${esc(evt.content || "完成")}</div>`;
+                    }
+                    log.scrollTop = log.scrollHeight;
+                  }
+                } catch {}
+              }
+            }
+            return pump();
+          });
+        }
+        return pump();
       })
-      .catch((e) => alert("Analysis failed: " + e));
+      .catch((e) => {
+        if (log) log.innerHTML += `<div class="twin-stream-error">❌ ${esc(String(e))}</div>`;
+        if (btn) { btn.disabled = false; btn.textContent = "🔄 Analyze"; }
+      });
   }
 
   // ── Sync ──
