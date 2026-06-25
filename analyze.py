@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import io
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -2124,6 +2125,328 @@ def cmd_evolve_write(args):
 
 
 # ---------------------------------------------------------------------------
+# Cognitive Model (Digital Twin) Commands
+# ---------------------------------------------------------------------------
+
+_CM_VALID_TABLES = {
+    "episodes", "episode_refs", "cm_tensions", "cm_principles", "cm_tradeoffs",
+    "cm_reasoning", "cm_communication", "cm_roles", "cm_expertise", "cm_policies",
+}
+
+_DIMENSION_TABLE_MAP = {
+    "tensions": "cm_tensions",
+    "principles": "cm_principles",
+    "tradeoffs": "cm_tradeoffs",
+    "reasoning": "cm_reasoning",
+    "communication": "cm_communication",
+    "roles": "cm_roles",
+    "expertise": "cm_expertise",
+}
+
+
+def cmd_twin_stats(args):
+    """Show Cognitive Model statistics."""
+    import db as _db
+    _db.init_db()
+    stats = _db.get_twin_stats()
+
+    if getattr(args, "json", False):
+        print(json.dumps(stats, ensure_ascii=False, indent=2))
+        return
+
+    print("=== Cognitive Model (Digital Twin) Stats ===\n")
+    fmt = "  {:<20s} {:>6s}  {:<20s}  {}"
+    print(fmt.format("Table", "Count", "Confidence (avg/min/max)", "Last Updated"))
+    print("  " + "-" * 70)
+    for table, info in stats.items():
+        count = info.get("count", 0)
+        conf = info.get("confidence")
+        conf_str = ""
+        if conf:
+            conf_str = f"{conf['avg']:.2f} / {conf['min']:.2f} / {conf['max']:.2f}"
+        last = (info.get("last_updated") or "")[:16]
+        print(fmt.format(table, str(count), conf_str, last))
+
+
+def cmd_twin_episodes(args):
+    """List episodes from the episodes table."""
+    import db as _db
+    _db.init_db()
+
+    where_parts, params = [], []
+    if getattr(args, "domain", ""):
+        where_parts.append("domain=?")
+        params.append(args.domain)
+    if getattr(args, "signal", ""):
+        where_parts.append("signal_type=?")
+        params.append(args.signal)
+    if getattr(args, "session", ""):
+        where_parts.append("session_id LIKE ?")
+        params.append(f"%{args.session}%")
+
+    where = " AND ".join(where_parts) if where_parts else ""
+    rows = _db.cm_get_all("episodes", where=where, params=tuple(params),
+                          order="created_at DESC", limit=args.limit)
+
+    if getattr(args, "json", False):
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+
+    print(f"=== Episodes ({len(rows)}) ===\n")
+    fmt = "  {:<16s}  {:<14s}  {:<16s}  {:<12s}  {}"
+    print(fmt.format("ID", "Session", "Task Type", "Signal", "Lesson"))
+    print("  " + "-" * 80)
+    for r in rows:
+        sid = (r.get("session_id") or "")[:12]
+        lesson = (r.get("lesson") or "")[:50]
+        print(fmt.format(
+            (r.get("id") or "")[:16],
+            sid,
+            (r.get("task_type") or "")[:16],
+            (r.get("signal_type") or "")[:12],
+            lesson,
+        ))
+
+
+def cmd_twin_dimensions(args):
+    """List items from any L2 dimension table."""
+    import db as _db
+    _db.init_db()
+
+    table = _DIMENSION_TABLE_MAP[args.dimension]
+
+    where_parts, params = [], []
+    if getattr(args, "status", ""):
+        where_parts.append("status=?")
+        params.append(args.status)
+    if getattr(args, "domain", ""):
+        where_parts.append("domain=?")
+        params.append(args.domain)
+    min_conf = getattr(args, "min_confidence", None)
+    if min_conf is not None:
+        where_parts.append("confidence>=?")
+        params.append(min_conf)
+
+    where = " AND ".join(where_parts) if where_parts else ""
+    rows = _db.cm_get_all(table, where=where, params=tuple(params),
+                          order="confidence DESC", limit=getattr(args, "limit", 50))
+
+    if getattr(args, "json", False):
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+
+    print(f"=== {table} ({len(rows)}) ===\n")
+    for r in rows:
+        rid = r.get("id", "")
+        conf = r.get("confidence")
+        conf_str = f"  conf={conf:.2f}" if conf is not None else ""
+        status = r.get("status", "")
+        status_str = f"  [{status}]" if status else ""
+        # Print a brief summary line per row
+        if table == "cm_principles":
+            summary = (r.get("statement") or "")[:80]
+        elif table == "cm_tensions":
+            summary = f"{r.get('value_a','')} vs {r.get('value_b','')}: {(r.get('default_resolution') or '')[:50]}"
+        elif table == "cm_policies":
+            summary = f"{(r.get('condition') or '')[:40]} → {(r.get('action') or '')[:40]}"
+        elif table == "cm_roles":
+            summary = (r.get("role") or "")[:60]
+        elif table == "cm_expertise":
+            summary = f"{r.get('domain','')} (depth={r.get('depth','')})"
+        elif table == "cm_communication":
+            summary = (r.get("description") or "")[:70]
+        elif table == "cm_reasoning":
+            summary = f"{r.get('dimension','')}: {(r.get('description') or '')[:50]}"
+        elif table == "cm_tradeoffs":
+            summary = f"protect={r.get('protect','')} sacrifice={r.get('sacrifice','')}"
+        else:
+            summary = str(r)[:80]
+        print(f"  [{rid}]{status_str}{conf_str}  {summary}")
+
+
+def cmd_twin_policies(args):
+    """List policies from cm_policies."""
+    import db as _db
+    _db.init_db()
+
+    where_parts, params = [], []
+    if getattr(args, "status", ""):
+        where_parts.append("status=?")
+        params.append(args.status)
+    if getattr(args, "role", ""):
+        where_parts.append("role_mode=?")
+        params.append(args.role)
+    if getattr(args, "domain", ""):
+        where_parts.append("domain=?")
+        params.append(args.domain)
+
+    where = " AND ".join(where_parts) if where_parts else ""
+    rows = _db.cm_get_all("cm_policies", where=where, params=tuple(params),
+                          order="confidence DESC", limit=args.limit)
+
+    if getattr(args, "json", False):
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+
+    print(f"=== Policies ({len(rows)}) ===\n")
+    for r in rows:
+        rid = r.get("id", "")
+        conf = r.get("confidence")
+        conf_str = f"{conf:.2f}" if conf is not None else "  -"
+        status = r.get("status") or ""
+        condition = (r.get("condition") or "")[:50]
+        action = (r.get("action") or "")[:50]
+        rationale = (r.get("rationale") or "")[:40]
+        print(f"  [{rid}] [{status}] conf={conf_str}")
+        print(f"    IF:  {condition}")
+        print(f"    DO:  {action}")
+        if rationale:
+            print(f"    WHY: {rationale}")
+        print()
+
+
+def cmd_twin_write(args):
+    """Write/update/delete Cognitive Model entries from JSON stdin."""
+    import db as _db
+    _db.init_db()
+
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: invalid JSON — {e}", file=sys.stderr)
+        sys.exit(1)
+
+    table = payload.get("table", "")
+    if table not in _CM_VALID_TABLES:
+        print(f"ERROR: invalid table '{table}'. Valid: {', '.join(sorted(_CM_VALID_TABLES))}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    operations = payload.get("operations", [])
+    inserted, updated, deleted, errors = 0, 0, 0, []
+
+    for op in operations:
+        action = op.get("action", "")
+        try:
+            if table == "episode_refs":
+                if action == "insert":
+                    d = op.get("data", {})
+                    _db.cm_add_ref(d["episode_id"], d["target_type"], d["target_id"])
+                    inserted += 1
+                else:
+                    errors.append(f"episode_refs only supports insert, got: {action}")
+            elif action in ("insert", "update"):
+                item_id = op.get("id") or ("p_" + uuid.uuid4().hex[:8])
+                _db.cm_upsert(table, item_id, op.get("data", {}))
+                if action == "insert":
+                    inserted += 1
+                else:
+                    updated += 1
+            elif action == "delete":
+                _db.cm_delete(table, op["id"])
+                deleted += 1
+            else:
+                errors.append(f"unknown action: {action}")
+        except Exception as e:
+            errors.append(f"{action} id={op.get('id','')} failed: {e}")
+
+    print(f"OK: {table} — inserted={inserted} updated={updated} deleted={deleted}")
+    if errors:
+        for err in errors:
+            print(f"  WARN: {err}", file=sys.stderr)
+
+
+def cmd_twin_compile(args):
+    """Compile L3 policies from L2 dimension data."""
+    import db as _db
+    _db.init_db()
+
+    new_policies = []
+
+    # From principles
+    principles = _db.cm_get_all("cm_principles",
+                                where="status IN ('confirmed','emerging')")
+    for p in principles:
+        new_policies.append({
+            "id": "pol_" + uuid.uuid4().hex[:8],
+            "data": {
+                "condition": p.get("cause") or "",
+                "action": p.get("effect") or "",
+                "exception": "",
+                "rationale": p.get("statement") or "",
+                "source_type": "principle",
+                "source_id": p["id"],
+                "domain": p.get("domain") or "",
+                "confidence": p.get("confidence"),
+                "status": "active",
+            },
+        })
+
+    # From tensions
+    tensions = _db.cm_get_all("cm_tensions")
+    for t in tensions:
+        overrides = t.get("context_overrides") or ""
+        first_override = ""
+        if overrides:
+            try:
+                parsed = json.loads(overrides)
+                if isinstance(parsed, list) and parsed:
+                    first_override = str(parsed[0])
+            except (json.JSONDecodeError, TypeError):
+                first_override = str(overrides)[:100]
+        new_policies.append({
+            "id": "pol_" + uuid.uuid4().hex[:8],
+            "data": {
+                "condition": f"面临 {t.get('value_a','')} vs {t.get('value_b','')} 的权衡",
+                "action": t.get("default_resolution") or "",
+                "exception": first_override,
+                "rationale": f"价值张力：{t.get('value_a','')} vs {t.get('value_b','')}",
+                "source_type": "tension",
+                "source_id": t["id"],
+                "domain": "",
+                "confidence": t.get("confidence"),
+                "status": "active",
+            },
+        })
+
+    # From communication
+    comms = _db.cm_get_all("cm_communication")
+    for c in comms:
+        new_policies.append({
+            "id": "pol_" + uuid.uuid4().hex[:8],
+            "data": {
+                "condition": f"AI 进行 {c.get('domain','')} 领域工作时",
+                "action": c.get("description") or "",
+                "exception": "",
+                "rationale": "",
+                "source_type": "communication",
+                "source_id": c["id"],
+                "domain": c.get("domain") or "",
+                "confidence": c.get("confidence"),
+                "status": "active",
+            },
+        })
+
+    # Delete old compiled policies
+    conn = _db.get_conn()
+    conn.execute(
+        "DELETE FROM cm_policies WHERE source_type IN ('principle','tension','communication')"
+    )
+    conn.commit()
+
+    # Insert new ones
+    for pol in new_policies:
+        _db.cm_upsert("cm_policies", pol["id"], pol["data"])
+
+    n_p = sum(1 for p in new_policies if p["data"]["source_type"] == "principle")
+    n_t = sum(1 for p in new_policies if p["data"]["source_type"] == "tension")
+    n_c = sum(1 for p in new_policies if p["data"]["source_type"] == "communication")
+    print(f"Compiled {len(new_policies)} policies: "
+          f"{n_p} from principles, {n_t} from tensions, {n_c} from communication")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -2196,6 +2519,31 @@ Examples:
     sub.add_parser("aggregates", help="Print pre-computed aggregates from SQLite DB as JSON")
     sub.add_parser("profile-digest", parents=[shared], help="Pre-computed profile digest for sub-agents (JSON)")
 
+    sub.add_parser("twin-stats", parents=[shared], help="Show Cognitive Model statistics")
+
+    p_te = sub.add_parser("twin-episodes", parents=[shared], help="List episodes from the episodes table")
+    p_te.add_argument("--domain", default="", help="Filter by domain")
+    p_te.add_argument("--signal", default="", help="Filter by signal_type")
+    p_te.add_argument("--session", default="", help="Filter by session id (substring)")
+
+    p_td = sub.add_parser("twin-dimensions", parents=[shared],
+                           help="List items from any L2 dimension table")
+    p_td.add_argument("--dimension", required=True,
+                      choices=list(_DIMENSION_TABLE_MAP.keys()),
+                      help="Which dimension table to query")
+    p_td.add_argument("--status", default="", help="Filter by status")
+    p_td.add_argument("--domain", default="", help="Filter by domain")
+    p_td.add_argument("--min-confidence", type=float, default=None, dest="min_confidence",
+                      help="Minimum confidence threshold")
+
+    p_tp = sub.add_parser("twin-policies", parents=[shared], help="List policies from cm_policies")
+    p_tp.add_argument("--status", default="", help="Filter by status (active/deprecated)")
+    p_tp.add_argument("--role", default="", help="Filter by role_mode")
+    p_tp.add_argument("--domain", default="", help="Filter by domain")
+
+    sub.add_parser("twin-write", help="Write/update/delete CM entries from JSON stdin")
+    sub.add_parser("twin-compile", help="Compile L3 policies from L2 dimensions")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -2210,6 +2558,12 @@ Examples:
         "evolve-patterns": cmd_evolve_patterns, "evolve-write": cmd_evolve_write,
         "aggregates": cmd_aggregates,
         "profile-digest": cmd_profile_digest,
+        "twin-stats": cmd_twin_stats,
+        "twin-episodes": cmd_twin_episodes,
+        "twin-dimensions": cmd_twin_dimensions,
+        "twin-policies": cmd_twin_policies,
+        "twin-write": cmd_twin_write,
+        "twin-compile": cmd_twin_compile,
     }
 
     save_path = getattr(args, "save", "")

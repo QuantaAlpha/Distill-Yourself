@@ -1793,3 +1793,98 @@ body {
 .memory-status.stale { font-size: 0.7em; padding: 1px 5px; border-radius: 3px; background: var(--bg-tertiary); color: var(--text-muted); margin-left: 4px; }
 .memory-conflicts { cursor: help; margin-left: 4px; font-size: 0.8em; }
 .evidence-meta { color: var(--text-muted); font-size: 0.85em; }
+
+/* ---- Digital Twin ---- */
+#twin-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#twin-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--border-light); }
+#twin-breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; }
+.twin-bc-root { cursor: pointer; color: var(--accent); }
+.twin-bc-root:hover { text-decoration: underline; }
+.twin-bc-sep { color: var(--text-muted); }
+.twin-bc-link { cursor: pointer; color: var(--accent); }
+.twin-bc-link:hover { text-decoration: underline; }
+.twin-bc-current { color: var(--text); }
+#twin-actions { display: flex; align-items: center; gap: 12px; }
+#twin-last-analyzed { font-size: 12px; color: var(--text-muted); }
+#twin-body { flex: 1; overflow-y: auto; padding: 20px; }
+
+/* Twin overview cards grid */
+.twin-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.twin-dim-card {
+  border: 1px solid var(--border-light); border-radius: var(--radius);
+  background: var(--bg-surface); cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
+  overflow: hidden;
+}
+.twin-dim-card:hover { border-color: var(--dim-color, var(--accent)); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.twin-dim-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px; border-bottom: 1px solid var(--border-light);
+  background: var(--bg-primary);
+}
+.twin-dim-icon { font-size: 16px; }
+.twin-dim-label { font-weight: 600; font-size: 13px; color: var(--text); flex: 1; }
+.twin-dim-count {
+  font-size: 11px; font-weight: 700; color: var(--dim-color, var(--accent));
+  background: color-mix(in srgb, var(--dim-color, var(--accent)) 10%, transparent);
+  padding: 2px 8px; border-radius: 10px;
+}
+.twin-dim-preview { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.twin-dim-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.twin-dim-item-text { font-size: 12px; color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.twin-dim-item-conf { font-size: 11px; font-weight: 600; color: var(--dim-color, var(--accent)); flex-shrink: 0; }
+.twin-dim-empty { font-size: 12px; color: var(--text-muted); font-style: italic; padding: 4px 0; }
+.twin-empty-state { text-align: center; padding: 60px 24px; color: var(--text-muted); }
+.twin-empty-state p:first-child { font-size: 20px; margin-bottom: 8px; }
+
+/* Twin dimension detail */
+.twin-detail-header {
+  display: flex; align-items: center; gap: 10px; padding: 14px 0; margin-bottom: 16px;
+  border-bottom: 2px solid var(--dim-color, var(--accent));
+}
+.twin-detail-title { font-weight: 700; font-size: 16px; color: var(--text); flex: 1; }
+.twin-detail-list { display: flex; flex-direction: column; gap: 8px; }
+.twin-detail-item {
+  padding: 12px 14px; border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+  background: var(--bg-surface); cursor: pointer; transition: border-color 0.15s;
+}
+.twin-detail-item:hover { border-color: var(--accent); }
+.twin-item-body { font-size: 13px; color: var(--text); line-height: 1.5; }
+.twin-item-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.twin-item-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.twin-status-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px; }
+.twin-status-badge.confirmed { background: #dcfce7; color: #166534; }
+.twin-status-badge.emerging { background: #fef3c7; color: #92400e; }
+.twin-status-badge.hypothesis { background: var(--bg-tertiary); color: var(--text-muted); }
+.twin-conf { font-size: 11px; font-weight: 600; color: var(--accent); }
+.twin-ep-count { font-size: 11px; color: var(--text-muted); }
+.twin-cat-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; }
+.twin-cat-badge.must_do { background: #dcfce7; color: #166534; }
+.twin-cat-badge.must_avoid { background: #fee2e2; color: #991b1b; }
+.twin-cat-badge.must_verify { background: #dbeafe; color: #1e40af; }
+
+/* Twin item detail + trace */
+.twin-item-detail { max-width: 800px; }
+.twin-item-detail-header { padding: 10px 14px; border-radius: var(--radius-sm); background: var(--bg-primary); margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+.twin-item-id { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+.twin-item-detail-body { margin-bottom: 20px; }
+.twin-trace-section { margin-top: 20px; }
+.twin-trace-section h4 { font-size: 14px; margin-bottom: 12px; color: var(--text); }
+.twin-episode-card { padding: 10px 14px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-surface); margin-bottom: 8px; }
+.twin-ep-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.twin-ep-signal { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; background: var(--bg-tertiary); }
+.twin-ep-signal.correction { background: #fee2e2; color: #991b1b; }
+.twin-ep-signal.acceptance { background: #dcfce7; color: #166534; }
+.twin-ep-domain { font-size: 10px; color: var(--text-muted); background: var(--bg-tertiary); padding: 1px 6px; border-radius: 3px; }
+.twin-ep-date { font-size: 11px; color: var(--text-muted); margin-left: auto; }
+.twin-ep-body { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+.twin-ep-body b { color: var(--text); }
+.twin-ep-link { font-size: 11px; color: var(--accent); cursor: pointer; display: inline-block; margin-top: 4px; }
+
+/* Twin policies */
+.twin-policies-list { display: flex; flex-direction: column; gap: 10px; }
+.twin-policy-card { padding: 12px 16px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-surface); cursor: pointer; transition: border-color 0.15s; }
+.twin-policy-card:hover { border-color: var(--accent); }
+.twin-policy-rule { font-size: 13px; line-height: 1.6; font-family: var(--font-code, monospace); }
+.twin-kw { font-weight: 700; color: var(--accent); margin-right: 4px; }
+.twin-policy-rationale { font-size: 12px; color: var(--text-muted); margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-light); }
+.twin-source { font-size: 10px; color: var(--text-muted); font-family: monospace; }

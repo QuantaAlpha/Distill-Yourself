@@ -1308,6 +1308,135 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                     self._handle_evolve_stream(tab, source, date, project, engine)
                 else:
                     self._json_response(self._get_evolve_tab(tab, refresh, source, date, project, engine))
+        # --- Cognitive Model (Digital Twin) endpoints ---
+        elif path == "/api/twin/stats":
+            import db as _db
+            self._json_response(_db.get_twin_stats())
+        elif path == "/api/twin/overview":
+            import db as _db
+            _TWIN_DIMENSIONS = {
+                "tensions": "cm_tensions",
+                "principles": "cm_principles",
+                "tradeoffs": "cm_tradeoffs",
+                "reasoning": "cm_reasoning",
+                "communication": "cm_communication",
+                "roles": "cm_roles",
+                "expertise": "cm_expertise",
+                "policies": "cm_policies",
+            }
+            overview = {}
+            for dim, table in _TWIN_DIMENSIONS.items():
+                try:
+                    count = _db.cm_count(table)
+                    items = _db.cm_get_all(table, order="confidence DESC", limit=3)
+                    overview[dim] = {"count": count, "items": items}
+                except Exception:
+                    overview[dim] = {"count": 0, "items": []}
+            self._json_response(overview)
+        elif path.startswith("/api/twin/dimension/"):
+            import db as _db
+            _TWIN_DIM_TABLE = {
+                "tensions": "cm_tensions",
+                "principles": "cm_principles",
+                "tradeoffs": "cm_tradeoffs",
+                "reasoning": "cm_reasoning",
+                "communication": "cm_communication",
+                "roles": "cm_roles",
+                "expertise": "cm_expertise",
+            }
+            dim_name = path[len("/api/twin/dimension/"):]
+            if dim_name not in _TWIN_DIM_TABLE:
+                self._error(400, f"Unknown dimension: {dim_name}")
+            else:
+                table = _TWIN_DIM_TABLE[dim_name]
+                status = params.get("status", [None])[0]
+                domain = params.get("domain", [None])[0]
+                sort = params.get("sort", ["confidence"])[0]
+                limit = int(params.get("limit", ["500"])[0])
+                where_parts = []
+                where_params = []
+                if status:
+                    where_parts.append("status=?")
+                    where_params.append(status)
+                if domain:
+                    where_parts.append("domain=?")
+                    where_params.append(domain)
+                where = " AND ".join(where_parts)
+                order = "confidence DESC" if sort == "confidence" else "updated_at DESC"
+                items = _db.cm_get_all(table, where=where, params=tuple(where_params), order=order, limit=limit)
+                self._json_response({"dimension": dim_name, "items": items})
+        elif path.startswith("/api/twin/item/"):
+            import db as _db
+            _TWIN_TYPE_TABLE = {
+                "tension": "cm_tensions",
+                "principle": "cm_principles",
+                "tradeoff": "cm_tradeoffs",
+                "reasoning": "cm_reasoning",
+                "communication": "cm_communication",
+                "role": "cm_roles",
+                "expertise": "cm_expertise",
+                "policy": "cm_policies",
+            }
+            rest = path[len("/api/twin/item/"):]
+            parts = rest.split("/", 1)
+            if len(parts) != 2:
+                self._error(400, "Expected /api/twin/item/:type/:id")
+            else:
+                item_type, item_id = parts
+                if item_type not in _TWIN_TYPE_TABLE:
+                    self._error(400, f"Unknown item type: {item_type}")
+                else:
+                    table = _TWIN_TYPE_TABLE[item_type]
+                    item = _db.cm_get(table, item_id)
+                    if item is None:
+                        self._error(404, "Item not found")
+                    else:
+                        episodes = _db.cm_get_refs_for_target(item_type, item_id)
+                        self._json_response({"item": item, "episodes": episodes})
+        elif path == "/api/twin/policies":
+            import db as _db
+            status = params.get("status", ["active"])[0]
+            domain = params.get("domain", [None])[0]
+            role = params.get("role", [None])[0]
+            limit = int(params.get("limit", ["500"])[0])
+            where_parts = ["status=?"]
+            where_params = [status]
+            if domain:
+                where_parts.append("domain=?")
+                where_params.append(domain)
+            if role:
+                where_parts.append("role=?")
+                where_params.append(role)
+            where = " AND ".join(where_parts)
+            policies = _db.cm_get_all("cm_policies", where=where, params=tuple(where_params),
+                                       order="confidence DESC", limit=limit)
+            self._json_response({"policies": policies})
+        elif path.startswith("/api/twin/trace/"):
+            import db as _db
+            _TWIN_TYPE_TABLE2 = {
+                "tension": "cm_tensions",
+                "principle": "cm_principles",
+                "tradeoff": "cm_tradeoffs",
+                "reasoning": "cm_reasoning",
+                "communication": "cm_communication",
+                "role": "cm_roles",
+                "expertise": "cm_expertise",
+                "policy": "cm_policies",
+            }
+            policy_id = path[len("/api/twin/trace/"):]
+            policy = _db.cm_get("cm_policies", policy_id)
+            if policy is None:
+                self._error(404, "Policy not found")
+            else:
+                source_type = policy.get("source_type", "")
+                source_id = policy.get("source_id", "")
+                source_item = None
+                if source_type and source_id and source_type in _TWIN_TYPE_TABLE2:
+                    source_item = _db.cm_get(_TWIN_TYPE_TABLE2[source_type], source_id)
+                episodes = []
+                if source_type and source_id:
+                    episodes = _db.cm_get_refs_for_target(source_type, source_id)
+                self._json_response({"policy": policy, "source": source_item, "episodes": episodes})
         else:
             # Serve static files (with path traversal protection)
             if path == "/":
@@ -2382,6 +2511,13 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             self._handle_chat_legacy()
         elif parsed.path == "/api/evolve/sync":
             self._handle_evolve_sync()
+        elif parsed.path == "/api/twin/analyze":
+            self._json_response({
+                "ok": True,
+                "message": "Analysis pipeline not yet implemented — use CLI: python3 analyze.py twin-*",
+            })
+        elif parsed.path == "/api/twin/sync":
+            self._handle_twin_sync()
         else:
             self._error(404, "Not found")
 
@@ -2611,6 +2747,106 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 
         result["ok"] = all("error" not in v for v in result.values() if isinstance(v, dict))
         self._json_response(result)
+
+    def _handle_twin_sync(self):
+        """POST /api/twin/sync — compile runtime pack from cm_policies into CLAUDE.md and memory files."""
+        import db as _db
+
+        CM_MARKER_START = "<!-- cognitive-model:start -->"
+        CM_MARKER_END = "<!-- cognitive-model:end -->"
+
+        try:
+            policies = _db.cm_get_all(
+                "cm_policies",
+                where="status=?",
+                params=("active",),
+                order="confidence DESC",
+                limit=25,
+            )
+        except Exception as e:
+            self._json_response({"ok": False, "error": str(e)})
+            return
+
+        # Build CLAUDE.md section
+        lines = [CM_MARKER_START, "## Cognitive Model Policies (Auto-sync)", ""]
+        for p in policies:
+            trigger = p.get("trigger", "") or ""
+            instruction = p.get("instruction", "") or ""
+            avoid = p.get("avoid", "") or ""
+            label = p.get("label", p.get("id", ""))
+            conf = p.get("confidence", 0)
+            lines.append(f"### {label} (confidence: {conf:.2f})" if isinstance(conf, float) else f"### {label}")
+            if trigger:
+                lines.append(f"When: {trigger}")
+            if instruction:
+                lines.append(f"Do: {instruction}")
+            if avoid:
+                lines.append(f"Avoid: {avoid}")
+            lines.append("")
+        lines.append(CM_MARKER_END)
+        section = "\n".join(lines) + "\n"
+
+        CLAUDE_MD_PATH.parent.mkdir(parents=True, exist_ok=True)
+        existing = CLAUDE_MD_PATH.read_text(encoding="utf-8") if CLAUDE_MD_PATH.exists() else ""
+
+        if CM_MARKER_START in existing and CM_MARKER_END in existing:
+            start_idx = existing.index(CM_MARKER_START)
+            end_idx = existing.index(CM_MARKER_END) + len(CM_MARKER_END)
+            new_text = existing[:start_idx] + section + existing[end_idx:]
+            claude_md_status = "replaced"
+        else:
+            if existing and not existing.endswith("\n\n"):
+                existing = existing.rstrip("\n") + "\n\n"
+            new_text = existing + section
+            claude_md_status = "appended"
+        CLAUDE_MD_PATH.write_text(new_text, encoding="utf-8")
+
+        # Write individual memory files
+        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+        mem_created, mem_updated = 0, 0
+        for p in policies:
+            pid = p.get("id", "")
+            if not pid:
+                continue
+            label = p.get("label", pid)
+            name_kebab = _sanitize_filename(label)
+            fname = f"cognitive_{pid}.md"
+            fpath = MEMORY_DIR / fname
+            is_update = fpath.exists()
+
+            trigger = p.get("trigger", "") or ""
+            instruction = p.get("instruction", "") or ""
+            avoid = p.get("avoid", "") or ""
+            if trigger and instruction:
+                body = f"When: {trigger}\nDo: {instruction}"
+                if avoid:
+                    body += f"\nAvoid: {avoid}"
+            else:
+                body = label
+
+            content_lines = [
+                "---",
+                f"name: {name_kebab}",
+                f"description: {label}",
+                "type: policy",
+                "source: twin-sync",
+                "---",
+                "",
+                body,
+                "",
+            ]
+            fpath.write_text("\n".join(content_lines), encoding="utf-8")
+            if is_update:
+                mem_updated += 1
+            else:
+                mem_created += 1
+
+        self._json_response({
+            "ok": True,
+            "policies_synced": len(policies),
+            "claude_md": {"status": claude_md_status, "lines": len(section.strip().split("\n"))},
+            "memory": {"created": mem_created, "updated": mem_updated},
+        })
 
     def log_message(self, format, *args):
         """Suppress default request logging for cleaner output."""

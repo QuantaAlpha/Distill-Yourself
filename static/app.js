@@ -305,8 +305,9 @@
       if (viewHistory.length > 50) viewHistory = viewHistory.slice(-20);
     }
     currentView = name;
+    const twinView = $("#twin-view");
     const views = {conversation: convView, search: searchResults,
-      insights: insightsView, ai: aiView};
+      insights: insightsView, ai: aiView, twin: twinView};
     for (const [k, el] of Object.entries(views)) {
       if (el) el.classList.toggle("hidden", k !== name);
     }
@@ -318,6 +319,8 @@
     } else {
       switchSidebarPanel("sessions");
     }
+    // Initialize Twin view when switching to it
+    if (name === "twin" && window.initTwinView) window.initTwinView();
     // Update sidebar nav active state
     const navView = (name === "conversation" || name === "search") ? "sessions" : name;
     document.querySelectorAll(".sidebar-nav-item").forEach(b => b.classList.toggle("active", b.dataset.view === navView));
@@ -1297,6 +1300,9 @@
         break;
       case "3": // Insights
         openInsights();
+        break;
+      case "4": // Digital Twin
+        showView("twin");
         break;
       case "o": // outline
         if (!convView.classList.contains("hidden")) toggleOutline();
