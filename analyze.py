@@ -2335,44 +2335,49 @@ def cmd_twin_write(args):
         sys.exit(1)
 
     operations = payload.get("operations", [])
-    inserted, updated, deleted, errors = 0, 0, 0, []
+    inserted, updated, deleted = 0, 0, 0
+    conn = _db.get_conn()
 
-    for op in operations:
-        action = op.get("action", "")
-        try:
+    try:
+        conn.execute("BEGIN")
+        for op in operations:
+            action = op.get("action", "")
             if table == "card_relations":
+                d = op.get("data", {})
                 if action == "insert":
-                    d = op.get("data", {})
-                    _db.cm_add_card_relation(d["from_id"], d["to_id"], d["relation"])
+                    conn.execute(
+                        "INSERT OR IGNORE INTO card_relations (from_id, to_id, relation) "
+                        "VALUES (?,?,?)",
+                        (d["from_id"], d["to_id"], d["relation"]),
+                    )
                     inserted += 1
                 elif action == "delete":
-                    conn = _db.get_conn()
-                    d = op.get("data", {})
-                    conn.execute("DELETE FROM card_relations WHERE from_id=? AND to_id=? AND relation=?",
-                                 (d.get("from_id",""), d.get("to_id",""), d.get("relation","")))
-                    conn.commit()
+                    conn.execute(
+                        "DELETE FROM card_relations WHERE from_id=? AND to_id=? AND relation=?",
+                        (d.get("from_id", ""), d.get("to_id", ""), d.get("relation", "")),
+                    )
                     deleted += 1
                 else:
-                    errors.append(f"card_relations supports insert/delete, got: {action}")
+                    raise ValueError(f"card_relations supports insert/delete, got: {action}")
             elif action in ("insert", "update"):
                 item_id = op.get("id") or ("p_" + uuid.uuid4().hex[:8])
-                _db.cm_upsert(table, item_id, op.get("data", {}))
+                _db.cm_upsert(table, item_id, op.get("data", {}), commit=False)
                 if action == "insert":
                     inserted += 1
                 else:
                     updated += 1
             elif action == "delete":
-                _db.cm_delete(table, op["id"])
+                conn.execute(f"DELETE FROM {table} WHERE id=?", (op["id"],))
                 deleted += 1
             else:
-                errors.append(f"unknown action: {action}")
-        except Exception as e:
-            errors.append(f"{action} id={op.get('id','')} failed: {e}")
+                raise ValueError(f"unknown action: {action}")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"ERROR: {table} rolled back — {e}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"OK: {table} — inserted={inserted} updated={updated} deleted={deleted}")
-    if errors:
-        for err in errors:
-            print(f"  WARN: {err}", file=sys.stderr)
 
 
 def cmd_twin_compile(args):

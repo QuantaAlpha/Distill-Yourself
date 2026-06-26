@@ -305,22 +305,36 @@
         const decoder = new TextDecoder();
         let buffer = "";
 
+        function dispatchLine(line) {
+          if (!line.startsWith("data: ")) return;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            _handleEvolveStreamEvent(evt, tab, streamState);
+          } catch (e) { /* skip */ }
+        }
+
+        function flushBuffer(final) {
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() || "";
+          for (const part of parts) {
+            part.split("\n").forEach(dispatchLine);
+          }
+          const singleLines = buffer.split("\n");
+          const remainder = singleLines.pop() || "";
+          buffer = final ? "" : remainder;
+          singleLines.forEach(dispatchLine);
+          if (final && remainder) dispatchLine(remainder);
+        }
+
         function pump() {
           return reader.read().then(({done, value}) => {
-            if (done) return;
-            buffer += decoder.decode(value, {stream: true});
-            const parts = buffer.split("\n\n");
-            buffer = parts.pop();
-            for (const part of parts) {
-              const lines = part.split("\n");
-              for (const line of lines) {
-                if (!line.startsWith("data: ")) continue;
-                try {
-                  const evt = JSON.parse(line.slice(6));
-                  _handleEvolveStreamEvent(evt, tab, streamState);
-                } catch (e) { /* skip */ }
-              }
+            if (done) {
+              buffer += decoder.decode();
+              flushBuffer(true);
+              return;
             }
+            buffer += decoder.decode(value, {stream: true});
+            flushBuffer(false);
             return pump();
           });
         }

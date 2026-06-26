@@ -88,6 +88,44 @@ class TwinIntegrityTests(unittest.TestCase):
         self.assertEqual(db.cm_count("evidence_events"), 0)
         self.assertEqual(db.cm_count("judgment_cards"), 0)
 
+    def test_twin_write_rolls_back_and_exits_on_error(self):
+        payload = {
+            "table": "evidence_events",
+            "operations": [
+                {
+                    "action": "insert",
+                    "id": "ev_original",
+                    "data": {
+                        "session_id": "s1",
+                        "event_index": 1,
+                        "lesson": "should roll back",
+                    },
+                },
+                {
+                    "action": "insert",
+                    "id": "ev_duplicate",
+                    "data": {
+                        "session_id": "s1",
+                        "event_index": 1,
+                        "lesson": "duplicate should fail",
+                    },
+                },
+            ],
+        }
+
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO(json.dumps(payload))
+        err = io.StringIO()
+        try:
+            with self.assertRaises(SystemExit):
+                with contextlib.redirect_stderr(err):
+                    analyze.cmd_twin_write(None)
+        finally:
+            sys.stdin = old_stdin
+
+        self.assertIn("rolled back", err.getvalue())
+        self.assertEqual(db.cm_count("evidence_events"), 0)
+
     def test_twin_candidates_validates_without_writing(self):
         payload = {
             "candidates": [

@@ -921,35 +921,37 @@
         const decoder = new TextDecoder();
         let buffer = "";
 
+        function dispatchLine(line) {
+          if (!line.startsWith("data: ")) return;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            _handleStreamEvent(evt, streamState);
+          } catch (e) { /* skip */ }
+        }
+
+        function flushBuffer(final) {
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() || "";
+          for (const part of parts) {
+            part.split("\n").forEach(dispatchLine);
+          }
+          const singleLines = buffer.split("\n");
+          const remainder = singleLines.pop() || "";
+          buffer = final ? "" : remainder;
+          singleLines.forEach(dispatchLine);
+          if (final && remainder) dispatchLine(remainder);
+        }
+
         function pump() {
           return reader.read().then(({ done, value }) => {
             if (done) {
+              buffer += decoder.decode();
+              flushBuffer(true);
               _finishAnalysis(streamState, streamState.failed);
               return;
             }
             buffer += decoder.decode(value, { stream: true });
-            const parts = buffer.split("\n\n");
-            buffer = parts.pop();
-            for (const part of parts) {
-              const lines = part.split("\n");
-              for (const line of lines) {
-                if (!line.startsWith("data: ")) continue;
-                try {
-                  const evt = JSON.parse(line.slice(6));
-                  _handleStreamEvent(evt, streamState);
-                } catch (e) { /* skip */ }
-              }
-            }
-            // Also handle single \n separated events (server may not double-newline)
-            const singleLines = buffer.split("\n");
-            buffer = singleLines.pop() || "";
-            for (const line of singleLines) {
-              if (!line.startsWith("data: ")) continue;
-              try {
-                const evt = JSON.parse(line.slice(6));
-                _handleStreamEvent(evt, streamState);
-              } catch (e) { /* skip */ }
-            }
+            flushBuffer(false);
             return pump();
           });
         }

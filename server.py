@@ -3125,6 +3125,80 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         finally:
             self._set_twin_run_state(process=None)
 
+    def _run_twin_compile_stage(self, cli_path: str, run_id: str) -> bool:
+        """Run Stage 4 with cancellation and timeout support."""
+        started = time.time()
+        stage_num = 4
+        self._set_twin_run_state(stage="Stage 4", status="running", process=None)
+        self._persist_twin_stage(run_id, stage_num, "running", 0)
+        self._sse_event({"type": "stage_start", "stage": "Stage 4", "stage_num": stage_num, "run_id": run_id})
+
+        proc = subprocess.Popen(
+            [sys.executable, cli_path, "twin-compile"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self._set_twin_run_state(process=proc)
+        try:
+            while proc.poll() is None:
+                state = self._get_twin_run_state()
+                if state.get("run_id") == run_id and state.get("cancel_requested"):
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+                    elapsed = round(time.time() - started, 1)
+                    msg = "Cancelled by user"
+                    if stdout:
+                        self._sse_event({"type": "text", "content": stdout})
+                    if stderr:
+                        msg = f"{msg}: {stderr[:300]}"
+                    self._set_twin_run_state(status="cancelled", process=None)
+                    self._persist_twin_stage(run_id, stage_num, "cancelled", elapsed, msg, finished=True)
+                    self._sse_event({
+                        "type": "cancelled",
+                        "message": msg,
+                        "stage": "Stage 4",
+                        "stage_num": stage_num,
+                        "run_id": run_id,
+                        "elapsed_seconds": elapsed,
+                    })
+                    return False
+                if time.time() - started > 30:
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+                    elapsed = round(time.time() - started, 1)
+                    msg = "Stage 4 timed out after 30s"
+                    if stdout:
+                        self._sse_event({"type": "text", "content": stdout})
+                    if stderr:
+                        msg = f"{msg}: {stderr[:300]}"
+                    self._set_twin_run_state(status="timeout", process=None)
+                    self._persist_twin_stage(run_id, stage_num, "timeout", elapsed, msg)
+                    self._sse_event({"type": "error", "message": msg, "stage_num": stage_num, "run_id": run_id})
+                    return False
+                time.sleep(0.2)
+
+            stdout, stderr = proc.communicate()
+            elapsed = round(time.time() - started, 1)
+            self._set_twin_run_state(process=None)
+            self._sse_event({"type": "text", "content": stdout or "(no output)"})
+            if proc.returncode != 0:
+                msg = (stderr or stdout or "unknown error")[:500]
+                self._persist_twin_stage(run_id, stage_num, "error", elapsed, msg)
+                self._sse_event({"type": "error", "message": f"Stage 4 failed: {msg}", "stage_num": stage_num, "run_id": run_id})
+                return False
+            self._persist_twin_stage(run_id, stage_num, "done", elapsed)
+            self._sse_event({
+                "type": "stage_done",
+                "stage": "Stage 4",
+                "stage_num": stage_num,
+                "run_id": run_id,
+                "elapsed_seconds": elapsed,
+            })
+            return True
+        finally:
+            self._set_twin_run_state(process=None)
+
     def _handle_twin_analyze(self):
         """POST /api/twin/analyze — run 4-stage cognitive handbook extraction via AI."""
         try:
@@ -3228,21 +3302,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                     return
 
             if start_stage <= 4:
-                started = time.time()
                 self._sse_event({"type": "text", "content": "\n\nStage 4/4: 编译 Runtime Pack (twin-compile)...\n"})
-                self._persist_twin_stage(run_id, 4, "running", 0)
-                r = subprocess.run(
-                    [sys.executable, cli_path, "twin-compile"],
-                    capture_output=True, text=True, timeout=30,
-                )
-                elapsed = round(time.time() - started, 1)
-                self._sse_event({"type": "text", "content": r.stdout or "(no output)"})
-                if r.returncode != 0:
-                    msg = (r.stderr or r.stdout or "unknown error")[:500]
-                    self._persist_twin_stage(run_id, 4, "error", elapsed, msg)
-                    self._sse_event({"type": "error", "message": f"Stage 4 failed: {msg}", "stage_num": 4})
+                if not self._run_twin_compile_stage(cli_path, run_id):
                     return
-                self._persist_twin_stage(run_id, 4, "done", elapsed)
 
             _db.init_db()
             stats = _db.get_twin_stats()
@@ -3259,7 +3321,34 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             self._sse_event({"type": "text", "content": f"\n\n✅ 分析完成 — {summary}"})
             self._sse_event({"type": "done", "content": summary, "run_id": run_id})
         except BrokenPipeError:
-            pass
+            state = self._get_twin_run_state()
+            proc = state.get("process")
+            if proc and proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            stage_num = _stage_number(state.get("stage", ""))
+            try:
+                counts = self._stage_counts(stage_num)
+                _db.twin_run_update_stage(
+                    run_id,
+                    current_stage=stage_num,
+                    status="cancelled",
+                    stage_meta={str(stage_num): {
+                        "stage": stage_num,
+                        "status": "cancelled",
+                        "elapsed_seconds": round(time.time() - state.get("started_at", time.time()), 1),
+                        "counts": counts,
+                        "truncated": bool(counts.get("truncated")),
+                        "last_error": "Client disconnected",
+                    }},
+                    last_error="Client disconnected",
+                    finished=True,
+                )
+            except Exception:
+                pass
+            self._set_twin_run_state(status="cancelled", process=None)
         except Exception as e:
             self._set_twin_run_state(status="error", process=None)
             try:
@@ -3440,11 +3529,9 @@ Commands for reading:
   twin-search cards --q "keyword" --json      — Search cards by keyword
   twin-events --json                          — List all evidence events
 
-Commands for writing:
-  twin-add cards        — Add a new card (JSON from stdin)
-  twin-edit cards <id>  — Edit an existing card (JSON from stdin, overwrites)
-  twin-link <event_id> <card_id>  — Link an event to a card
-  twin-batch            — Execute multiple operations in one call
+Commands for validating/writing:
+  twin-candidates       — Validate candidate card JSON without writing
+  twin-batch            — Execute validated operations in one transactional call
 
 # Evidence Events (input data)
 
@@ -3471,40 +3558,21 @@ If `events_truncated` is true, treat this as a checkpoint batch. Do not claim gl
 
 1. First review the existing cards above carefully.
 2. For each cluster of related events, decide:
-   - **If a similar card already exists** → use `twin-edit cards <id>` to refine it (improve judgment text, update confidence, etc.)
-   - **If it's a genuinely new pattern** → use `twin-add cards` to create a new card
-3. After creating/updating cards, link events to cards using `twin-link <event_id> <card_id>`
+   - **If a similar card already exists** → create a `cards/edit` operation for `twin-batch`
+   - **If it's a genuinely new pattern** → create a `cards/add` operation for `twin-batch`
+3. Link events to cards with `link` operations in the same `twin-batch` payload.
+4. Before writing, validate candidate cards with `twin-candidates`; only use `twin-batch` for database writes.
 
 **Writing examples:**
 
-# Add a new card:
-python3 {cli_path} twin-add cards <<'EOF'
-{{
-  "applies_when": "触发场景（1-2句）",
-  "judgment": "用户的推理逻辑（自然语言段落，2-4句）",
-  "agent_action": "AI 应该怎么做（1-2句）",
-  "exceptions": "例外条件",
-  "tags": "[\\"tag1\\", \\"tag2\\"]",
-  "confidence": 0.7,
-  "status": "hypothesis",
-  "evidence_count": 1
-}}
+# Validate candidate cards first:
+python3 {cli_path} twin-candidates <<'EOF'
+{{"candidates": [
+  {{"resource": "cards", "data": {{"applies_when": "触发场景", "judgment": "用户推理逻辑", "agent_action": "AI 应该怎么做"}}}}
+]}}
 EOF
 
-# Edit an existing card (e.g. strengthen with new evidence):
-python3 {cli_path} twin-edit cards jc_xxx <<'EOF'
-{{
-  "judgment": "refined judgment text...",
-  "confidence": 0.85,
-  "status": "emerging",
-  "evidence_count": 3
-}}
-EOF
-
-# Link events to cards:
-python3 {cli_path} twin-link ev_xxx jc_yyy
-
-# Or batch multiple operations:
+# Then batch multiple operations:
 python3 {cli_path} twin-batch <<'EOF'
 {{"operations": [
   {{"resource": "cards", "action": "add", "data": {{...}}}},
@@ -3520,7 +3588,7 @@ EOF
 - **Tags for retrieval**: Use consistent tag vocabulary (scope, style, communication, design, review, testing, etc.)
 - **Status rules**: first appearance → "hypothesis"; supported by 2+ events from different contexts → "emerging"; 3+ events across projects → "confirmed"
 - **All text in Chinese**
-- **Dedup carefully**: Two events about "不要改无关文件" and "只改必要代码" should merge into one card, not create two. Use `twin-edit` to merge, not `twin-add` to duplicate.
+- **Dedup carefully**: Two events about "不要改无关文件" and "只改必要代码" should merge into one card, not create two. Use `twin-batch` edit operations to merge, not direct one-off write commands.
 """
 
     def _build_twin_stage3_prompt(self, cli_path: str) -> str:
@@ -3568,11 +3636,9 @@ Commands for reading:
   twin-search traits --q "keyword" --json          — Search traits by keyword
   twin-cards --json                                — List all judgment cards
 
-Commands for writing:
-  twin-add traits        — Add a new trait (JSON from stdin)
-  twin-edit traits <id>  — Edit an existing trait (JSON from stdin, overwrites)
-  twin-link <card_id> <trait_id>  — Link a card to a trait
-  twin-batch             — Execute multiple operations in one call
+Commands for validating/writing:
+  twin-candidates        — Validate candidate trait JSON without writing
+  twin-batch             — Execute validated operations in one transactional call
 
 # Judgment Cards (input data)
 
@@ -3601,39 +3667,34 @@ Categories:
 
 1. Review existing traits above.
 2. For each group of related cards:
-   - **If a similar trait exists** → `twin-edit traits <id>` to refine description, update strength
-   - **If genuinely new** → `twin-add traits`
-3. Link supporting cards to traits: `twin-link jc_xxx ct_yyy`
+   - **If a similar trait exists** → create a `traits/edit` operation for `twin-batch`
+   - **If genuinely new** → create a `traits/add` operation for `twin-batch`
+3. Link supporting cards to traits with `link` operations in the same `twin-batch` payload.
+4. Before writing, validate candidate traits with `twin-candidates`; only use `twin-batch` for database writes.
 
 **Writing examples:**
 
-# Add a new trait:
-python3 {cli_path} twin-add traits <<'EOF'
-{{
-  "name": "特质名称",
-  "category": "价值取向|决策风格|协作模式|能力边界|思维模式",
-  "description": "自然语言描述（2-4句）",
-  "strength": 0.7,
-  "supporting_card_ids": "[\\"jc_xxx\\", \\"jc_yyy\\"]",
-  "status": "emerging",
-  "evidence_count": 2
-}}
+# Validate candidate traits first:
+python3 {cli_path} twin-candidates <<'EOF'
+{{"candidates": [
+  {{"resource": "traits", "data": {{"name": "特质名称", "category": "价值取向", "description": "自然语言描述"}}}}
+]}}
 EOF
 
-# Edit an existing trait:
-python3 {cli_path} twin-edit traits ct_xxx <<'EOF'
-{{
-  "description": "refined description...",
-  "strength": 0.85,
-  "status": "confirmed"
-}}
+# Then batch all writes:
+python3 {cli_path} twin-batch <<'EOF'
+{{"operations": [
+  {{"resource": "traits", "action": "add", "data": {{...}}}},
+  {{"resource": "traits", "action": "edit", "id": "ct_xxx", "data": {{...}}}},
+  {{"resource": "link", "action": "link", "from": "jc_xxx", "to": "ct_yyy"}}
+]}}
 EOF
 
 # Key principles
 - **Each trait must be supported by ≥2 cards**: Don't infer traits from a single card
 - **description is natural language**: Explain the trait so an AI can predict behavior in new scenarios
 - **supporting_card_ids must reference real card IDs** from the input data above
-- **Dedup carefully**: If a similar trait exists, use twin-edit to enrich it, not twin-add to duplicate
+- **Dedup carefully**: If a similar trait exists, use `twin-batch` edit operations to enrich it, not direct one-off write commands
 - **Status follows card evidence**: all hypothesis cards → hypothesis; emerging/confirmed cards → emerging/confirmed
 - **All text in Chinese**
 """
