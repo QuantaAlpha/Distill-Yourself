@@ -1052,6 +1052,12 @@ def _tokenize_query(query: str) -> list:
     return [t for t in tokens if len(t) >= 2]
 
 
+def _stage_number(stage_label: str) -> int:
+    """Extract a Twin stage number from labels such as 'Stage 2'."""
+    match = re.search(r"(\d+)", stage_label or "")
+    return int(match.group(1)) if match else 1
+
+
 def _fuzzy_match(text_lower: str, query_lower: str, tokens: list):
     """Returns (matched, score). Exact substring → 1.0, token-based → ratio."""
     if query_lower in text_lower:
@@ -1586,6 +1592,10 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 overview["events"] = {"count": event_count, "items": event_items}
             except Exception:
                 overview["events"] = {"count": 0, "items": []}
+            try:
+                overview["latest_run"] = _db.twin_run_latest()
+            except Exception:
+                overview["latest_run"] = None
             self._json_response(overview)
         elif path == "/api/twin/events":
             import db as _db
@@ -2691,6 +2701,8 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             self._handle_evolve_sync()
         elif parsed.path == "/api/twin/analyze":
             self._handle_twin_analyze()
+        elif parsed.path == "/api/twin/resume":
+            self._handle_twin_resume()
         elif parsed.path == "/api/twin/cancel":
             self._handle_twin_cancel()
         elif parsed.path == "/api/twin/sync":
@@ -2945,8 +2957,12 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 
     def _handle_twin_cancel(self):
         """POST /api/twin/cancel — request cancellation of active Twin analysis."""
+        import db as _db
         with _twin_run_lock:
             proc = _twin_run_state.get("process")
+            run_id = _twin_run_state.get("run_id", "")
+            stage = _twin_run_state.get("stage", "")
+            started_at = _twin_run_state.get("started_at", 0) or time.time()
             _twin_run_state["cancel_requested"] = True
             _twin_run_state["updated_at"] = time.time()
         if proc and proc.poll() is None:
@@ -2954,13 +2970,98 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 proc.kill()
             except OSError:
                 pass
+        if run_id:
+            try:
+                stage_num = _stage_number(stage)
+                counts = self._stage_counts(stage_num)
+                _db.twin_run_update_stage(
+                    run_id,
+                    status="cancelled",
+                    current_stage=stage_num,
+                    stage_meta={str(stage_num): {
+                        "stage": stage_num,
+                        "status": "cancelled",
+                        "elapsed_seconds": round(time.time() - started_at, 1),
+                        "counts": counts,
+                        "truncated": bool(counts.get("truncated")),
+                        "last_error": "Cancelled by user",
+                    }},
+                    last_error="Cancelled by user",
+                    finished=True,
+                )
+            except Exception:
+                pass
         self._json_response({"ok": True, "status": "cancel_requested"})
 
-    def _run_twin_ai_stage(self, prompt: str, stage_label: str, run_id: str) -> bool:
+    def _stage_counts(self, stage_num: int) -> dict:
+        """Return compact stage progress counts for UI cards."""
+        import db as _db
+        _db.init_db()
+        counts = {
+            "events": _db.cm_count("evidence_events"),
+            "cards": _db.cm_count("judgment_cards"),
+            "traits": _db.cm_count("cognitive_traits"),
+        }
+        if stage_num == 2:
+            counts["shown"] = min(counts["events"], 120)
+            counts["total"] = counts["events"]
+            counts["truncated"] = counts["events"] > 120
+        elif stage_num == 3:
+            counts["shown"] = min(counts["cards"], 120)
+            counts["total"] = counts["cards"]
+            counts["truncated"] = counts["cards"] > 120
+        else:
+            counts["shown"] = counts.get("events", 0)
+            counts["total"] = counts.get("events", 0)
+            counts["truncated"] = False
+        return counts
+
+    def _persist_twin_stage(self, run_id: str, stage_num: int, status: str,
+                            elapsed: float = 0, last_error: str = "",
+                            finished: bool = False):
+        """Persist and emit a stage card update."""
+        import db as _db
+        counts = self._stage_counts(stage_num)
+        meta = {
+            str(stage_num): {
+                "stage": stage_num,
+                "status": status,
+                "elapsed_seconds": round(elapsed, 1),
+                "counts": counts,
+                "truncated": bool(counts.get("truncated")),
+                "last_error": last_error,
+            }
+        }
+        if status in ("timeout", "error", "cancelled"):
+            run_status = status
+        elif finished and status == "done":
+            run_status = "done"
+        else:
+            run_status = "running"
+        _db.twin_run_update_stage(
+            run_id,
+            current_stage=stage_num,
+            status=run_status,
+            stage_meta=meta,
+            last_error=last_error,
+            finished=finished,
+        )
+        self._sse_event({
+            "type": "stage_update",
+            "run_id": run_id,
+            "stage": f"Stage {stage_num}",
+            "stage_num": stage_num,
+            **meta[str(stage_num)],
+        })
+
+    def _run_twin_ai_stage(self, prompt: str, stage_label: str, run_id: str,
+                           stage_num: int, engine: str = "auto") -> bool:
         """Stream a Twin AI stage and stop on either exception or SSE error event."""
+        import db as _db
         started = time.time()
         self._set_twin_run_state(stage=stage_label, status="running", process=None)
-        self._sse_event({"type": "stage_start", "stage": stage_label, "run_id": run_id})
+        self._persist_twin_stage(run_id, stage_num, "running", 0)
+        self._sse_event({"type": "stage_start", "stage": stage_label, "stage_num": stage_num, "run_id": run_id})
 
         def _set_proc(proc):
             self._set_twin_run_state(process=proc)
@@ -2974,39 +3075,51 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 prompt,
                 allow_write=True,
                 timeout=600,
+                engine_override=engine,
                 proc_callback=_set_proc,
                 cancel_callback=_cancelled,
             ):
                 if evt.get("type") == "error":
                     evt = dict(evt)
                     evt["stage"] = stage_label
+                    evt["stage_num"] = stage_num
                     evt["elapsed_seconds"] = round(time.time() - started, 1)
                     if evt.get("message") == "Timeout":
                         evt["message"] = f"{stage_label} timed out after 600s"
+                        status = "timeout"
+                    else:
+                        status = "error"
+                    self._persist_twin_stage(run_id, stage_num, status, evt["elapsed_seconds"], evt.get("message", ""))
                 if evt.get("type") == "cancelled":
                     evt = dict(evt)
                     evt["stage"] = stage_label
+                    evt["stage_num"] = stage_num
                     evt["run_id"] = run_id
                     evt["elapsed_seconds"] = round(time.time() - started, 1)
                     self._set_twin_run_state(status="cancelled", process=None)
+                    self._persist_twin_stage(run_id, stage_num, "cancelled", evt["elapsed_seconds"], "Cancelled by user", finished=True)
                 self._sse_event(evt)
                 if evt.get("type") == "cancelled":
                     return False
                 if evt.get("type") == "error":
-                    self._set_twin_run_state(status="error", process=None)
+                    self._set_twin_run_state(status=status, process=None)
                     return False
             self._set_twin_run_state(status="stage_done", process=None)
+            elapsed = round(time.time() - started, 1)
+            self._persist_twin_stage(run_id, stage_num, "done", elapsed)
             self._sse_event({
                 "type": "stage_done",
                 "stage": stage_label,
+                "stage_num": stage_num,
                 "run_id": run_id,
-                "elapsed_seconds": round(time.time() - started, 1),
+                "elapsed_seconds": elapsed,
             })
             return True
         except BrokenPipeError:
             raise
         except Exception as e:
             self._set_twin_run_state(status="error", process=None)
+            self._persist_twin_stage(run_id, stage_num, "error", round(time.time() - started, 1), str(e))
             self._sse_event({"type": "error", "message": f"{stage_label} failed: {e}"})
             return False
         finally:
@@ -3014,8 +3127,6 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 
     def _handle_twin_analyze(self):
         """POST /api/twin/analyze — run 4-stage cognitive handbook extraction via AI."""
-        import db as _db
-        cli_path = str(Path(__file__).resolve().parent / "analyze.py")
         try:
             raw_body = self._read_post_body()
             data = json.loads(raw_body) if raw_body else {}
@@ -3028,6 +3139,47 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         date = scope.get("date") or data.get("date") or "7d"
         project = scope.get("project") or data.get("project") or ""
         engine = scope.get("engine") or data.get("engine") or "auto"
+        self._run_twin_pipeline(
+            {"source": source, "date": date, "project": project, "engine": engine},
+            start_stage=1,
+        )
+
+    def _handle_twin_resume(self):
+        """POST /api/twin/resume — resume a previous Twin run from a selected stage."""
+        import db as _db
+        try:
+            raw_body = self._read_post_body()
+            data = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            self._error(400, "Invalid JSON")
+            return
+
+        run = _db.twin_run_get(data.get("run_id", "")) if data.get("run_id") else _db.twin_run_latest()
+        if not run:
+            self._error(404, "No Twin run found to resume")
+            return
+        try:
+            start_stage = int(data.get("from_stage") or run.get("current_stage") or 1)
+        except (TypeError, ValueError):
+            start_stage = int(run.get("current_stage") or 1)
+        start_stage = max(1, min(4, start_stage))
+        scope = data.get("scope") or run.get("scope") or {}
+        self._run_twin_pipeline(scope, start_stage=start_stage, run_id=run["run_id"], resume=True)
+
+    def _run_twin_pipeline(self, scope: dict, start_stage: int = 1,
+                           run_id: str = "", resume: bool = False):
+        """Shared Twin analyze/resume implementation."""
+        import db as _db
+        cli_path = str(Path(__file__).resolve().parent / "analyze.py")
+        source = scope.get("source") or "all"
+        date = scope.get("date") or "7d"
+        project = scope.get("project") or ""
+        try:
+            engine = _normalize_ai_engine(scope.get("engine") or "auto")
+        except ValueError as e:
+            self._start_sse()
+            self._sse_event({"type": "error", "message": str(e)})
+            return
 
         self._start_sse()
         if not _twin_analyze_lock.acquire(blocking=False):
@@ -3037,11 +3189,13 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             })
             return
 
-        run_id = "twrun_" + uuid.uuid4().hex[:10]
+        run_id = run_id or ("twrun_" + uuid.uuid4().hex[:10])
+        _db.twin_run_upsert(run_id, scope, start_stage=start_stage,
+                            current_stage=start_stage, status="running")
         self._set_twin_run_state(
             run_id=run_id,
             status="running",
-            stage="starting",
+            stage=f"Stage {start_stage}",
             started_at=time.time(),
             updated_at=time.time(),
             cancel_requested=False,
@@ -3049,61 +3203,69 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         )
 
         try:
-            self._sse_event({"type": "run_started", "run_id": run_id})
-            # Stage 1: Evidence event extraction
-            self._sse_event({"type": "text", "content": (
-                "Stage 1/4: 从对话历史中提取决策事件 (Evidence Events)...\n"
-                f"Scope: source={source}, date={date}, project={project or 'all'}, engine={engine}\n"
-            )})
+            self._sse_event({"type": "run_started", "run_id": run_id, "scope": scope,
+                             "start_stage": start_stage, "resume": resume})
 
-            stage1_prompt = self._build_twin_stage1_prompt(cli_path, source, date, project, engine)
-            if not self._run_twin_ai_stage(stage1_prompt, "Stage 1", run_id):
-                return
+            if start_stage <= 1:
+                self._sse_event({"type": "text", "content": (
+                    "Stage 1/4: 从对话历史中提取决策事件 (Evidence Events)...\n"
+                    f"Scope: source={source}, date={date}, project={project or 'all'}, engine={engine}\n"
+                )})
+                stage1_prompt = self._build_twin_stage1_prompt(cli_path, source, date, project, engine)
+                if not self._run_twin_ai_stage(stage1_prompt, "Stage 1", run_id, 1, engine):
+                    return
 
-            # Stage 2: Judgment card distillation
-            self._sse_event({"type": "text", "content": "\n\nStage 2/4: 从事件中蒸馏判断卡 (Judgment Cards)...\n"})
+            if start_stage <= 2:
+                self._sse_event({"type": "text", "content": "\n\nStage 2/4: 从事件中蒸馏判断卡 (Judgment Cards)...\n"})
+                stage2_prompt = self._build_twin_stage2_prompt(cli_path)
+                if not self._run_twin_ai_stage(stage2_prompt, "Stage 2", run_id, 2, engine):
+                    return
 
-            stage2_prompt = self._build_twin_stage2_prompt(cli_path)
-            if not self._run_twin_ai_stage(stage2_prompt, "Stage 2", run_id):
-                return
+            if start_stage <= 3:
+                self._sse_event({"type": "text", "content": "\n\nStage 3/4: 从判断卡归纳认知特质 (Cognitive Traits)...\n"})
+                stage3_prompt = self._build_twin_stage3_prompt(cli_path)
+                if not self._run_twin_ai_stage(stage3_prompt, "Stage 3", run_id, 3, engine):
+                    return
 
-            # Stage 3: Cognitive trait inference
-            self._sse_event({"type": "text", "content": "\n\nStage 3/4: 从判断卡归纳认知特质 (Cognitive Traits)...\n"})
+            if start_stage <= 4:
+                started = time.time()
+                self._sse_event({"type": "text", "content": "\n\nStage 4/4: 编译 Runtime Pack (twin-compile)...\n"})
+                self._persist_twin_stage(run_id, 4, "running", 0)
+                r = subprocess.run(
+                    [sys.executable, cli_path, "twin-compile"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                elapsed = round(time.time() - started, 1)
+                self._sse_event({"type": "text", "content": r.stdout or "(no output)"})
+                if r.returncode != 0:
+                    msg = (r.stderr or r.stdout or "unknown error")[:500]
+                    self._persist_twin_stage(run_id, 4, "error", elapsed, msg)
+                    self._sse_event({"type": "error", "message": f"Stage 4 failed: {msg}", "stage_num": 4})
+                    return
+                self._persist_twin_stage(run_id, 4, "done", elapsed)
 
-            stage3_prompt = self._build_twin_stage3_prompt(cli_path)
-            if not self._run_twin_ai_stage(stage3_prompt, "Stage 3", run_id):
-                return
-
-            # Stage 4: Compile Runtime Pack (pure Python, no AI)
-            self._sse_event({"type": "text", "content": "\n\nStage 4/4: 编译 Runtime Pack (twin-compile)...\n"})
-            r = subprocess.run(
-                [sys.executable, cli_path, "twin-compile"],
-                capture_output=True, text=True, timeout=30,
-            )
-            self._sse_event({"type": "text", "content": r.stdout or "(no output)"})
-            if r.returncode != 0:
-                msg = (r.stderr or r.stdout or "unknown error")[:500]
-                self._sse_event({"type": "error", "message": f"Stage 4 failed: {msg}"})
-                return
-
-            # Summary
             _db.init_db()
             stats = _db.get_twin_stats()
             summary_parts = []
             for t in ["evidence_events", "judgment_cards", "cognitive_traits"]:
                 count = stats.get(t, {}).get("count", 0)
                 if count > 0:
-                    label = t.replace("_", " ")
-                    summary_parts.append(f"{label}: {count}")
+                    summary_parts.append(f"{t.replace('_', ' ')}: {count}")
 
             summary = ", ".join(summary_parts) if summary_parts else "暂无数据"
             self._set_twin_run_state(status="done", stage="done", process=None)
+            _db.twin_run_update_stage(run_id, current_stage=4, status="done",
+                                      last_error="", finished=True)
             self._sse_event({"type": "text", "content": f"\n\n✅ 分析完成 — {summary}"})
             self._sse_event({"type": "done", "content": summary, "run_id": run_id})
         except BrokenPipeError:
             pass
         except Exception as e:
             self._set_twin_run_state(status="error", process=None)
+            try:
+                _db.twin_run_update_stage(run_id, status="error", last_error=str(e), finished=True)
+            except Exception:
+                pass
             self._sse_event({"type": "error", "message": f"Twin analysis failed: {e}"})
         finally:
             state = self._get_twin_run_state()

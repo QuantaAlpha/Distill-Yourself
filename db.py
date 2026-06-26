@@ -213,6 +213,22 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_traits_category ON cognitive_traits(category);
         CREATE INDEX IF NOT EXISTS idx_traits_status ON cognitive_traits(status);
+
+        -- Twin analysis run checkpoints for interactive timeout recovery.
+        CREATE TABLE IF NOT EXISTS twin_runs (
+            run_id          TEXT PRIMARY KEY,
+            scope_json      TEXT,
+            start_stage     INTEGER DEFAULT 1,
+            current_stage   INTEGER DEFAULT 1,
+            status          TEXT,
+            stage_meta_json TEXT,
+            last_error      TEXT,
+            started_at      TEXT,
+            updated_at      TEXT,
+            finished_at     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_twin_runs_updated ON twin_runs(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_twin_runs_status ON twin_runs(status);
     """)
     conn.commit()
 
@@ -741,6 +757,117 @@ def cm_get_card_relations(card_id: str) -> list:
         (card_id, card_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Twin run checkpoints
+# ---------------------------------------------------------------------------
+def twin_run_upsert(run_id: str, scope: dict, start_stage: int = 1,
+                    current_stage: int = 1, status: str = "running",
+                    stage_meta: Optional[dict] = None, last_error: str = "",
+                    finished_at: str = ""):
+    """Insert or update a Twin analysis run checkpoint."""
+    conn = get_conn()
+    now = _utc_now().isoformat()
+    existing = conn.execute(
+        "SELECT started_at, stage_meta_json FROM twin_runs WHERE run_id=?",
+        (run_id,),
+    ).fetchone()
+    started_at = existing["started_at"] if existing else now
+    if stage_meta is None and existing:
+        stage_meta_json = existing["stage_meta_json"] or "{}"
+    else:
+        stage_meta_json = json.dumps(stage_meta or {}, ensure_ascii=False)
+    conn.execute(
+        """INSERT INTO twin_runs
+           (run_id, scope_json, start_stage, current_stage, status, stage_meta_json,
+            last_error, started_at, updated_at, finished_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(run_id) DO UPDATE SET
+             scope_json=excluded.scope_json,
+             start_stage=excluded.start_stage,
+             current_stage=excluded.current_stage,
+             status=excluded.status,
+             stage_meta_json=excluded.stage_meta_json,
+             last_error=excluded.last_error,
+             updated_at=excluded.updated_at,
+             finished_at=excluded.finished_at""",
+        (
+            run_id,
+            json.dumps(scope or {}, ensure_ascii=False),
+            int(start_stage),
+            int(current_stage),
+            status,
+            stage_meta_json,
+            last_error or "",
+            started_at,
+            now,
+            finished_at or "",
+        ),
+    )
+    conn.commit()
+
+
+def twin_run_update_stage(run_id: str, current_stage: int = None,
+                          status: str = None, stage_meta: Optional[dict] = None,
+                          last_error: str = None, finished: bool = False):
+    """Update mutable Twin run fields."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM twin_runs WHERE run_id=?", (run_id,)).fetchone()
+    if not row:
+        raise ValueError(f"Twin run not found: {run_id}")
+    meta = {}
+    if row["stage_meta_json"]:
+        try:
+            meta = json.loads(row["stage_meta_json"])
+        except Exception:
+            meta = {}
+    if stage_meta:
+        meta.update(stage_meta)
+    now = _utc_now().isoformat()
+    conn.execute(
+        """UPDATE twin_runs
+           SET current_stage=?, status=?, stage_meta_json=?, last_error=?,
+               updated_at=?, finished_at=?
+           WHERE run_id=?""",
+        (
+            int(current_stage if current_stage is not None else row["current_stage"]),
+            status if status is not None else row["status"],
+            json.dumps(meta, ensure_ascii=False),
+            last_error if last_error is not None else row["last_error"],
+            now,
+            now if finished else row["finished_at"],
+            run_id,
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_twin_run(row) -> Optional[dict]:
+    if not row:
+        return None
+    out = dict(row)
+    try:
+        out["scope"] = json.loads(out.pop("scope_json") or "{}")
+    except Exception:
+        out["scope"] = {}
+    try:
+        out["stage_meta"] = json.loads(out.pop("stage_meta_json") or "{}")
+    except Exception:
+        out["stage_meta"] = {}
+    return out
+
+
+def twin_run_get(run_id: str) -> Optional[dict]:
+    """Return one persisted Twin run."""
+    conn = get_conn()
+    return _row_to_twin_run(conn.execute("SELECT * FROM twin_runs WHERE run_id=?", (run_id,)).fetchone())
+
+
+def twin_run_latest() -> Optional[dict]:
+    """Return the most recently updated Twin run."""
+    conn = get_conn()
+    return _row_to_twin_run(conn.execute("SELECT * FROM twin_runs ORDER BY updated_at DESC LIMIT 1").fetchone())
 
 
 def get_twin_stats() -> dict:

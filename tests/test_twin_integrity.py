@@ -134,6 +134,41 @@ class TwinIntegrityTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("lesson", result["results"][0]["missing"])
 
+    def test_twin_run_persists_stage_metadata_and_latest(self):
+        db.twin_run_upsert(
+            "run_a",
+            {"source": "codex", "date": "7d", "project": "Demo"},
+            start_stage=1,
+            current_stage=1,
+            status="running",
+            stage_meta={"1": {"status": "running"}},
+        )
+        db.twin_run_update_stage(
+            "run_a",
+            current_stage=2,
+            status="timeout",
+            stage_meta={"1": {"status": "done", "elapsed_seconds": 2.5}},
+            last_error="Stage 2 timed out",
+        )
+
+        run = db.twin_run_get("run_a")
+        self.assertEqual(run["status"], "timeout")
+        self.assertEqual(run["current_stage"], 2)
+        self.assertEqual(run["scope"]["project"], "Demo")
+        self.assertEqual(run["stage_meta"]["1"]["status"], "done")
+        self.assertEqual(run["last_error"], "Stage 2 timed out")
+        self.assertEqual(db.twin_run_latest()["run_id"], "run_a")
+
+        db.twin_run_upsert(
+            "run_a",
+            {"source": "codex", "date": "7d", "project": "Demo"},
+            start_stage=2,
+            current_stage=2,
+            status="running",
+        )
+        resumed = db.twin_run_get("run_a")
+        self.assertEqual(resumed["stage_meta"]["1"]["status"], "done")
+
 
 if __name__ == "__main__":
     unittest.main()

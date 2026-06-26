@@ -26,8 +26,17 @@
   let overviewData = null;
   let analysisAbort = null;
   let analysisRunning = false;
+  let latestTwinRun = null;
+  let stageCards = {};
   let eventsInited = false;
   let currentView = "overview"; // "overview" | "cards" | "card-detail" | "traits" | "trait-detail" | "analyzing"
+
+  const STAGES = [
+    { num: 1, label: "Evidence Events", icon: "L1" },
+    { num: 2, label: "Judgment Cards", icon: "L2" },
+    { num: 3, label: "Cognitive Traits", icon: "L3" },
+    { num: 4, label: "Runtime Pack", icon: "L4" },
+  ];
 
   // ── Init ──
   window.initTwinView = function () {
@@ -112,6 +121,7 @@
       })
       .then((data) => {
         overviewData = data;
+        latestTwinRun = data.latest_run || null;
         renderOverview(data);
       })
       .catch((e) => renderOverviewError(e));
@@ -137,6 +147,37 @@
     if (conf == null) return "var(--text-muted)";
     const h = Math.round(conf * 120); // 0=red, 60=yellow, 120=green
     return `hsl(${h}, 70%, 45%)`;
+  }
+
+  function _isRecoverableRun(run) {
+    return run && ["timeout", "error", "cancelled"].includes(run.status);
+  }
+
+  function _latestRunRecoveryHtml(run) {
+    if (!_isRecoverableRun(run)) return "";
+    const stage = Math.max(1, Math.min(4, Number(run.current_stage || 1)));
+    const error = run.last_error ? `<span class="twin-run-error">${esc(run.last_error)}</span>` : "";
+    return `<div class="twin-run-recovery">
+      <div>
+        <strong>上次 Distill 在 Stage ${stage} 中断</strong>
+        <span>${esc(run.status || "failed")}${run.updated_at ? ` · ${esc(run.updated_at)}` : ""}</span>
+        ${error}
+      </div>
+      <div class="twin-run-actions">
+        <button class="btn-text" data-twin-resume="${stage}">继续</button>
+        <button class="btn-text" data-twin-restart="1">重新开始</button>
+      </div>
+    </div>`;
+  }
+
+  function _bindLatestRunActions(root) {
+    if (!root || !latestTwinRun) return;
+    root.querySelectorAll("[data-twin-resume]").forEach(btn => {
+      btn.onclick = () => resumeAnalysis(Number(btn.dataset.twinResume || latestTwinRun.current_stage || 1), latestTwinRun.run_id, latestTwinRun.scope || {});
+    });
+    root.querySelectorAll("[data-twin-restart]").forEach(btn => {
+      btn.onclick = () => startAnalysis(true);
+    });
   }
 
   function renderOverview(data) {
@@ -166,7 +207,8 @@
     if (updatedEl) updatedEl.textContent = `${evtCount + cardCount + traitCount} 条认知记录`;
 
     // ─── Pipeline Header ───
-    let html = `<div class="twin-pipeline-header">
+    let html = _latestRunRecoveryHtml(latestTwinRun);
+    html += `<div class="twin-pipeline-header">
       <span class="twin-ph-node" data-layer="events">📝 ${evtCount} 事件</span>
       <span class="twin-ph-arrow">→</span>
       <span class="twin-ph-node" data-layer="cards">🃏 ${cardCount} 判断卡</span>
@@ -349,6 +391,7 @@
     container.querySelectorAll(".twin-trait-col").forEach(el => {
       el.onclick = (e) => { e.stopPropagation(); loadTraits(el.dataset.category); };
     });
+    _bindLatestRunActions(container);
   }
 
   function renderOverviewEmpty() {
@@ -356,13 +399,14 @@
     if (!container) return;
     const bar = document.getElementById("twin-stats-bar");
     if (bar) bar.innerHTML = "";
-    container.innerHTML = `<div class="twin-empty-state">
+    container.innerHTML = `${_latestRunRecoveryHtml(latestTwinRun)}<div class="twin-empty-state">
       <p>🧠 Distill Yourself (Cognitive Handbook)</p>
       <p>点击 <b>Analyze</b> 开始从对话历史中提取认知模型</p>
       <p style="color:var(--text-muted);font-size:0.85em;margin-top:12px">
         4 阶段流水线：事件提取 → 判断卡蒸馏 → 认知特质归纳 → Runtime 编译
       </p>
     </div>`;
+    _bindLatestRunActions(container);
   }
 
   // ── Events List View ──
@@ -683,34 +727,170 @@
   // ── Analysis (SSE streaming with rich UI — mirrors evolve.js) ──
   // ══════════════════════════════════════════════════════════════════
 
-  function startAnalysis() {
+  function _resetStageCards(startStage, existingMeta) {
+    const meta = existingMeta || {};
+    stageCards = {};
+    for (const stage of STAGES) {
+      const saved = meta[String(stage.num)] || {};
+      stageCards[stage.num] = {
+        stage: stage.num,
+        status: stage.num < startStage ? (saved.status || "done") : (saved.status || "pending"),
+        elapsed_seconds: saved.elapsed_seconds || 0,
+        counts: saved.counts || {},
+        truncated: Boolean(saved.truncated),
+        last_error: saved.last_error || "",
+      };
+    }
+  }
+
+  function _formatStageCounts(counts) {
+    if (!counts) return "counts: 0";
+    const parts = [];
+    if (counts.events != null) parts.push(`${counts.events} events`);
+    if (counts.cards != null) parts.push(`${counts.cards} cards`);
+    if (counts.traits != null) parts.push(`${counts.traits} traits`);
+    if (counts.total != null && counts.shown != null && counts.total !== counts.shown) {
+      parts.push(`${counts.shown}/${counts.total} shown`);
+    }
+    return parts.length ? parts.join(" · ") : "counts: 0";
+  }
+
+  function _renderStageCards() {
+    const container = document.getElementById("twin-stage-progress");
+    if (!container) return;
+    container.innerHTML = STAGES.map(stage => {
+      const card = stageCards[stage.num] || {};
+      const status = card.status || "pending";
+      const elapsed = card.elapsed_seconds ? `${card.elapsed_seconds}s` : "0s";
+      const truncated = card.truncated ? `<span class="twin-stage-meta-warn">truncated</span>` : "";
+      const error = card.last_error ? `<div class="twin-stage-last-error">${esc(card.last_error)}</div>` : "";
+      return `<div class="twin-run-stage-card ${esc(status)}">
+        <div class="twin-run-stage-top">
+          <span class="twin-run-stage-icon">${stage.icon}</span>
+          <span class="twin-run-stage-title">${esc(stage.label)}</span>
+          <span class="twin-run-stage-status">${esc(status)}</span>
+        </div>
+        <div class="twin-run-stage-meta">
+          <span>elapsed ${esc(elapsed)}</span>
+          <span>${esc(_formatStageCounts(card.counts))}</span>
+          ${truncated}
+        </div>
+        ${error}
+      </div>`;
+    }).join("");
+  }
+
+  function _updateStageCard(evt) {
+    const stageNum = Number(evt.stage_num || evt.stage || 0);
+    if (!stageNum) return;
+    stageCards[stageNum] = {
+      stage: stageNum,
+      status: evt.status || stageCards[stageNum]?.status || "running",
+      elapsed_seconds: evt.elapsed_seconds || 0,
+      counts: evt.counts || stageCards[stageNum]?.counts || {},
+      truncated: Boolean(evt.truncated),
+      last_error: evt.last_error || "",
+    };
+    _renderStageCards();
+  }
+
+  function _renderRecoveryActions(evt, state) {
+    const container = document.getElementById("twin-stream-output");
+    if (!container) return;
+    const existing = container.querySelector(".twin-recovery-actions");
+    if (existing) existing.remove();
+    const fromStage = Math.max(1, Math.min(4, Number(evt.stage_num || state.currentStage || 1)));
+    const runId = evt.run_id || state.runId || "";
+    const div = document.createElement("div");
+    div.className = "twin-recovery-actions";
+    div.innerHTML = `<div class="twin-recovery-copy">
+      <strong>流程已中断，可从 Stage ${fromStage} 继续</strong>
+      <span>继续会复用同一个 run 和 scope；重新开始会创建新的完整 Distill。</span>
+    </div>
+    <button class="btn-text" data-action="resume">继续</button>
+    <button class="btn-text" data-action="restart">重新开始</button>
+    <button class="btn-text" data-action="cancel">取消</button>`;
+    const resumeBtn = div.querySelector('[data-action="resume"]');
+    const restartBtn = div.querySelector('[data-action="restart"]');
+    const cancelBtn = div.querySelector('[data-action="cancel"]');
+    if (resumeBtn) resumeBtn.onclick = () => {
+      analysisRunning = false;
+      if (analysisAbort) {
+        try { analysisAbort.abort(); } catch (e) { /* ignore */ }
+      }
+      resumeAnalysis(fromStage, runId, state.scope || {});
+    };
+    if (restartBtn) restartBtn.onclick = () => {
+      analysisRunning = false;
+      if (analysisAbort) {
+        try { analysisAbort.abort(); } catch (e) { /* ignore */ }
+      }
+      startAnalysis(true);
+    };
+    if (cancelBtn) cancelBtn.onclick = cancelAnalysis;
+    container.appendChild(div);
+  }
+
+  function startAnalysis(forceRestart) {
     if (analysisRunning) return; // prevent double-start
+    const scope = typeof window.getEvolveScope === "function" ? window.getEvolveScope() : {};
+    _beginAnalysisStream("/api/twin/analyze", { scope, restart: Boolean(forceRestart) }, {
+      startStage: 1,
+      scope,
+      resume: false,
+    });
+  }
+
+  function resumeAnalysis(fromStage, runId, scope) {
+    if (analysisRunning) return;
+    const resumeScope = scope && Object.keys(scope).length
+      ? scope
+      : (typeof window.getEvolveScope === "function" ? window.getEvolveScope() : {});
+    _beginAnalysisStream("/api/twin/resume", {
+      run_id: runId,
+      from_stage: fromStage,
+      scope: resumeScope,
+    }, {
+      startStage: fromStage,
+      scope: resumeScope,
+      resume: true,
+      runId,
+      stageMeta: latestTwinRun ? latestTwinRun.stage_meta : {},
+    });
+  }
+
+  function _beginAnalysisStream(endpoint, payload, options) {
     analysisRunning = true;
     _updateAnalyzeButton();
+    _resetStageCards(options.startStage || 1, options.stageMeta || {});
 
     const updatedEl = document.getElementById("twin-last-analyzed");
-    if (updatedEl) { updatedEl.textContent = "AI 启动中…"; }
+    if (updatedEl) { updatedEl.textContent = options.resume ? "准备继续分析…" : "AI 启动中…"; }
 
     // Switch to analysis view
     currentView = "analyzing";
     _showOnlyView("analysis");
-    setBreadcrumb([{ label: "分析中…" }]);
+    setBreadcrumb([{ label: options.resume ? "继续分析中…" : "分析中…" }]);
 
     const progress = show("twin-analysis-progress");
     if (progress) {
-      progress.innerHTML = `<div class="twin-stream-actions"><button class="btn-text" id="twin-cancel-analysis">取消分析</button></div><div class="twin-stream-container" id="twin-stream-output">
+      progress.innerHTML = `<div id="twin-stage-progress" class="twin-stage-progress"></div><div class="twin-stream-actions"><button class="btn-text" id="twin-cancel-analysis">取消分析</button></div><div class="twin-stream-container" id="twin-stream-output">
         <div class="evolve-thinking">
           <span class="evolve-thinking-dot"></span>
           <span class="evolve-thinking-dot"></span>
           <span class="evolve-thinking-dot"></span>
-          <span class="evolve-thinking-label">AI 启动中…</span>
+          <span class="evolve-thinking-label">${options.resume ? "恢复中…" : "AI 启动中…"}</span>
         </div>
       </div>`;
       const cancelBtn = document.getElementById("twin-cancel-analysis");
       if (cancelBtn) cancelBtn.onclick = cancelAnalysis;
+      _renderStageCards();
     }
 
     const streamState = {
+      runId: options.runId || "",
+      scope: options.scope || {},
+      currentStage: options.startStage || 1,
       blockText: "",
       textBlock: null,
       runningCards: [],
@@ -728,11 +908,10 @@
     const abortCtrl = new AbortController();
     analysisAbort = abortCtrl;
 
-    const scope = typeof window.getEvolveScope === "function" ? window.getEvolveScope() : {};
-    fetch("/api/twin/analyze", {
+    fetch(endpoint, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ scope }),
+      body: JSON.stringify(payload),
       signal: abortCtrl.signal,
     })
       .then((response) => {
@@ -785,6 +964,7 @@
           errDiv.className = "twin-stream-error";
           errDiv.textContent = `❌ ${String(e)}`;
           container.appendChild(errDiv);
+          _renderRecoveryActions({ stage_num: streamState.currentStage, run_id: streamState.runId }, streamState);
         }
         _finishAnalysis(streamState, true);
       })
@@ -833,6 +1013,40 @@
     if (!container) return;
 
     switch (evt.type) {
+      case "run_started":
+        state.runId = evt.run_id || state.runId;
+        state.scope = evt.scope || state.scope;
+        state.currentStage = evt.start_stage || state.currentStage;
+        latestTwinRun = { run_id: state.runId, scope: state.scope, current_stage: state.currentStage, status: "running" };
+        break;
+
+      case "stage_start":
+        state.runId = evt.run_id || state.runId;
+        state.currentStage = evt.stage_num || state.currentStage;
+        _updateStageCard({
+          stage_num: state.currentStage,
+          status: "running",
+          elapsed_seconds: 0,
+        });
+        if (updatedEl) updatedEl.textContent = `${evt.stage || "Stage"} 执行中…`;
+        break;
+
+      case "stage_update":
+        state.runId = evt.run_id || state.runId;
+        state.currentStage = evt.stage_num || state.currentStage;
+        _updateStageCard(evt);
+        break;
+
+      case "stage_done":
+        state.runId = evt.run_id || state.runId;
+        state.currentStage = evt.stage_num || state.currentStage;
+        _updateStageCard({
+          ...evt,
+          status: "done",
+          counts: stageCards[state.currentStage]?.counts || {},
+        });
+        break;
+
       case "tool": {
         if (evt.status === "running") {
           state.textBlock = null;
@@ -927,6 +1141,8 @@
       }
       case "cancelled": {
         state.failed = true;
+        state.runId = evt.run_id || state.runId;
+        state.currentStage = evt.stage_num || state.currentStage;
         _finalizeToolGroup(state);
         _hideThinking(container);
         const div = document.createElement("div");
@@ -934,6 +1150,7 @@
         div.textContent = `已取消：${evt.message || ""}`;
         container.appendChild(div);
         if (updatedEl) updatedEl.textContent = "已取消";
+        _renderRecoveryActions(evt, state);
         break;
       }
 
@@ -968,6 +1185,7 @@
         break;
 
       case "done":
+        state.runId = evt.run_id || state.runId;
         _finalizeToolGroup(state);
         _hideThinking(container);
         if (updatedEl) {
@@ -978,6 +1196,8 @@
 
       case "error":
         state.failed = true;
+        state.runId = evt.run_id || state.runId;
+        state.currentStage = evt.stage_num || state.currentStage;
         _finalizeToolGroup(state);
         _hideThinking(container);
         const errDiv = document.createElement("div");
@@ -988,6 +1208,7 @@
           updatedEl.textContent = `Error: ${evt.message || ""}`;
           updatedEl.classList.remove("loading");
         }
+        _renderRecoveryActions(evt, state);
         _autoScroll();
         break;
     }

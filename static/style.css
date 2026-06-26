@@ -2030,6 +2030,30 @@ body {
 
 /* Twin analysis stream (rich — reuses evolve tool-card/tool-group styles) */
 #twin-analysis-progress { padding: 0; }
+.twin-run-recovery, .twin-recovery-actions {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  margin-bottom: 12px; padding: 12px 14px; border: 1px solid #f59e0b;
+  border-radius: var(--radius); background: color-mix(in srgb, #f59e0b 10%, var(--bg-surface));
+}
+.twin-run-recovery strong, .twin-recovery-actions strong { display: block; font-size: 13px; color: var(--text); }
+.twin-run-recovery span, .twin-recovery-actions span { display: block; margin-top: 3px; font-size: 12px; color: var(--text-muted); }
+.twin-run-error { color: #ef4444 !important; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.twin-run-actions, .twin-recovery-actions { flex-wrap: wrap; }
+.twin-stage-progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.twin-run-stage-card {
+  border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+  background: var(--bg-surface); padding: 10px; min-width: 0;
+}
+.twin-run-stage-card.running { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent); }
+.twin-run-stage-card.done { border-color: #22c55e; }
+.twin-run-stage-card.error, .twin-run-stage-card.timeout, .twin-run-stage-card.cancelled { border-color: #ef4444; }
+.twin-run-stage-top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.twin-run-stage-icon { font-size: 11px; font-weight: 700; color: var(--accent); }
+.twin-run-stage-title { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.twin-run-stage-status { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+.twin-run-stage-meta { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text-muted); }
+.twin-stage-meta-warn { color: #f59e0b !important; }
+.twin-stage-last-error { margin-top: 6px; font-size: 11px; color: #ef4444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .twin-stream-container { padding: 8px 0; }
 .twin-stream-container .text-block { padding: 8px 4px; font-size: 13px; line-height: 1.6; color: var(--text); }
 .twin-stream-container .text-block pre { white-space: pre-wrap; font-size: 12px; color: var(--text-muted); margin: 0; }
