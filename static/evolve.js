@@ -284,7 +284,9 @@
     // Ensure tab panel exists and set up streaming container inside it
     const panel = _ensureTabPanel(tab);
     if (panel) {
-      panel.innerHTML = `<div class="evolve-stream-progress" id="evolve-stream-${tab}"><div class="evolve-thinking"><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">AI 启动中…</span></div></div>`;
+      panel.innerHTML = `<div class="evolve-stream-actions"><button class="btn-text" data-evolve-cancel="${tab}">取消分析</button></div><div class="evolve-stream-progress" id="evolve-stream-${tab}"><div class="evolve-thinking"><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">AI 启动中…</span></div></div>`;
+      const cancelBtn = panel.querySelector(`[data-evolve-cancel="${tab}"]`);
+      if (cancelBtn) cancelBtn.onclick = () => abortEvolveStream(tab, "用户已取消分析");
     }
     if (tab === evolveActiveTab && updatedEl) { updatedEl.textContent = "AI 启动中…"; updatedEl.classList.add("loading"); }
 
@@ -589,7 +591,7 @@
         data.categories.forEach(c => {
           if (!Array.isArray(c.items)) c.items = [];
           if (!Array.isArray(c.tags)) c.tags = [];
-          c.items.forEach(item => { if (typeof item === "string") item = { text: item }; });
+          c.items = c.items.map(item => typeof item === "string" ? { text: item } : item);
         });
         if (!data.radar) data.radar = { dimensions: [] };
         if (!Array.isArray(data.radar.dimensions)) data.radar.dimensions = [];
@@ -843,7 +845,9 @@
     }
 
     if (data.nodes?.length) {
-      drawForceGraph(graphDiv, data.nodes, data.links || [], (nodeId) => {
+      const graphNodes = JSON.parse(JSON.stringify(data.nodes || []));
+      const graphLinks = JSON.parse(JSON.stringify(data.links || []));
+      drawForceGraph(graphDiv, graphNodes, graphLinks, (nodeId) => {
         // Highlight corresponding card
         listDiv.querySelectorAll(".evolve-memory-card").forEach(c => {
           c.classList.toggle("highlighted", c.dataset.id === nodeId);
@@ -1478,12 +1482,23 @@
   // ── Public API for app.js linkage ──
   window.getEvolveScope = getEvolveScope;
 
+  function abortEvolveStream(tab, message) {
+    if (evolveStreamAborts[tab]) {
+      try { evolveStreamAborts[tab].abort(); } catch (e) { /* ignore */ }
+      delete evolveStreamAborts[tab];
+    }
+    delete evolveLoadingTabs[tab];
+    const panel = _ensureTabPanel(tab);
+    if (panel) panel.innerHTML = `<div class="evolve-empty-state"><p>${(window.esc || String)(message || "分析已取消")}</p></div>`;
+    const updatedEl = $("#evolve-tab-updated");
+    if (tab === evolveActiveTab && updatedEl) {
+      updatedEl.textContent = "已取消";
+      updatedEl.classList.remove("loading");
+    }
+  }
+
   window.abortEvolveStreams = function () {
-    Object.values(evolveStreamAborts).forEach(ctrl => {
-      try { ctrl.abort(); } catch (e) { /* ignore */ }
-    });
-    evolveStreamAborts = {};
-    evolveLoadingTabs = {};
+    Object.keys(evolveStreamAborts).forEach(tab => abortEvolveStream(tab, "Scope 已变化，已取消旧分析"));
   };
 
   window.navigateToEvolveTab = function (tab, data) {

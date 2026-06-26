@@ -14,6 +14,7 @@ import time
 import hashlib
 import threading
 import subprocess
+import uuid
 from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
@@ -43,6 +44,16 @@ CODEX_INDEX_FILE = CODEX_DIR / "session_index.jsonl"
 _index = {"projects": {}, "sessions": {}, "_file_mtimes": {}}
 _index_lock = threading.Lock()
 _twin_analyze_lock = threading.Lock()
+_twin_run_lock = threading.Lock()
+_twin_run_state = {
+    "run_id": "",
+    "status": "idle",
+    "stage": "",
+    "started_at": 0,
+    "updated_at": 0,
+    "cancel_requested": False,
+    "process": None,
+}
 _codex_titles = {}  # session_id -> thread_name
 
 # Result cache for heavy endpoints (invalidated on index rebuild)
@@ -1233,7 +1244,8 @@ def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto
     )
 
 
-def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_override="auto"):
+def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_override="auto",
+                          proc_callback=None, cancel_callback=None):
     """Execute prompt via detected AI engine, yielding SSE events as JSONL lines arrive.
 
     Yields dicts: {"type": "tool", "name": ..., "status": ...}
@@ -1273,16 +1285,22 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
                 raise RuntimeError("codex health check failed")
         except (subprocess.TimeoutExpired, RuntimeError, FileNotFoundError, OSError) as e:
             yield {"type": "text", "content": f"Codex unavailable, falling back to Claude...\n"}
-            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout)
+            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout,
+                                                proc_callback=proc_callback,
+                                                cancel_callback=cancel_callback)
             return
         # Codex passed health check — use it
-        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout)
+        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout,
+                                            proc_callback=proc_callback,
+                                            cancel_callback=cancel_callback)
         return
 
-    yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout)
+    yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout,
+                                        proc_callback=proc_callback,
+                                        cancel_callback=cancel_callback)
 
 
-def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
+def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_callback=None, cancel_callback=None):
     """Core streaming loop for a single engine. Yields event dicts."""
     if engine == "codex":
         sandbox = "workspace-write" if allow_write else "read-only"
@@ -1310,11 +1328,18 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
                 pass
         threading.Thread(target=_feed_stdin, daemon=True).start()
 
+    if proc_callback:
+        proc_callback(proc)
+
     accumulated_text = ""
     try:
         import select as _select
         deadline = time.time() + timeout
         while True:
+            if cancel_callback and cancel_callback():
+                proc.kill()
+                yield {"type": "cancelled", "message": "Cancelled by user"}
+                return
             remaining = deadline - time.time()
             if remaining <= 0:
                 proc.kill()
@@ -1906,6 +1931,33 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         )
         cache_path = cache_dir / f"{hashlib.sha256(raw_key.encode('utf-8')).hexdigest()[:16]}.json"
         ttl_seconds = 6 * 3600
+        with _index_lock:
+            sessions = list(_index.get("sessions", {}).values())
+            current_index_gen = _index_gen
+        filtered_dates = []
+        now = datetime.now()
+        days_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
+        max_days = days_map.get(date or "", 99999)
+        for meta in sessions:
+            if source and source != "all" and meta.get("source", "claude") != source:
+                continue
+            if project and project.lower() not in (meta.get("projectName", "") or "").lower():
+                continue
+            date_str = meta.get("date") or ""
+            if date and date != "all" and date_str:
+                try:
+                    d = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                    if (now - d).total_seconds() > max_days * 86400:
+                        continue
+                except Exception:
+                    pass
+            if date_str:
+                filtered_dates.append(date_str)
+        expected_meta = {
+            "index_gen": current_index_gen,
+            "session_count": len(filtered_dates),
+            "latest_session_ts": max(filtered_dates) if filtered_dates else "",
+        }
 
         def _read_cached(allow_stale: bool = False) -> str:
             try:
@@ -1914,7 +1966,8 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 with open(cache_path, "r", encoding="utf-8") as f:
                     payload = json.load(f)
                 age = time.time() - float(payload.get("created_at", 0))
-                if allow_stale or age <= ttl_seconds:
+                meta_matches = payload.get("meta") == expected_meta
+                if allow_stale or (age <= ttl_seconds and meta_matches):
                     return payload.get("digest", "")
             except Exception:
                 return ""
@@ -1936,6 +1989,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                     json.dump({
                         "created_at": time.time(),
                         "scope": {"source": source, "date": date, "project": project},
+                        "meta": expected_meta,
                         "digest": digest,
                     }, f, ensure_ascii=False, indent=2)
                 return digest
@@ -2637,6 +2691,8 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             self._handle_evolve_sync()
         elif parsed.path == "/api/twin/analyze":
             self._handle_twin_analyze()
+        elif parsed.path == "/api/twin/cancel":
+            self._handle_twin_cancel()
         elif parsed.path == "/api/twin/sync":
             self._handle_twin_sync()
         else:
@@ -2878,26 +2934,83 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         result["ok"] = all("error" not in v for v in result.values() if isinstance(v, dict))
         self._json_response(result)
 
-    def _run_twin_ai_stage(self, prompt: str, stage_label: str) -> bool:
+    def _set_twin_run_state(self, **updates):
+        with _twin_run_lock:
+            _twin_run_state.update(updates)
+            _twin_run_state["updated_at"] = time.time()
+
+    def _get_twin_run_state(self) -> dict:
+        with _twin_run_lock:
+            return dict(_twin_run_state)
+
+    def _handle_twin_cancel(self):
+        """POST /api/twin/cancel — request cancellation of active Twin analysis."""
+        with _twin_run_lock:
+            proc = _twin_run_state.get("process")
+            _twin_run_state["cancel_requested"] = True
+            _twin_run_state["updated_at"] = time.time()
+        if proc and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        self._json_response({"ok": True, "status": "cancel_requested"})
+
+    def _run_twin_ai_stage(self, prompt: str, stage_label: str, run_id: str) -> bool:
         """Stream a Twin AI stage and stop on either exception or SSE error event."""
         started = time.time()
+        self._set_twin_run_state(stage=stage_label, status="running", process=None)
+        self._sse_event({"type": "stage_start", "stage": stage_label, "run_id": run_id})
+
+        def _set_proc(proc):
+            self._set_twin_run_state(process=proc)
+
+        def _cancelled():
+            state = self._get_twin_run_state()
+            return state.get("run_id") == run_id and bool(state.get("cancel_requested"))
+
         try:
-            for evt in _run_ai_engine_stream(prompt, allow_write=True, timeout=600):
+            for evt in _run_ai_engine_stream(
+                prompt,
+                allow_write=True,
+                timeout=600,
+                proc_callback=_set_proc,
+                cancel_callback=_cancelled,
+            ):
                 if evt.get("type") == "error":
                     evt = dict(evt)
                     evt["stage"] = stage_label
                     evt["elapsed_seconds"] = round(time.time() - started, 1)
                     if evt.get("message") == "Timeout":
                         evt["message"] = f"{stage_label} timed out after 600s"
+                if evt.get("type") == "cancelled":
+                    evt = dict(evt)
+                    evt["stage"] = stage_label
+                    evt["run_id"] = run_id
+                    evt["elapsed_seconds"] = round(time.time() - started, 1)
+                    self._set_twin_run_state(status="cancelled", process=None)
                 self._sse_event(evt)
-                if evt.get("type") == "error":
+                if evt.get("type") == "cancelled":
                     return False
+                if evt.get("type") == "error":
+                    self._set_twin_run_state(status="error", process=None)
+                    return False
+            self._set_twin_run_state(status="stage_done", process=None)
+            self._sse_event({
+                "type": "stage_done",
+                "stage": stage_label,
+                "run_id": run_id,
+                "elapsed_seconds": round(time.time() - started, 1),
+            })
             return True
         except BrokenPipeError:
             raise
         except Exception as e:
+            self._set_twin_run_state(status="error", process=None)
             self._sse_event({"type": "error", "message": f"{stage_label} failed: {e}"})
             return False
+        finally:
+            self._set_twin_run_state(process=None)
 
     def _handle_twin_analyze(self):
         """POST /api/twin/analyze — run 4-stage cognitive handbook extraction via AI."""
@@ -2924,29 +3037,41 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        run_id = "twrun_" + uuid.uuid4().hex[:10]
+        self._set_twin_run_state(
+            run_id=run_id,
+            status="running",
+            stage="starting",
+            started_at=time.time(),
+            updated_at=time.time(),
+            cancel_requested=False,
+            process=None,
+        )
+
         try:
+            self._sse_event({"type": "run_started", "run_id": run_id})
             # Stage 1: Evidence event extraction
             self._sse_event({"type": "text", "content": (
                 "Stage 1/4: 从对话历史中提取决策事件 (Evidence Events)...\n"
                 f"Scope: source={source}, date={date}, project={project or 'all'}, engine={engine}\n"
             )})
 
-            stage1_prompt = self._build_twin_stage1_prompt(cli_path, source, date, project)
-            if not self._run_twin_ai_stage(stage1_prompt, "Stage 1"):
+            stage1_prompt = self._build_twin_stage1_prompt(cli_path, source, date, project, engine)
+            if not self._run_twin_ai_stage(stage1_prompt, "Stage 1", run_id):
                 return
 
             # Stage 2: Judgment card distillation
             self._sse_event({"type": "text", "content": "\n\nStage 2/4: 从事件中蒸馏判断卡 (Judgment Cards)...\n"})
 
             stage2_prompt = self._build_twin_stage2_prompt(cli_path)
-            if not self._run_twin_ai_stage(stage2_prompt, "Stage 2"):
+            if not self._run_twin_ai_stage(stage2_prompt, "Stage 2", run_id):
                 return
 
             # Stage 3: Cognitive trait inference
             self._sse_event({"type": "text", "content": "\n\nStage 3/4: 从判断卡归纳认知特质 (Cognitive Traits)...\n"})
 
             stage3_prompt = self._build_twin_stage3_prompt(cli_path)
-            if not self._run_twin_ai_stage(stage3_prompt, "Stage 3"):
+            if not self._run_twin_ai_stage(stage3_prompt, "Stage 3", run_id):
                 return
 
             # Stage 4: Compile Runtime Pack (pure Python, no AI)
@@ -2972,21 +3097,31 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                     summary_parts.append(f"{label}: {count}")
 
             summary = ", ".join(summary_parts) if summary_parts else "暂无数据"
+            self._set_twin_run_state(status="done", stage="done", process=None)
             self._sse_event({"type": "text", "content": f"\n\n✅ 分析完成 — {summary}"})
-            self._sse_event({"type": "done", "content": summary})
+            self._sse_event({"type": "done", "content": summary, "run_id": run_id})
         except BrokenPipeError:
             pass
         except Exception as e:
+            self._set_twin_run_state(status="error", process=None)
             self._sse_event({"type": "error", "message": f"Twin analysis failed: {e}"})
         finally:
+            state = self._get_twin_run_state()
+            if state.get("status") == "running":
+                self._set_twin_run_state(status="idle", process=None)
             _twin_analyze_lock.release()
 
-    def _build_twin_stage1_prompt(self, cli_path: str, source: str = "all", date: str = "7d", project: str = "") -> str:
+    def _build_twin_stage1_prompt(self, cli_path: str, source: str = "all", date: str = "7d", project: str = "", engine: str = "auto") -> str:
         """Build prompt for Stage 1: Evidence event extraction from conversation history."""
         digest = self._collect_profile_digest(source, date, project, cli_path)
         scope_flags = f"--date {shlex.quote(date)} --source {shlex.quote(source)}"
         if project:
             scope_flags += f" --project {shlex.quote(project)}"
+        agent_strategy = (
+            "Use Claude Agent tool to launch 2-3 reader subagents in parallel."
+            if engine in ("auto", "claude")
+            else "Codex mode: do the same shards sequentially in this turn; do not assume an Agent tool exists."
+        )
 
         return f"""# Background
 
@@ -3016,8 +3151,7 @@ Commands for reading existing data:
   twin-search events --q "keyword" --json                   — Search events by keyword
 
 Commands for writing:
-  twin-add events       — Add a new event (JSON from stdin, auto-generates ID)
-  twin-edit events <id> — Edit an existing event (JSON from stdin, overwrites)
+  twin-candidates       — Validate candidate event JSON without writing
   twin-batch            — Execute multiple add/edit operations in one call
 
 # Pre-computed Profile Digest
@@ -3026,38 +3160,39 @@ Commands for writing:
 
 # Task
 
-1. First, run `python3 {cli_path} twin-events --json --limit 500` to see existing events. Check what's already been captured — avoid duplicates.
-2. Run `python3 {cli_path} corrections {scope_flags} --limit 100` to get scoped correction events.
-3. Run `python3 {cli_path} highlights {scope_flags} --limit 20` to find scoped high-signal sessions.
-4. For the top 5-8 most interesting sessions, run `python3 {cli_path} read <id> -s` to understand context.
-5. Also run `python3 {cli_path} queries {scope_flags} --limit 50` and look for acceptance patterns — cases where the user did NOT correct the AI (positive signals).
+0. Existing data first: run `python3 {cli_path} twin-events --json --limit 500`.
+1. Multi-subagent plan: {agent_strategy}
+2. Shard A: corrections/friction. Run `python3 {cli_path} corrections {scope_flags} --limit 80`, inspect top sessions with `read <id> -s`.
+3. Shard B: positive/acceptance. Run `python3 {cli_path} queries {scope_flags} --limit 60`, inspect accepted workflows.
+4. Shard C: project/domain coverage. Run `python3 {cli_path} highlights {scope_flags} --limit 20` and inspect diverse projects/domains.
+5. IMPORTANT: subagents/readers produce candidate JSON only. They MUST NOT run twin-add, twin-edit, twin-link, or twin-batch.
+6. Supervisor step: merge candidates, deduplicate against existing events, validate with `twin-candidates`, then write once with `twin-batch`.
 
-From these, extract new evidence events. Compare with existing events — if an event already exists for the same session and similar situation, use `twin-edit` to update/enrich it. Only `twin-add` genuinely new events.
+Candidate JSON format:
 
-Write events using the CRUD tools:
+{{"candidates": [
+  {{"resource": "events", "data": {{
+    "session_id": "actual-session-id",
+    "event_index": 1,
+    "task_type": "coding|review|design|research|communication",
+    "ai_action": "AI did what (1 sentence)",
+    "user_reaction": "User reacted how (1 sentence)",
+    "resolution": "What happened in the end",
+    "lesson": "What we learned from this (reusable insight)",
+    "signal_type": "correction|acceptance|escalation|question",
+    "signal_intensity": 0.0,
+    "domain": "domain tag (e.g., coding/scope)"
+  }}}}
+]}}
 
-# Add a new event:
-python3 {cli_path} twin-add events <<'EOF'
-{{
-  "session_id": "actual-session-id",
-  "event_index": 1,
-  "task_type": "coding|review|design|research|communication",
-  "ai_action": "AI did what (1 sentence)",
-  "user_reaction": "User reacted how (1 sentence)",
-  "resolution": "What happened in the end",
-  "lesson": "What we learned from this (reusable insight)",
-  "signal_type": "correction|acceptance|escalation|question",
-  "signal_intensity": 0.0-1.0,
-  "domain": "domain tag (e.g., coding/scope, review/verification, design/architecture)"
-}}
+Validate candidates:
+
+python3 {cli_path} twin-candidates <<'EOF'
+{{"candidates": [...]}}
 EOF
 
-# Edit an existing event (e.g. enrich lesson, update intensity):
-python3 {cli_path} twin-edit events <event_id> <<'EOF'
-{{"lesson": "improved lesson text", "signal_intensity": 0.85}}
-EOF
+Final write:
 
-# Or use batch for multiple operations at once:
 python3 {cli_path} twin-batch <<'EOF'
 {{"operations": [
   {{"resource": "events", "action": "add", "data": {{...}}}},
@@ -3081,9 +3216,19 @@ Quality requirements:
         _db.init_db()
 
         # Get existing cards for dedup
+        existing_card_total = _db.cm_count("judgment_cards")
+        event_total = _db.cm_count("evidence_events")
         existing_cards = _db.cm_get_all("judgment_cards", limit=100)
-        events = _db.cm_get_all("evidence_events", order="created_at DESC", limit=100)
+        events = _db.cm_get_all("evidence_events", order="created_at DESC", limit=120)
         events_json = json.dumps([dict(e) for e in events], ensure_ascii=False, default=str)
+        input_meta = {
+            "events_total": event_total,
+            "events_shown": len(events),
+            "events_truncated": event_total > len(events),
+            "existing_cards_total": existing_card_total,
+            "existing_cards_shown": len(existing_cards),
+            "existing_cards_truncated": existing_card_total > len(existing_cards),
+        }
 
         # Get latest Profile/Memory as supplementary input, preferring scoped caches.
         profile_cache = _latest_evolve_cache_path("profile")
@@ -3141,6 +3286,9 @@ Commands for writing:
 
 # Evidence Events (input data)
 
+Input metadata:
+{json.dumps(input_meta, ensure_ascii=False)}
+
 {events_json}
 
 # Supplementary data
@@ -3155,6 +3303,7 @@ Commands for writing:
 # Task
 
 Analyze the events above and distill judgment cards. This is INCREMENTAL — you are updating an existing knowledge base, not building from scratch.
+If `events_truncated` is true, treat this as a checkpoint batch. Do not claim global completeness; create/update only patterns supported by the shown events.
 
 **Workflow:**
 
@@ -3217,10 +3366,20 @@ EOF
         import db as _db
         _db.init_db()
 
-        cards = _db.cm_get_all("judgment_cards", order="confidence DESC", limit=100)
+        card_total = _db.cm_count("judgment_cards")
+        trait_total = _db.cm_count("cognitive_traits")
+        cards = _db.cm_get_all("judgment_cards", order="confidence DESC", limit=120)
         cards_json = json.dumps([dict(c) for c in cards], ensure_ascii=False, default=str)
 
-        existing_traits = _db.cm_get_all("cognitive_traits", limit=50)
+        existing_traits = _db.cm_get_all("cognitive_traits", limit=60)
+        input_meta = {
+            "cards_total": card_total,
+            "cards_shown": len(cards),
+            "cards_truncated": card_total > len(cards),
+            "existing_traits_total": trait_total,
+            "existing_traits_shown": len(existing_traits),
+            "existing_traits_truncated": trait_total > len(existing_traits),
+        }
         existing_str = ""
         if existing_traits:
             lines = []
@@ -3255,6 +3414,9 @@ Commands for writing:
 
 # Judgment Cards (input data)
 
+Input metadata:
+{json.dumps(input_meta, ensure_ascii=False)}
+
 {cards_json}
 
 # Existing Cognitive Traits (for dedup)
@@ -3264,6 +3426,7 @@ Commands for writing:
 # Task
 
 Analyze the judgment cards above and infer cognitive traits. This is INCREMENTAL — update existing traits or add new ones.
+If `cards_truncated` is true, treat this as a checkpoint batch and do not claim complete coverage of all user cognition.
 
 Categories:
 - **价值取向**: What the user protects/sacrifices (e.g., 极简主义, 最小影响原则)

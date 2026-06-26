@@ -2638,10 +2638,12 @@ def cmd_twin_batch(args):
     operations = payload.get("operations", [])
     results = []
     conn = _db.get_conn()
+    current_index = 0
 
     try:
         conn.execute("BEGIN")
         for i, op in enumerate(operations):
+            current_index = i
             resource = op.get("resource", "")
             action = op.get("action", "")
             table = _TWIN_RESOURCE_TABLE.get(resource)
@@ -2675,13 +2677,54 @@ def cmd_twin_batch(args):
         conn.commit()
     except Exception as e:
         conn.rollback()
-        results.append({"index": len(results), "error": str(e)})
+        results = [{"index": current_index, "error": str(e), "rolled_back": True}]
 
     ok_count = sum(1 for r in results if r.get("ok"))
     err_count = sum(1 for r in results if "error" in r)
     print(json.dumps({"ok": err_count == 0, "total": len(operations),
                       "succeeded": ok_count, "failed": err_count,
                       "results": results}, ensure_ascii=False, indent=2))
+
+
+def cmd_twin_candidates(args):
+    """Validate candidate event/card/trait JSON without writing to the database."""
+    try:
+        payload = json.loads(sys.stdin.read())
+    except json.JSONDecodeError as e:
+        print(json.dumps({"ok": False, "error": f"invalid JSON: {e}"}, ensure_ascii=False))
+        sys.exit(1)
+
+    candidates = payload if isinstance(payload, list) else payload.get("candidates", [])
+    if not isinstance(candidates, list):
+        print(json.dumps({"ok": False, "error": "expected list or object with candidates list"}, ensure_ascii=False))
+        sys.exit(1)
+
+    required_by_resource = {
+        "events": ["session_id", "event_index", "lesson", "signal_type", "domain"],
+        "cards": ["applies_when", "judgment", "agent_action"],
+        "traits": ["name", "category", "description"],
+    }
+    results = []
+    for i, item in enumerate(candidates):
+        resource = item.get("resource", "events")
+        data = item.get("data", item)
+        missing = [k for k in required_by_resource.get(resource, []) if data.get(k) in ("", None)]
+        results.append({
+            "index": i,
+            "ok": not missing and resource in required_by_resource,
+            "resource": resource,
+            "missing": missing,
+        })
+
+    failed = sum(1 for r in results if not r["ok"])
+    print(json.dumps({
+        "ok": failed == 0,
+        "total": len(results),
+        "failed": failed,
+        "results": results,
+    }, ensure_ascii=False, indent=2))
+    if failed:
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -2800,6 +2843,7 @@ Examples:
     p_tl.add_argument("to_id", help="Target ID (jc_ for card, ct_ for trait)")
 
     sub.add_parser("twin-batch", help="Execute multiple operations (JSON from stdin)")
+    sub.add_parser("twin-candidates", help="Validate candidate operations without writing")
 
     args = parser.parse_args()
     if not args.command:
@@ -2827,6 +2871,7 @@ Examples:
         "twin-edit": cmd_twin_edit,
         "twin-link": cmd_twin_link,
         "twin-batch": cmd_twin_batch,
+        "twin-candidates": cmd_twin_candidates,
     }
 
     save_path = getattr(args, "save", "")

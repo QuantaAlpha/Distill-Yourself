@@ -82,8 +82,57 @@ class TwinIntegrityTests(unittest.TestCase):
 
         result = json.loads(out.getvalue())
         self.assertFalse(result["ok"])
+        self.assertEqual(result["succeeded"], 0)
+        self.assertEqual(result["results"][-1]["index"], 1)
+        self.assertTrue(result["results"][-1]["rolled_back"])
         self.assertEqual(db.cm_count("evidence_events"), 0)
         self.assertEqual(db.cm_count("judgment_cards"), 0)
+
+    def test_twin_candidates_validates_without_writing(self):
+        payload = {
+            "candidates": [
+                {
+                    "resource": "events",
+                    "data": {
+                        "session_id": "s1",
+                        "event_index": 1,
+                        "lesson": "prefer scoped changes",
+                        "signal_type": "correction",
+                        "domain": "coding/scope",
+                    },
+                }
+            ]
+        }
+
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO(json.dumps(payload))
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                analyze.cmd_twin_candidates(None)
+        finally:
+            sys.stdin = old_stdin
+
+        result = json.loads(out.getvalue())
+        self.assertTrue(result["ok"])
+        self.assertEqual(db.cm_count("evidence_events"), 0)
+
+    def test_twin_candidates_rejects_missing_required_fields(self):
+        payload = {"candidates": [{"resource": "events", "data": {"session_id": "s1"}}]}
+
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO(json.dumps(payload))
+        out = io.StringIO()
+        try:
+            with self.assertRaises(SystemExit):
+                with contextlib.redirect_stdout(out):
+                    analyze.cmd_twin_candidates(None)
+        finally:
+            sys.stdin = old_stdin
+
+        result = json.loads(out.getvalue())
+        self.assertFalse(result["ok"])
+        self.assertIn("lesson", result["results"][0]["missing"])
 
 
 if __name__ == "__main__":

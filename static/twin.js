@@ -106,12 +106,31 @@
   // ── Overview: Vertical Pipeline Layout ──
   function loadOverview() {
     fetch("/api/twin/overview")
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
         overviewData = data;
         renderOverview(data);
       })
-      .catch(() => renderOverviewEmpty());
+      .catch((e) => renderOverviewError(e));
+  }
+
+  function renderOverviewError(err) {
+    const container = document.getElementById("twin-overview");
+    if (!container) return;
+    currentView = "overview";
+    _showOnlyView("overview");
+    setBreadcrumb([]);
+    container.innerHTML = `<div class="twin-empty-state">
+      <div class="empty-icon">⚠️</div>
+      <h3>加载 Cognitive Handbook 失败</h3>
+      <p>${esc(err && err.message ? err.message : err)}</p>
+      <button class="btn-primary" id="twin-retry-overview">重试</button>
+    </div>`;
+    const retry = document.getElementById("twin-retry-overview");
+    if (retry) retry.onclick = loadOverview;
   }
 
   function _confColor(conf) {
@@ -679,7 +698,7 @@
 
     const progress = show("twin-analysis-progress");
     if (progress) {
-      progress.innerHTML = `<div class="twin-stream-container" id="twin-stream-output">
+      progress.innerHTML = `<div class="twin-stream-actions"><button class="btn-text" id="twin-cancel-analysis">取消分析</button></div><div class="twin-stream-container" id="twin-stream-output">
         <div class="evolve-thinking">
           <span class="evolve-thinking-dot"></span>
           <span class="evolve-thinking-dot"></span>
@@ -687,6 +706,8 @@
           <span class="evolve-thinking-label">AI 启动中…</span>
         </div>
       </div>`;
+      const cancelBtn = document.getElementById("twin-cancel-analysis");
+      if (cancelBtn) cancelBtn.onclick = cancelAnalysis;
     }
 
     const streamState = {
@@ -756,7 +777,7 @@
         return pump();
       })
       .catch((e) => {
-        if (e.name === "AbortError") { analysisRunning = false; _updateAnalyzeButton(); return; }
+        if (e.name === "AbortError") { analysisRunning = false; _updateAnalyzeButton(); setBreadcrumb([{ label: "分析已取消" }]); return; }
         const container = document.getElementById("twin-stream-output");
         if (container) {
           _hideThinking(container);
@@ -768,6 +789,26 @@
         _finishAnalysis(streamState, true);
       })
       .finally(() => { analysisAbort = null; });
+  }
+
+  function cancelAnalysis() {
+    if (analysisAbort) {
+      try { analysisAbort.abort(); } catch (e) { /* ignore */ }
+    }
+    fetch("/api/twin/cancel", { method: "POST" }).catch(() => {});
+    analysisRunning = false;
+    _updateAnalyzeButton();
+    const updatedEl = document.getElementById("twin-last-analyzed");
+    if (updatedEl) updatedEl.textContent = "已取消";
+    const container = document.getElementById("twin-stream-output");
+    if (container) {
+      _hideThinking(container);
+      const div = document.createElement("div");
+      div.className = "twin-stream-error";
+      div.textContent = "已请求取消当前 Twin 分析";
+      container.appendChild(div);
+    }
+    setBreadcrumb([{ label: "分析已取消" }]);
   }
 
   function _finishAnalysis(state, failed = false) {
@@ -882,6 +923,17 @@
           updatedEl.classList.add("loading");
         }
         _autoScroll();
+        break;
+      }
+      case "cancelled": {
+        state.failed = true;
+        _finalizeToolGroup(state);
+        _hideThinking(container);
+        const div = document.createElement("div");
+        div.className = "twin-stream-error";
+        div.textContent = `已取消：${evt.message || ""}`;
+        container.appendChild(div);
+        if (updatedEl) updatedEl.textContent = "已取消";
         break;
       }
 
