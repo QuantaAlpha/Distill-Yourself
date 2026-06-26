@@ -123,8 +123,8 @@
     } catch (e) { /* quota */ }
   }
 
-  function getScopeCacheKey(tab) {
-    const scope = getEvolveScope();
+  function getScopeCacheKey(tab, scope) {
+    scope = scope || getEvolveScope();
     return [
       tab,
       scope.source || "all",
@@ -138,14 +138,19 @@
     return evolveCache[getScopeCacheKey(tab)] || null;
   }
 
-  function setCachedTab(tab, data) {
-    evolveCache[getScopeCacheKey(tab)] = {
+  function setCachedTab(tab, data, scope) {
+    scope = scope || getEvolveScope();
+    evolveCache[getScopeCacheKey(tab, scope)] = {
       updatedAt: new Date().toISOString(),
-      scope: getEvolveScope(),
+      scope,
       data,
     };
     saveEvolveCache();
     updateSyncButtonState();
+  }
+
+  function isCurrentScopeKey(tab, cacheKey) {
+    return getScopeCacheKey(tab) === cacheKey;
   }
 
   // ── Scope (reads from shared global state set by initAiPage in app.js) ──
@@ -240,6 +245,7 @@
 
   function _fetchEvolveTab(tab) {
     const scope = getEvolveScope();
+    const requestCacheKey = getScopeCacheKey(tab, scope);
     const params = new URLSearchParams({
       refresh: "1",
       source: scope.source || "all",
@@ -251,23 +257,27 @@
     // AI tabs use SSE streaming for real-time progress
     if (AI_TABS.has(tab)) {
       params.set("stream", "1");
-      return _fetchEvolveTabStream(tab, params);
+      return _fetchEvolveTabStream(tab, params, scope, requestCacheKey);
     }
 
     return fetch(`/api/evolve/${tab}?${params}`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then(data => {
         const normalized = normalizeEvolveData(tab, data);
-        setCachedTab(tab, normalized);
-        // Re-render this tab's panel
-        const panel = _ensureTabPanel(tab);
-        _renderTabPanel(tab, panel);
-        updateEvolveOverviewBar();
+        setCachedTab(tab, normalized, scope);
+        if (isCurrentScopeKey(tab, requestCacheKey)) {
+          const panel = _ensureTabPanel(tab);
+          _renderTabPanel(tab, panel);
+          updateEvolveOverviewBar();
+        }
       });
   }
 
   /** Stream SSE events for AI evolve tabs with live progress */
-  function _fetchEvolveTabStream(tab, params) {
+  function _fetchEvolveTabStream(tab, params, requestScope, requestCacheKey) {
     const updatedEl = $("#evolve-tab-updated");
     const esc = window.esc || String;
 
@@ -278,7 +288,7 @@
     }
     if (tab === evolveActiveTab && updatedEl) { updatedEl.textContent = "AI 启动中…"; updatedEl.classList.add("loading"); }
 
-    const streamState = { blockText: "", textBlock: null, runningCards: [], stepCount: 0, currentToolGroup: null, toolGroupCounts: {}, toolGroupRunning: 0, toolGroupTotal: 0, toolGroupCollapseTimer: null };
+    const streamState = { blockText: "", textBlock: null, runningCards: [], stepCount: 0, currentToolGroup: null, toolGroupCounts: {}, toolGroupRunning: 0, toolGroupTotal: 0, toolGroupCollapseTimer: null, requestScope, requestCacheKey };
 
     // Create abort controller for this tab's stream
     if (evolveStreamAborts[tab]) evolveStreamAborts[tab].abort();
@@ -287,6 +297,8 @@
 
     return fetch(`/api/evolve/${tab}?${params}`, { signal: abortCtrl.signal })
       .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.body) throw new Error("Streaming response is unavailable");
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -478,26 +490,28 @@
       case "evolve_result": {
         _finalizeToolGroup(state);
         const normalized = normalizeEvolveData(tab, evt.data);
-        setCachedTab(tab, normalized);
-        // Re-render this tab's panel with the final visualization
-        const panel = _ensureTabPanel(tab);
-        _renderTabPanel(tab, panel);
-        updateEvolveOverviewBar();
-        if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
+        setCachedTab(tab, normalized, state.requestScope);
+        if (isCurrentScopeKey(tab, state.requestCacheKey)) {
+          const panel = _ensureTabPanel(tab);
+          _renderTabPanel(tab, panel);
+          updateEvolveOverviewBar();
+          if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
+        }
         break;
       }
       case "done":
         _finalizeToolGroup(state);
         _evolveHideThinking(container);
-        if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
+        if (isCurrentScopeKey(tab, state.requestCacheKey) && isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
         break;
       case "error":
         _finalizeToolGroup(state);
         _evolveHideThinking(container);
-        if (isActiveTab && updatedEl) { updatedEl.textContent = `Error: ${evt.message}`; updatedEl.classList.remove("loading"); }
-        // Show error in this tab's panel
-        const panel2 = _ensureTabPanel(tab);
-        if (panel2) panel2.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${esc(evt.message)}</p></div>`;
+        if (isCurrentScopeKey(tab, state.requestCacheKey)) {
+          if (isActiveTab && updatedEl) { updatedEl.textContent = `Error: ${evt.message}`; updatedEl.classList.remove("loading"); }
+          const panel2 = _ensureTabPanel(tab);
+          if (panel2) panel2.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${esc(evt.message)}</p></div>`;
+        }
         break;
     }
   }
@@ -516,6 +530,7 @@
 
     _fetchEvolveTab(tab)
       .catch(err => {
+        if (err.name === "AbortError") return;
         if (panel) panel.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${(window.esc || String)(err.message)}</p></div>`;
       })
       .finally(() => { delete evolveLoadingTabs[tab]; });
@@ -1462,6 +1477,14 @@
 
   // ── Public API for app.js linkage ──
   window.getEvolveScope = getEvolveScope;
+
+  window.abortEvolveStreams = function () {
+    Object.values(evolveStreamAborts).forEach(ctrl => {
+      try { ctrl.abort(); } catch (e) { /* ignore */ }
+    });
+    evolveStreamAborts = {};
+    evolveLoadingTabs = {};
+  };
 
   window.navigateToEvolveTab = function (tab, data) {
     if (data) setCachedTab(tab, data);

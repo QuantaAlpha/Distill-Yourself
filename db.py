@@ -609,7 +609,7 @@ _CM_TABLES = {
 }
 
 
-def cm_upsert(table: str, item_id: str, data: dict):
+def cm_upsert(table: str, item_id: str, data: dict, commit: bool = True):
     """Insert or update a cognitive model row. Partial updates are safe — existing
     fields are preserved when not provided in data."""
     conn = get_conn()
@@ -633,21 +633,41 @@ def cm_upsert(table: str, item_id: str, data: dict):
             merged["updated_at"] = now
         all_cols = [c for c in ["id"] + cols + (["updated_at"] if has_updated else []) if c in merged]
         vals = [merged[c] for c in all_cols]
+        update_cols = [c for c in all_cols if c != "id"]
+        if update_cols:
+            assignments = ",".join(f"{c}=?" for c in update_cols)
+            conn.execute(
+                f"UPDATE {table} SET {assignments} WHERE id=?",
+                [merged[c] for c in update_cols] + [item_id],
+            )
     else:
+        if table == "evidence_events":
+            session_id = data.get("session_id")
+            event_index = data.get("event_index")
+            if session_id is not None and event_index is not None:
+                conflict = conn.execute(
+                    "SELECT id FROM evidence_events WHERE session_id=? AND event_index=?",
+                    (session_id, event_index),
+                ).fetchone()
+                if conflict and conflict["id"] != item_id:
+                    raise ValueError(
+                        "evidence event already exists for "
+                        f"session_id={session_id!r}, event_index={event_index!r}: {conflict['id']}"
+                    )
         all_cols = ["id"] + [c for c in cols if c in data]
         if has_updated:
             all_cols.append("updated_at")
         vals = [item_id] + [data.get(c) for c in cols if c in data]
         if has_updated:
             vals.append(now)
-
-    placeholders = ",".join("?" * len(all_cols))
-    col_str = ",".join(all_cols)
-    conn.execute(
-        f"INSERT OR REPLACE INTO {table} ({col_str}) VALUES ({placeholders})",
-        vals,
-    )
-    conn.commit()
+        placeholders = ",".join("?" * len(all_cols))
+        col_str = ",".join(all_cols)
+        conn.execute(
+            f"INSERT INTO {table} ({col_str}) VALUES ({placeholders})",
+            vals,
+        )
+    if commit:
+        conn.commit()
 
 
 def cm_get(table: str, item_id: str) -> Optional[dict]:

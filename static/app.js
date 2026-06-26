@@ -2220,6 +2220,7 @@
   }
 
   function notifyEvolveScopeChanged() {
+    if (window.abortEvolveStreams) window.abortEvolveStreams();
     if (window.initEvolveView) window.initEvolveView();
   }
 

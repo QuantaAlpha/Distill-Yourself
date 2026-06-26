@@ -2481,6 +2481,41 @@ def cmd_twin_search(args):
     _twin_truncated_json(rows, args.resource, total, args.limit)
 
 
+def _twin_link(_db, from_id: str, to_id: str, commit: bool = True) -> dict:
+    """Validate and apply a Twin link without creating placeholder rows."""
+    if from_id.startswith("ev_") or from_id.startswith("p_"):
+        event = _db.cm_get("evidence_events", from_id)
+        if not event:
+            raise ValueError(f"Event not found: {from_id}")
+        card = _db.cm_get("judgment_cards", to_id)
+        if not card:
+            raise ValueError(f"Card not found: {to_id}")
+        _db.cm_upsert("evidence_events", from_id, {"card_id": to_id}, commit=commit)
+        count = _db.cm_count("evidence_events", where="card_id=?", params=(to_id,))
+        _db.cm_upsert("judgment_cards", to_id, {"evidence_count": count}, commit=commit)
+        return {"ok": True, "link": f"{from_id} → {to_id}",
+                "type": "event→card", "evidence_count": count}
+
+    if from_id.startswith("jc_"):
+        card = _db.cm_get("judgment_cards", from_id)
+        if not card:
+            raise ValueError(f"Card not found: {from_id}")
+        trait = _db.cm_get("cognitive_traits", to_id)
+        if not trait:
+            raise ValueError(f"Trait not found: {to_id}")
+        existing_ids = json.loads(trait.get("supporting_card_ids") or "[]")
+        if from_id not in existing_ids:
+            existing_ids.append(from_id)
+        _db.cm_upsert("cognitive_traits", to_id, {
+            "supporting_card_ids": json.dumps(existing_ids),
+            "evidence_count": len(existing_ids),
+        }, commit=commit)
+        return {"ok": True, "link": f"{from_id} → {to_id}",
+                "type": "card→trait", "evidence_count": len(existing_ids)}
+
+    raise ValueError("Cannot determine link type. Use ev_/p_ prefix for events, jc_ for cards.")
+
+
 def cmd_twin_add(args):
     """Add a new event/card/trait. Reads JSON from stdin."""
     import db as _db
@@ -2571,12 +2606,7 @@ def cmd_twin_link(args):
         if not card:
             print(json.dumps({"error": f"Card not found: {to_id}"}))
             sys.exit(1)
-        _db.cm_upsert("evidence_events", from_id, {"card_id": to_id})
-        # Update card evidence_count
-        count = _db.cm_count("evidence_events", where="card_id=?", params=(to_id,))
-        _db.cm_upsert("judgment_cards", to_id, {"evidence_count": count})
-        print(json.dumps({"ok": True, "link": f"{from_id} → {to_id}",
-                          "type": "event→card", "evidence_count": count}))
+        print(json.dumps(_twin_link(_db, from_id, to_id), ensure_ascii=False))
 
     elif from_id.startswith("jc_"):
         # card → trait link: append to supporting_card_ids
@@ -2588,15 +2618,7 @@ def cmd_twin_link(args):
         if not trait:
             print(json.dumps({"error": f"Trait not found: {to_id}"}))
             sys.exit(1)
-        existing_ids = json.loads(trait.get("supporting_card_ids") or "[]")
-        if from_id not in existing_ids:
-            existing_ids.append(from_id)
-        _db.cm_upsert("cognitive_traits", to_id, {
-            "supporting_card_ids": json.dumps(existing_ids),
-            "evidence_count": len(existing_ids),
-        })
-        print(json.dumps({"ok": True, "link": f"{from_id} → {to_id}",
-                          "type": "card→trait", "evidence_count": len(existing_ids)}))
+        print(json.dumps(_twin_link(_db, from_id, to_id), ensure_ascii=False))
     else:
         print(json.dumps({"error": f"Cannot determine link type. Use ev_/p_ prefix for events, jc_ for cards."}))
         sys.exit(1)
@@ -2615,59 +2637,45 @@ def cmd_twin_batch(args):
 
     operations = payload.get("operations", [])
     results = []
+    conn = _db.get_conn()
 
-    for i, op in enumerate(operations):
-        resource = op.get("resource", "")
-        action = op.get("action", "")
-        table = _TWIN_RESOURCE_TABLE.get(resource)
+    try:
+        conn.execute("BEGIN")
+        for i, op in enumerate(operations):
+            resource = op.get("resource", "")
+            action = op.get("action", "")
+            table = _TWIN_RESOURCE_TABLE.get(resource)
 
-        try:
             if action == "add":
                 if not table:
-                    results.append({"index": i, "error": f"unknown resource: {resource}"})
-                    continue
+                    raise ValueError(f"unknown resource: {resource}")
                 prefix = {"events": "ev_", "cards": "jc_", "traits": "ct_"}[resource]
                 item_id = prefix + uuid.uuid4().hex[:8]
-                _db.cm_upsert(table, item_id, op.get("data", {}))
+                _db.cm_upsert(table, item_id, op.get("data", {}), commit=False)
                 results.append({"index": i, "ok": True, "id": item_id, "action": "added"})
 
             elif action == "edit":
                 if not table:
-                    results.append({"index": i, "error": f"unknown resource: {resource}"})
-                    continue
+                    raise ValueError(f"unknown resource: {resource}")
                 item_id = op.get("id", "")
                 if not _db.cm_get(table, item_id):
-                    results.append({"index": i, "error": f"not found: {item_id}"})
-                    continue
-                _db.cm_upsert(table, item_id, op.get("data", {}))
+                    raise ValueError(f"not found: {item_id}")
+                _db.cm_upsert(table, item_id, op.get("data", {}), commit=False)
                 results.append({"index": i, "ok": True, "id": item_id, "action": "updated"})
 
             elif action == "link":
                 from_id = op.get("from", "")
                 to_id = op.get("to", "")
-                if from_id.startswith(("ev_", "p_")):
-                    _db.cm_upsert("evidence_events", from_id, {"card_id": to_id})
-                    count = _db.cm_count("evidence_events", where="card_id=?", params=(to_id,))
-                    _db.cm_upsert("judgment_cards", to_id, {"evidence_count": count})
-                    results.append({"index": i, "ok": True, "link": f"{from_id}→{to_id}"})
-                elif from_id.startswith("jc_"):
-                    trait = _db.cm_get("cognitive_traits", to_id)
-                    if trait:
-                        ids = json.loads(trait.get("supporting_card_ids") or "[]")
-                        if from_id not in ids:
-                            ids.append(from_id)
-                        _db.cm_upsert("cognitive_traits", to_id, {
-                            "supporting_card_ids": json.dumps(ids),
-                            "evidence_count": len(ids),
-                        })
-                    results.append({"index": i, "ok": True, "link": f"{from_id}→{to_id}"})
-                else:
-                    results.append({"index": i, "error": f"unknown link type for {from_id}"})
+                link_result = _twin_link(_db, from_id, to_id, commit=False)
+                results.append({"index": i, **link_result})
 
             else:
-                results.append({"index": i, "error": f"unknown action: {action}"})
-        except Exception as e:
-            results.append({"index": i, "error": str(e)})
+                raise ValueError(f"unknown action: {action}")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        results.append({"index": len(results), "error": str(e)})
 
     ok_count = sum(1 for r in results if r.get("ok"))
     err_count = sum(1 for r in results if "error" in r)

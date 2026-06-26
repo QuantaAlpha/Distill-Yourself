@@ -8,6 +8,7 @@ and serves a web UI for browsing, searching, and reviewing conversations.
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import hashlib
@@ -41,6 +42,7 @@ CODEX_INDEX_FILE = CODEX_DIR / "session_index.jsonl"
 # Shared state (populated at startup)
 _index = {"projects": {}, "sessions": {}, "_file_mtimes": {}}
 _index_lock = threading.Lock()
+_twin_analyze_lock = threading.Lock()
 _codex_titles = {}  # session_id -> thread_name
 
 # Result cache for heavy endpoints (invalidated on index rebuild)
@@ -1895,17 +1897,63 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
     def _collect_profile_digest(self, source: str, date: str, project: str, cli_path: str) -> str:
         """Run profile-digest command and return JSON string."""
         import subprocess
+        cache_dir = CACHE_DIR / "profile_digest"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        raw_key = json.dumps(
+            {"source": source or "all", "date": date or "7d", "project": project or ""},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        cache_path = cache_dir / f"{hashlib.sha256(raw_key.encode('utf-8')).hexdigest()[:16]}.json"
+        ttl_seconds = 6 * 3600
+
+        def _read_cached(allow_stale: bool = False) -> str:
+            try:
+                if not cache_path.exists():
+                    return ""
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                age = time.time() - float(payload.get("created_at", 0))
+                if allow_stale or age <= ttl_seconds:
+                    return payload.get("digest", "")
+            except Exception:
+                return ""
+            return ""
+
+        cached = _read_cached()
+        if cached:
+            return cached
+
         cmd = [sys.executable, cli_path, "profile-digest",
                "--date", date, "--source", source]
         if project:
             cmd.extend(["--project", project])
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except Exception:
-            pass
-        return ""
+                digest = result.stdout.strip()
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "created_at": time.time(),
+                        "scope": {"source": source, "date": date, "project": project},
+                        "digest": digest,
+                    }, f, ensure_ascii=False, indent=2)
+                return digest
+        except Exception as e:
+            stale = _read_cached(allow_stale=True)
+            if stale:
+                return stale
+            return json.dumps({
+                "_warning": f"profile-digest unavailable: {e}",
+                "scope": {"source": source, "date": date, "project": project},
+            }, ensure_ascii=False)
+        stale = _read_cached(allow_stale=True)
+        if stale:
+            return stale
+        return json.dumps({
+            "_warning": "profile-digest produced no output",
+            "scope": {"source": source, "date": date, "project": project},
+        }, ensure_ascii=False)
 
     def _collect_aggregates(self) -> str:
         """Pre-collect trimmed aggregates (~2KB) for embedding in prompt."""
@@ -1933,9 +1981,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 
     def _build_evolve_prompt(self, tab: str, source: str, date: str, project: str, cli_path: str, cache_key: str = "") -> str:
         """Build a prompt that instructs the AI to progressively explore data via CLI tools."""
-        cli_flags = f"--date {date} --source {source}"
+        cli_flags = f"--date {shlex.quote(date)} --source {shlex.quote(source)}"
         if project:
-            cli_flags += f' --project "{project}"'
+            cli_flags += f" --project {shlex.quote(project)}"
 
         write_cmd = f"python3 {cli_path} evolve-write --tab {tab}"
         if cache_key:
@@ -1956,7 +2004,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             "",
         ]
 
-        digest_cmd = f"python3 {cli_path} profile-digest --date {date} --source {source}" + (f' --project "{project}"' if project else "")
+        digest_cmd = f"python3 {shlex.quote(cli_path)} profile-digest {cli_flags}"
         if use_digest and digest:
             # Digest-based flow: main agent sees full digest, sub-agents run command to get it
             parts.extend([
@@ -1972,7 +2020,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 "Dispatch 2-3 sub-agents (via Agent tool) in parallel.",
                 "Each agent's prompt MUST include:",
                 f"  - Digest command: `{digest_cmd}` (agent runs this FIRST to get the overview)",
-                f"  - Full CLI tool: `python3 {cli_path} <command> --date {date} --source {source}" + (f' --project "{project}"' if project else "") + "`",
+                f"  - Full CLI tool: `python3 {shlex.quote(cli_path)} <command> {cli_flags}`",
                 "  - Its assigned focus area, which digest sections to start from, and exploration instructions",
                 "",
                 "CLI commands available for exploration:",
@@ -2007,9 +2055,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             ])
         else:
             # CLI exploration flow: for rules/signals/patterns tabs
-            cli_flags = f"--date {date} --source {source}"
+            cli_flags = f"--date {shlex.quote(date)} --source {shlex.quote(source)}"
             if project:
-                cli_flags += f' --project "{project}"'
+                cli_flags += f" --project {shlex.quote(project)}"
 
             stats = self._collect_stats(source, date, project, cli_path)
             aggregates = self._collect_aggregates()
@@ -2832,8 +2880,15 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 
     def _run_twin_ai_stage(self, prompt: str, stage_label: str) -> bool:
         """Stream a Twin AI stage and stop on either exception or SSE error event."""
+        started = time.time()
         try:
             for evt in _run_ai_engine_stream(prompt, allow_write=True, timeout=600):
+                if evt.get("type") == "error":
+                    evt = dict(evt)
+                    evt["stage"] = stage_label
+                    evt["elapsed_seconds"] = round(time.time() - started, 1)
+                    if evt.get("message") == "Timeout":
+                        evt["message"] = f"{stage_label} timed out after 600s"
                 self._sse_event(evt)
                 if evt.get("type") == "error":
                     return False
@@ -2848,42 +2903,54 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         """POST /api/twin/analyze — run 4-stage cognitive handbook extraction via AI."""
         import db as _db
         cli_path = str(Path(__file__).resolve().parent / "analyze.py")
+        try:
+            raw_body = self._read_post_body()
+            data = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            self._error(400, "Invalid JSON")
+            return
+
+        scope = data.get("scope") or {}
+        source = scope.get("source") or data.get("source") or "all"
+        date = scope.get("date") or data.get("date") or "7d"
+        project = scope.get("project") or data.get("project") or ""
+        engine = scope.get("engine") or data.get("engine") or "auto"
 
         self._start_sse()
+        if not _twin_analyze_lock.acquire(blocking=False):
+            self._sse_event({
+                "type": "error",
+                "message": "Twin analysis is already running. Wait for it to finish or cancel it before starting another run.",
+            })
+            return
 
-        # Stage 1: Evidence event extraction
-        self._sse_event({"type": "text", "content": "Stage 1/4: 从对话历史中提取决策事件 (Evidence Events)...\n"})
-
-        stage1_prompt = self._build_twin_stage1_prompt(cli_path)
         try:
+            # Stage 1: Evidence event extraction
+            self._sse_event({"type": "text", "content": (
+                "Stage 1/4: 从对话历史中提取决策事件 (Evidence Events)...\n"
+                f"Scope: source={source}, date={date}, project={project or 'all'}, engine={engine}\n"
+            )})
+
+            stage1_prompt = self._build_twin_stage1_prompt(cli_path, source, date, project)
             if not self._run_twin_ai_stage(stage1_prompt, "Stage 1"):
                 return
-        except BrokenPipeError:
-            return
 
-        # Stage 2: Judgment card distillation
-        self._sse_event({"type": "text", "content": "\n\nStage 2/4: 从事件中蒸馏判断卡 (Judgment Cards)...\n"})
+            # Stage 2: Judgment card distillation
+            self._sse_event({"type": "text", "content": "\n\nStage 2/4: 从事件中蒸馏判断卡 (Judgment Cards)...\n"})
 
-        stage2_prompt = self._build_twin_stage2_prompt(cli_path)
-        try:
+            stage2_prompt = self._build_twin_stage2_prompt(cli_path)
             if not self._run_twin_ai_stage(stage2_prompt, "Stage 2"):
                 return
-        except BrokenPipeError:
-            return
 
-        # Stage 3: Cognitive trait inference
-        self._sse_event({"type": "text", "content": "\n\nStage 3/4: 从判断卡归纳认知特质 (Cognitive Traits)...\n"})
+            # Stage 3: Cognitive trait inference
+            self._sse_event({"type": "text", "content": "\n\nStage 3/4: 从判断卡归纳认知特质 (Cognitive Traits)...\n"})
 
-        stage3_prompt = self._build_twin_stage3_prompt(cli_path)
-        try:
+            stage3_prompt = self._build_twin_stage3_prompt(cli_path)
             if not self._run_twin_ai_stage(stage3_prompt, "Stage 3"):
                 return
-        except BrokenPipeError:
-            return
 
-        # Stage 4: Compile Runtime Pack (pure Python, no AI)
-        self._sse_event({"type": "text", "content": "\n\nStage 4/4: 编译 Runtime Pack (twin-compile)...\n"})
-        try:
+            # Stage 4: Compile Runtime Pack (pure Python, no AI)
+            self._sse_event({"type": "text", "content": "\n\nStage 4/4: 编译 Runtime Pack (twin-compile)...\n"})
             r = subprocess.run(
                 [sys.executable, cli_path, "twin-compile"],
                 capture_output=True, text=True, timeout=30,
@@ -2893,35 +2960,44 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 msg = (r.stderr or r.stdout or "unknown error")[:500]
                 self._sse_event({"type": "error", "message": f"Stage 4 failed: {msg}"})
                 return
-        except Exception as e:
-            self._sse_event({"type": "error", "message": f"Stage 4 failed: {e}"})
-            return
 
-        # Summary
-        _db.init_db()
-        stats = _db.get_twin_stats()
-        summary_parts = []
-        for t in ["evidence_events", "judgment_cards", "cognitive_traits"]:
-            count = stats.get(t, {}).get("count", 0)
-            if count > 0:
-                label = t.replace("_", " ")
-                summary_parts.append(f"{label}: {count}")
+            # Summary
+            _db.init_db()
+            stats = _db.get_twin_stats()
+            summary_parts = []
+            for t in ["evidence_events", "judgment_cards", "cognitive_traits"]:
+                count = stats.get(t, {}).get("count", 0)
+                if count > 0:
+                    label = t.replace("_", " ")
+                    summary_parts.append(f"{label}: {count}")
 
-        summary = ", ".join(summary_parts) if summary_parts else "暂无数据"
-        try:
+            summary = ", ".join(summary_parts) if summary_parts else "暂无数据"
             self._sse_event({"type": "text", "content": f"\n\n✅ 分析完成 — {summary}"})
             self._sse_event({"type": "done", "content": summary})
         except BrokenPipeError:
             pass
+        except Exception as e:
+            self._sse_event({"type": "error", "message": f"Twin analysis failed: {e}"})
+        finally:
+            _twin_analyze_lock.release()
 
-    def _build_twin_stage1_prompt(self, cli_path: str) -> str:
+    def _build_twin_stage1_prompt(self, cli_path: str, source: str = "all", date: str = "7d", project: str = "") -> str:
         """Build prompt for Stage 1: Evidence event extraction from conversation history."""
-        digest = self._collect_profile_digest("all", "all", "", cli_path)
+        digest = self._collect_profile_digest(source, date, project, cli_path)
+        scope_flags = f"--date {shlex.quote(date)} --source {shlex.quote(source)}"
+        if project:
+            scope_flags += f" --project {shlex.quote(project)}"
 
         return f"""# Background
 
 You are extracting structured EVIDENCE EVENTS from a user's AI conversation history.
 An evidence event records: what the AI did → how the user reacted → what lesson was learned.
+
+# Analysis Scope
+
+- source: {source}
+- date: {date}
+- project: {project or "all"}
 
 # CLI Tool
 
@@ -2950,11 +3026,11 @@ Commands for writing:
 
 # Task
 
-1. First, run `python3 {cli_path} twin-events --json` to see ALL existing events. Check what's already been captured — avoid duplicates.
-2. Run `python3 {cli_path} corrections --limit 100` to get all correction events.
-3. Run `python3 {cli_path} highlights --limit 20` to find high-signal sessions.
+1. First, run `python3 {cli_path} twin-events --json --limit 500` to see existing events. Check what's already been captured — avoid duplicates.
+2. Run `python3 {cli_path} corrections {scope_flags} --limit 100` to get scoped correction events.
+3. Run `python3 {cli_path} highlights {scope_flags} --limit 20` to find scoped high-signal sessions.
 4. For the top 5-8 most interesting sessions, run `python3 {cli_path} read <id> -s` to understand context.
-5. Also run `python3 {cli_path} queries --limit 50` and look for acceptance patterns — cases where the user did NOT correct the AI (positive signals).
+5. Also run `python3 {cli_path} queries {scope_flags} --limit 50` and look for acceptance patterns — cases where the user did NOT correct the AI (positive signals).
 
 From these, extract new evidence events. Compare with existing events — if an event already exists for the same session and similar situation, use `twin-edit` to update/enrich it. Only `twin-add` genuinely new events.
 

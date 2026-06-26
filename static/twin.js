@@ -707,8 +707,16 @@
     const abortCtrl = new AbortController();
     analysisAbort = abortCtrl;
 
-    fetch("/api/twin/analyze", { method: "POST", signal: abortCtrl.signal })
+    const scope = typeof window.getEvolveScope === "function" ? window.getEvolveScope() : {};
+    fetch("/api/twin/analyze", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ scope }),
+      signal: abortCtrl.signal,
+    })
       .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.body) throw new Error("Streaming response is unavailable");
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
