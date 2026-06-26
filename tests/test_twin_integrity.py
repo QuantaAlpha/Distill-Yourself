@@ -247,9 +247,14 @@ class TwinIntegrityTests(unittest.TestCase):
         self.assertEqual(len(snap["session_ids_hash"]), 16)
 
     def test_evolve_stream_error_event_does_not_emit_stale_cache(self):
-        cache_path = server._evolve_cache_path("profile", "all", "7d", "", "auto")
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps({"categories": [{"title": "stale"}]}), encoding="utf-8")
+        db.evolve_upsert(
+            "profile",
+            "all",
+            "7d",
+            "",
+            "auto",
+            json.dumps({"categories": [{"title": "stale"}]}),
+        )
 
         old_stream = server._run_ai_engine_stream
 

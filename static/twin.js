@@ -55,7 +55,9 @@
     const btnAnalyze = document.getElementById("twin-btn-analyze");
     const btnSync = document.getElementById("twin-btn-sync");
     const btnProgress = document.getElementById("twin-btn-progress");
-    if (btnAnalyze) btnAnalyze.onclick = startAnalysis;
+    if (btnAnalyze) btnAnalyze.onclick = () => {
+      if (analysisRunning && analysisAbort) { _stopAnalysis(); } else { startAnalysis(); }
+    };
     if (btnSync) btnSync.onclick = startSync;
     if (btnProgress) btnProgress.onclick = toggleProgressView;
   }
@@ -92,10 +94,10 @@
     const btn = document.getElementById("twin-btn-analyze");
     const updatedEl = document.getElementById("twin-last-analyzed");
     if (analysisRunning) {
-      if (btn) { btn.disabled = true; btn.textContent = "⏳ Analyzing..."; }
+      if (btn) { btn.disabled = false; btn.textContent = "■ Stop"; btn.classList.add("btn-stop"); }
       if (updatedEl) updatedEl.classList.add("loading");
     } else {
-      if (btn) { btn.disabled = false; btn.textContent = "🔄 Analyze"; }
+      if (btn) { btn.disabled = false; btn.textContent = "🔄 Analyze"; btn.classList.remove("btn-stop"); }
       if (updatedEl) updatedEl.classList.remove("loading");
     }
     _updateProgressButton();
@@ -110,6 +112,16 @@
     } else {
       btnProgress.classList.add("hidden");
     }
+  }
+
+  function _stopAnalysis() {
+    if (analysisAbort) analysisAbort.abort();
+    // Don't null analysisAbort here — let .catch/.finally do cleanup
+    // (otherwise the stale-callback guard blocks state reset)
+    analysisRunning = false;
+    _updateAnalyzeButton();
+    const updatedEl = document.getElementById("twin-last-analyzed");
+    if (updatedEl) { updatedEl.textContent = "已停止"; updatedEl.classList.remove("loading"); }
   }
 
   // ── Overview: Vertical Pipeline Layout ──
@@ -979,7 +991,14 @@
         return pump();
       })
       .catch((e) => {
-        if (e.name === "AbortError") { analysisRunning = false; _updateAnalyzeButton(); setBreadcrumb([{ label: "分析已取消" }]); return; }
+        if (e.name === "AbortError") {
+          if (analysisAbort === abortCtrl) {
+            analysisRunning = false;
+            _updateAnalyzeButton();
+            setBreadcrumb([{ label: "分析已取消" }]);
+          }
+          return;
+        }
         const container = document.getElementById("twin-stream-output");
         if (container) {
           _hideThinking(container);
@@ -991,7 +1010,7 @@
         }
         _finishAnalysis(streamState, true);
       })
-      .finally(() => { analysisAbort = null; });
+      .finally(() => { if (analysisAbort === abortCtrl) analysisAbort = null; });
   }
 
   function cancelAnalysis() {

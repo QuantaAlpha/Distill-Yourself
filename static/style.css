@@ -618,6 +618,21 @@ body {
 }
 .btn-text:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
 .btn-text.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+/* Stop button state — shared across Chat Send, Evolve Refresh, Twin Analyze */
+.btn-stop {
+  background: #e53e3e !important; color: #fff !important; border-color: #e53e3e !important;
+}
+.btn-stop:hover { filter: brightness(1.1); }
+/* Continue button after timeout/abort */
+.chat-continue-wrap { text-align: center; padding: 8px 0; }
+.btn-continue {
+  background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm);
+  padding: 6px 20px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+}
+.btn-continue:hover { filter: brightness(1.1); }
+#session-ai-send.btn-stop, #ai-chat-send.btn-stop {
+  background: #e53e3e !important; color: #fff !important;
+}
 .btn-icon {
   background: transparent; border: none; color: var(--text-secondary);
   font-size: 18px; cursor: pointer; padding: 4px; border-radius: var(--radius-sm);
