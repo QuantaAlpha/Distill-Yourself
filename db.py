@@ -7,7 +7,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +18,11 @@ CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 DB_PATH = CACHE_DIR / "sessions.db"
 
 _local = threading.local()
+
+
+def _utc_now() -> datetime:
+    """Return current UTC time without timezone suffix for legacy DB strings."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +319,7 @@ def get_filtered_sessions(source="all", project="", date="", max_days=99999) -> 
         params.append(date)
 
     if max_days < 99999:
-        cutoff = (datetime.utcnow() - timedelta(days=max_days)).strftime("%Y-%m-%d")
+        cutoff = (_utc_now() - timedelta(days=max_days)).strftime("%Y-%m-%d")
         clauses.append("date >= ?")
         params.append(cutoff)
 
@@ -423,7 +428,7 @@ def get_aggregate(key: str):
 def set_aggregate(key: str, value: str):
     """Upsert a key/value into aggregates."""
     conn = get_conn()
-    now = datetime.utcnow().isoformat()
+    now = _utc_now().isoformat()
     conn.execute(
         "INSERT OR REPLACE INTO aggregates (key, value, updated_at) VALUES (?,?,?)",
         (key, value, now),
@@ -617,7 +622,7 @@ def cm_upsert(table: str, item_id: str, data: dict, commit: bool = True):
     if not cols:
         raise ValueError(f"Unknown CM table: {table}")
 
-    now = datetime.utcnow().isoformat()
+    now = _utc_now().isoformat()
     has_updated = table not in ("evidence_events", "card_relations")
 
     # Auto-fill created_at on insert for tables that have it
