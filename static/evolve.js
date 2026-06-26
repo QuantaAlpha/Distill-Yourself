@@ -35,6 +35,8 @@
     if (body) body.innerHTML = "";
     bindEvolveEvents();
     switchEvolveTab(evolveActiveTab);
+    // Auto-load server-side cache for tabs missing from localStorage
+    _loadServerCacheForMissingTabs();
   };
 
   function bindEvolveEvents() {
@@ -43,9 +45,12 @@
       tab.onclick = () => switchEvolveTab(tab.dataset.tab);
     });
 
-    // Per-tab refresh
+    // Per-tab refresh / stop
     const tabRefresh = $("#evolve-tab-refresh");
-    if (tabRefresh) tabRefresh.onclick = () => refreshEvolveTab(evolveActiveTab);
+    if (tabRefresh) tabRefresh.onclick = () => {
+      if (evolveStreamAborts[evolveActiveTab]) { _stopEvolveTab(evolveActiveTab); }
+      else { refreshEvolveTab(evolveActiveTab); }
+    };
 
     // Refresh all
     const refreshAll = $("#evolve-refresh-all");
@@ -74,6 +79,7 @@
     }
     updateEvolveOverviewBar();
     updateSyncButtonState();
+    _setEvolveRefreshButton(); // reflect active tab's stream state
   }
 
   /** Ensure a per-tab panel exists inside #evolve-tab-body */
@@ -234,6 +240,33 @@
     }
   }
 
+  // ── Auto-load server cache on init ──
+  function _loadServerCacheForMissingTabs() {
+    const tabs = ["profile", "memory", "rules", "signals", "patterns"];
+    const scope = getEvolveScope();
+    const params = new URLSearchParams({
+      source: scope.source || "all",
+      date: scope.date || "7d",
+      project: scope.project || "",
+      engine: scope.engine || "auto",
+    });
+    tabs.forEach(tab => {
+      if (getCachedTab(tab)) return; // already in localStorage
+      fetch(`/api/evolve/${tab}?${params}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data && !data._error && (data.categories?.length || data.nodes?.length || data.rules?.length || data.timeline?.length || data.bubbles?.length)) {
+            const normalized = normalizeEvolveData(tab, data);
+            setCachedTab(tab, normalized);
+            const panel = _ensureTabPanel(tab);
+            _renderTabPanel(tab, panel);
+            updateEvolveOverviewBar();
+          }
+        })
+        .catch(() => {}); // silent — server cache is optional
+    });
+  }
+
   // ── API call for analysis (unified: all tabs go through /api/evolve/{tab}) ──
   // AI tabs (profile, memory) may take longer since they run Codex on the backend
   const AI_TABS = new Set(["profile", "memory", "rules", "signals", "patterns"]);
@@ -284,6 +317,7 @@
     if (evolveStreamAborts[tab]) evolveStreamAborts[tab].abort();
     const abortCtrl = new AbortController();
     evolveStreamAborts[tab] = abortCtrl;
+    _setEvolveRefreshButton();
 
     return fetch(`/api/evolve/${tab}?${params}`, { signal: abortCtrl.signal })
       .then(response => {
@@ -312,7 +346,23 @@
         }
         return pump();
       })
-      .finally(() => { delete evolveStreamAborts[tab]; });
+      .finally(() => { delete evolveStreamAborts[tab]; _setEvolveRefreshButton(); });
+  }
+
+  function _setEvolveRefreshButton() {
+    const btn = $("#evolve-tab-refresh");
+    if (!btn) return;
+    const streaming = !!evolveStreamAborts[evolveActiveTab];
+    if (streaming) { btn.textContent = "■ Stop"; btn.classList.add("btn-stop"); }
+    else { btn.textContent = "🔄 Refresh"; btn.classList.remove("btn-stop"); }
+  }
+
+  function _stopEvolveTab(tab) {
+    if (evolveStreamAborts[tab]) { evolveStreamAborts[tab].abort(); delete evolveStreamAborts[tab]; }
+    delete evolveLoadingTabs[tab];
+    _setEvolveRefreshButton();
+    const updatedEl = $("#evolve-tab-updated");
+    if (updatedEl) { updatedEl.textContent = "已停止"; updatedEl.classList.remove("loading"); }
   }
 
   /** Show a "thinking" indicator below the last text block */
@@ -516,6 +566,7 @@
 
     _fetchEvolveTab(tab)
       .catch(err => {
+        if (err.name === "AbortError") return; // user stopped — preserve partial UI
         if (panel) panel.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${(window.esc || String)(err.message)}</p></div>`;
       })
       .finally(() => { delete evolveLoadingTabs[tab]; });

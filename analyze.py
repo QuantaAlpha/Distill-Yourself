@@ -2074,29 +2074,38 @@ def cmd_evolve_write(args):
       merge    — Add new items and update existing ones (match by id/name)
       delete   — Remove items by id/name
 
+    Storage: writes directly to SQLite (evolve_cache table).
     Input: JSON from stdin (for replace/merge) or --ids flag (for delete).
     Output: "OK" on success, error details on failure.
     """
+    import db as _db
     tab = args.tab
     mode = args.mode
-    cache_key = getattr(args, "cache_key", "") or ""
+    source = getattr(args, "source", "all") or "all"
+    date = getattr(args, "date", "7d") or "7d"
+    project = getattr(args, "project", "") or ""
+    engine = getattr(args, "engine", "auto") or "auto"
 
     if tab not in _EVOLVE_SCHEMAS:
         print(f"ERROR: invalid tab '{tab}'. Valid: {', '.join(_EVOLVE_SCHEMAS.keys())}", file=sys.stderr)
         sys.exit(1)
+
+    def _read_existing():
+        row = _db.evolve_get(tab, source, date, project, engine)
+        return row["data"] if row else {}
 
     if mode == "delete":
         ids = [i.strip() for i in (args.ids or "").split(",") if i.strip()]
         if not ids:
             print("ERROR: --ids required for delete mode (comma-separated)", file=sys.stderr)
             sys.exit(1)
-        existing = _read_evolve_cache(tab, cache_key)
+        existing = _read_existing()
         if not existing:
             print("ERROR: no existing data to delete from", file=sys.stderr)
             sys.exit(1)
         result = _delete_evolve_data(tab, existing, ids)
-        out_path = _write_evolve_cache(tab, result, cache_key)
-        print(f"OK: deleted {len(ids)} item(s) from {tab} → {out_path}")
+        _db.evolve_upsert(tab, source, date, project, engine, json.dumps(result, ensure_ascii=False))
+        print(f"OK: deleted {len(ids)} item(s) from {tab} → SQLite")
         return
 
     # Read JSON from stdin
@@ -2118,13 +2127,13 @@ def cmd_evolve_write(args):
         sys.exit(1)
 
     if mode == "merge":
-        existing = _read_evolve_cache(tab, cache_key)
+        existing = _read_existing()
         result = _merge_evolve_data(tab, existing, data) if existing else data
     else:
         result = data
 
-    out_path = _write_evolve_cache(tab, result, cache_key)
-    print(f"OK: {mode} {tab} → {out_path}")
+    _db.evolve_upsert(tab, source, date, project, engine, json.dumps(result, ensure_ascii=False))
+    print(f"OK: {mode} {tab} → SQLite")
 
 
 # ---------------------------------------------------------------------------
@@ -2739,13 +2748,16 @@ Examples:
     sub.add_parser("evolve-signals", parents=[shared], help="Generate signals JSON for Evolve page")
     sub.add_parser("evolve-patterns", parents=[shared], help="Generate patterns JSON for Evolve page")
 
-    p_ew = sub.add_parser("evolve-write", help="Write/merge/delete Evolve tab data (validated)")
+    p_ew = sub.add_parser("evolve-write", help="Write/merge/delete Evolve tab data (validated, writes to SQLite)")
     p_ew.add_argument("--tab", required=True, choices=["profile", "memory", "rules", "signals", "patterns"],
                        help="Target tab")
     p_ew.add_argument("--mode", default="replace", choices=["replace", "merge", "delete"],
                        help="Write mode: replace (full), merge (add/update), delete (remove by id)")
     p_ew.add_argument("--ids", default="", help="Comma-separated ids/names for delete mode")
-    p_ew.add_argument("--cache-key", default="", help="Optional scoped cache key")
+    p_ew.add_argument("--source", default="all", help="Scope: data source (all/claude/codex)")
+    p_ew.add_argument("--date", default="7d", help="Scope: date range (7d/30d/90d/all)")
+    p_ew.add_argument("--project", default="", help="Scope: project filter")
+    p_ew.add_argument("--engine", default="auto", help="Scope: AI engine used (auto/codex/claude)")
 
     sub.add_parser("aggregates", help="Print pre-computed aggregates from SQLite DB as JSON")
     sub.add_parser("profile-digest", parents=[shared], help="Pre-computed profile digest for sub-agents (JSON)")
