@@ -8,6 +8,7 @@ from pathlib import Path
 
 import analyze
 import db
+import server
 
 
 class TwinIntegrityTests(unittest.TestCase):
@@ -206,6 +207,41 @@ class TwinIntegrityTests(unittest.TestCase):
         )
         resumed = db.twin_run_get("run_a")
         self.assertEqual(resumed["stage_meta"]["1"]["status"], "done")
+
+    def test_twin_scope_snapshot_freezes_filtered_inputs(self):
+        old_index = server._index
+        old_index_gen = server._index_gen
+        try:
+            server._index_gen = 42
+            server._index = {
+                "sessions": {
+                    "s1": {
+                        "id": "s1",
+                        "source": "codex",
+                        "projectName": "Demo",
+                        "date": "2026-06-26T10:00:00",
+                        "lastDate": "2026-06-26T10:30:00",
+                    },
+                    "s2": {
+                        "id": "s2",
+                        "source": "claude",
+                        "projectName": "Other",
+                        "date": "2026-06-26T09:00:00",
+                    },
+                }
+            }
+
+            snap = server._twin_scope_snapshot("codex", "all", "Demo", "auto")
+        finally:
+            server._index = old_index
+            server._index_gen = old_index_gen
+
+        self.assertEqual(snap["index_gen"], 42)
+        self.assertEqual(snap["session_count"], 1)
+        self.assertEqual(snap["latest_session_ts"], "2026-06-26T10:30:00")
+        self.assertEqual(snap["source"], "codex")
+        self.assertEqual(snap["project"], "Demo")
+        self.assertEqual(len(snap["session_ids_hash"]), 16)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@
 
 Every day, **51% of developers worldwide** talk to AI coding assistants — generating thousands of rich exchanges full of architecture decisions, debugging insights, and preference signals. Then the terminal closes and all of it sinks into JSONL log files nobody ever reopens. A half-dozen open-source tools let you *browse* that history, but they stop there: no analysis, no pattern extraction, no feedback loop.
 
-ConvoLab goes further. It indexes your Claude Code and Codex sessions into a searchable, analyzable knowledge base, then mines five dimensions of intelligence with its **Evolve AI** engine — developer profile, memory graph, correction rules, behavioral signals, and recurring problem patterns — all rendered as interactive D3.js charts. **Distill Yourself** then turns those signals into a Cognitive Handbook: Evidence Events, Judgment Cards, Cognitive Traits, and a Runtime Pack that can guide future AI sessions. The real breakthrough is the closed loop: Evolve and Distill write their findings back into your `CLAUDE.md` and memory files, which your AI picks up on its next launch — fewer corrections, less context to rebuild, a partner that fits you a little better every week. At a time when developer trust in AI output has slipped from 40% to 29% and teams burn 2–3 engineer-days per sprint just rebuilding context, ConvoLab turns throwaway conversations into a compounding asset. Zero dependencies, fully local, your data never leaves your machine.
+ConvoLab goes further. It indexes your Claude Code and Codex sessions into a searchable, analyzable knowledge base, then mines five dimensions of intelligence with its **Evolve AI** engine — developer profile, memory graph, correction rules, behavioral signals, and recurring problem patterns — all rendered as interactive D3.js charts. **Distill Yourself** then turns those signals into a Cognitive Handbook: Evidence Events, Judgment Cards, Cognitive Traits, and a Runtime Pack that can guide future AI sessions. The real breakthrough is the closed loop: Evolve and Distill write their findings back into your `CLAUDE.md` and memory files, which your AI picks up on its next launch — fewer corrections, less context to rebuild, a partner that fits you a little better every week. At a time when developer trust in AI output has slipped from 40% to 29% and teams burn 2–3 engineer-days per sprint just rebuilding context, ConvoLab turns throwaway conversations into a compounding asset. Zero Python/Node dependencies, local-first storage, and no session data upload.
 
 **[📖 Read the user guide →](docs/USER_GUIDE.md)**
 
@@ -107,6 +107,7 @@ Turn conversation history into a structured, resumable Digital Twin that can gui
 - **Safe multi-agent flow** — reader subagents produce candidate JSON only; a supervisor validates, deduplicates, and writes once with `twin-batch`.
 - **Interactive recovery** — long runs persist `twin_runs` state; timeout/error/cancel screens show stage cards with elapsed time, counts, truncation state, last error, and Continue/Restart/Cancel actions.
 - **Stage resume** — `/api/twin/resume` can continue from Stage 1/2/3/4 without restarting completed work.
+- **Durable DAG roadmap** — future `twin_tasks` / `twin_artifacts` work is tracked separately in [docs/TWIN_DURABLE_DAG_ROADMAP.md](docs/TWIN_DURABLE_DAG_ROADMAP.md).
 
 ### 💬 AI Chat
 
@@ -157,8 +158,8 @@ ConvoLab/
 
 | Principle | Implementation |
 |-----------|---------------|
-| **Zero dependencies** | Python stdlib server, vanilla JS frontend. Only D3.js loaded via CDN. No `pip install`, no `npm`. |
-| **Privacy first** | All data read from local `~/.claude/` and `~/.codex/`. No telemetry, no cloud, no external calls. |
+| **Zero dependencies** | Python stdlib server, vanilla JS frontend. D3.js is loaded from CDN for charts. No `pip install`, no `npm`. |
+| **Privacy first** | All session data is read from local `~/.claude/` and `~/.codex/`. There is no telemetry and no session-data upload; the browser may fetch the D3.js static asset from CDN unless you vendor it locally. |
 | **Incremental everything** | File MTimes tracked; only changed JSONL files re-parsed. ThreadPoolExecutor for parallel parsing. |
 | **SQLite + FTS5** | Sessions & messages stored in `.cache/sessions.db` with WAL mode. FTS5 index powers CLI search; web uses fuzzy matching. |
 | **SSE streaming** | Evolve AI and Distill analysis stream real-time progress (tool execution, thinking, stage state, results) via Server-Sent Events. |
@@ -193,6 +194,9 @@ ConvoLab/
 | `GET` | `/api/twin/events` | List Evidence Events |
 | `GET` | `/api/twin/cards` | List Judgment Cards |
 | `GET` | `/api/twin/traits` | List Cognitive Traits |
+| `GET` | `/api/twin/stats` | Cognitive Handbook table counts and confidence summaries |
+| `GET` | `/api/twin/card/:id` | Judgment Card detail, supporting evidence, and relations |
+| `GET` | `/api/twin/trait/:id` | Cognitive Trait detail plus supporting cards |
 | `GET` | `/api/twin/runtime-preview` | Preview compiled Runtime Pack |
 | `GET` | `/api/stats` | Global statistics summary |
 | `GET` | `/api/refresh` | Rebuild session index from disk |
@@ -242,9 +246,17 @@ python3 analyze.py twin-events --json --limit 50
 python3 analyze.py twin-cards --json
 python3 analyze.py twin-traits --json
 python3 analyze.py twin-compile
+
+# Internal agent write helpers (validate first; prefer twin-batch transactions)
+python3 analyze.py evolve-write profile --cache-key <scope-key> < result.json
+python3 analyze.py twin-candidates < candidates.json
+python3 analyze.py twin-batch < operations.json
+python3 analyze.py twin-write < operations.json
 ```
 
 Most analysis commands support `--json` for machine-readable output and filters: `--source`, `--date`, `--project`, `--limit`. Additional commands available: `read`, `decisions`, `errors`, `stats`, `files`, `highlights`, `twin-get`, `twin-search`, `twin-add`, `twin-edit`, `twin-link`, `twin-batch`, and `twin-candidates`.
+
+`evolve-write`, `twin-write`, `twin-batch`, and `twin-candidates` are intended for trusted local agent workflows. For Distill writes, validate candidate JSON with `twin-candidates`, then use one transactional `twin-batch`; `twin-write` exists for lower-level maintenance and rolls back on errors.
 
 <br>
 

@@ -2039,7 +2039,7 @@ body {
 .twin-run-recovery span, .twin-recovery-actions span { display: block; margin-top: 3px; font-size: 12px; color: var(--text-muted); }
 .twin-run-error { color: #ef4444 !important; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .twin-run-actions, .twin-recovery-actions { flex-wrap: wrap; }
-.twin-stage-progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.twin-stage-progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 12px; }
 .twin-run-stage-card {
   border: 1px solid var(--border-light); border-radius: var(--radius-sm);
   background: var(--bg-surface); padding: 10px; min-width: 0;

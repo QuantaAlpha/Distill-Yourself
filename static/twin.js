@@ -150,7 +150,7 @@
   }
 
   function _isRecoverableRun(run) {
-    return run && ["timeout", "error", "cancelled"].includes(run.status);
+    return run && ["timeout", "error", "cancelled", "stale"].includes(run.status);
   }
 
   function _latestRunRecoveryHtml(run) {
@@ -173,10 +173,18 @@
   function _bindLatestRunActions(root) {
     if (!root || !latestTwinRun) return;
     root.querySelectorAll("[data-twin-resume]").forEach(btn => {
-      btn.onclick = () => resumeAnalysis(Number(btn.dataset.twinResume || latestTwinRun.current_stage || 1), latestTwinRun.run_id, latestTwinRun.scope || {});
+      btn.onclick = () => {
+        btn.disabled = true;
+        btn.textContent = "继续中…";
+        resumeAnalysis(Number(btn.dataset.twinResume || latestTwinRun.current_stage || 1), latestTwinRun.run_id, latestTwinRun.scope || {});
+      };
     });
     root.querySelectorAll("[data-twin-restart]").forEach(btn => {
-      btn.onclick = () => startAnalysis(true);
+      btn.onclick = () => {
+        btn.disabled = true;
+        btn.textContent = "重启中…";
+        startAnalysis(true);
+      };
     });
   }
 
@@ -783,15 +791,23 @@
   function _updateStageCard(evt) {
     const stageNum = Number(evt.stage_num || evt.stage || 0);
     if (!stageNum) return;
+    const previous = stageCards[stageNum] || {};
     stageCards[stageNum] = {
       stage: stageNum,
-      status: evt.status || stageCards[stageNum]?.status || "running",
-      elapsed_seconds: evt.elapsed_seconds || 0,
-      counts: evt.counts || stageCards[stageNum]?.counts || {},
-      truncated: Boolean(evt.truncated),
-      last_error: evt.last_error || "",
+      status: evt.status || previous.status || "running",
+      elapsed_seconds: evt.elapsed_seconds != null ? evt.elapsed_seconds : (previous.elapsed_seconds || 0),
+      counts: evt.counts || previous.counts || {},
+      truncated: evt.truncated != null ? Boolean(evt.truncated) : Boolean(previous.truncated),
+      last_error: evt.last_error != null ? evt.last_error : (previous.last_error || ""),
     };
     _renderStageCards();
+  }
+
+  function _disableRecoveryActions(container, message) {
+    if (!container) return;
+    container.querySelectorAll("button").forEach(btn => { btn.disabled = true; });
+    const copy = container.querySelector(".twin-recovery-copy span");
+    if (copy && message) copy.textContent = message;
   }
 
   function _renderRecoveryActions(evt, state) {
@@ -814,6 +830,7 @@
     const restartBtn = div.querySelector('[data-action="restart"]');
     const cancelBtn = div.querySelector('[data-action="cancel"]');
     if (resumeBtn) resumeBtn.onclick = () => {
+      _disableRecoveryActions(div, "正在继续上次 run，请稍候…");
       analysisRunning = false;
       if (analysisAbort) {
         try { analysisAbort.abort(); } catch (e) { /* ignore */ }
@@ -821,13 +838,17 @@
       resumeAnalysis(fromStage, runId, state.scope || {});
     };
     if (restartBtn) restartBtn.onclick = () => {
+      _disableRecoveryActions(div, "正在重新开始完整 Distill，请稍候…");
       analysisRunning = false;
       if (analysisAbort) {
         try { analysisAbort.abort(); } catch (e) { /* ignore */ }
       }
       startAnalysis(true);
     };
-    if (cancelBtn) cancelBtn.onclick = cancelAnalysis;
+    if (cancelBtn) cancelBtn.onclick = () => {
+      _disableRecoveryActions(div, "正在请求取消当前 run…");
+      cancelAnalysis();
+    };
     container.appendChild(div);
   }
 
@@ -1045,7 +1066,7 @@
         _updateStageCard({
           ...evt,
           status: "done",
-          counts: stageCards[state.currentStage]?.counts || {},
+          counts: evt.counts || stageCards[state.currentStage]?.counts || {},
         });
         break;
 
@@ -1164,11 +1185,8 @@
           state.textBlock.className = "text-block";
           container.appendChild(state.textBlock);
         }
-        state.textBlock.innerHTML = window.renderMarkdownSimple
-          ? window.renderMarkdownSimple(state.blockText)
-          : `<pre>${esc(state.blockText)}</pre>`;
+        _scheduleMarkdownRender(state, state.textBlock, state.blockText);
         _showThinking(container);
-        _autoScroll();
         break;
 
       case "result":
@@ -1180,9 +1198,7 @@
           state.textBlock.className = "text-block";
           container.appendChild(state.textBlock);
         }
-        state.textBlock.innerHTML = window.renderMarkdownSimple
-          ? window.renderMarkdownSimple(evt.content)
-          : `<pre>${esc(evt.content)}</pre>`;
+        _renderMarkdownInto(state.textBlock, evt.content);
         _autoScroll();
         break;
 
@@ -1252,6 +1268,23 @@
       state.currentToolGroup.classList.add("done");
       state.currentToolGroup = null;
     }
+  }
+
+  function _renderMarkdownInto(el, text) {
+    el.innerHTML = window.renderMarkdownSimple
+      ? window.renderMarkdownSimple(text)
+      : `<pre>${esc(text)}</pre>`;
+  }
+
+  function _scheduleMarkdownRender(state, el, text) {
+    el._pendingMarkdownText = text;
+    if (el._markdownRenderTimer) return;
+    const schedule = window.requestAnimationFrame || ((fn) => setTimeout(fn, 50));
+    el._markdownRenderTimer = schedule(() => {
+      el._markdownRenderTimer = null;
+      _renderMarkdownInto(el, el._pendingMarkdownText || "");
+      _autoScroll();
+    });
   }
 
   function _showThinking(container) {

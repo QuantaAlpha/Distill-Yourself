@@ -19,7 +19,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServe
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -1058,6 +1058,58 @@ def _stage_number(stage_label: str) -> int:
     return int(match.group(1)) if match else 1
 
 
+def _parse_iso_datetime(value: str):
+    """Parse common local/UTC ISO strings into naive datetime for comparisons."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _utc_now_naive() -> datetime:
+    """Return UTC as a naive datetime to match persisted DB timestamp strings."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _twin_scope_snapshot(source: str, date: str, project: str, engine: str) -> dict:
+    """Freeze the run input scope so resumes can detect stale or shifted inputs."""
+    days_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
+    max_days = days_map.get(date or "", 99999)
+    now = _utc_now_naive()
+    session_ids = []
+    latest_session_ts = ""
+    with _index_lock:
+        current_index_gen = _index_gen
+        sessions = list(_index.get("sessions", {}).values())
+
+    for meta in sessions:
+        if source and source != "all" and meta.get("source", "claude") != source:
+            continue
+        if project and meta.get("projectName", "") != project:
+            continue
+        date_str = meta.get("lastDate") or meta.get("date") or ""
+        parsed = _parse_iso_datetime(date_str)
+        if max_days < 99999 and parsed and (now - parsed).total_seconds() > max_days * 86400:
+            continue
+        session_ids.append(meta.get("id") or "")
+        if date_str and date_str > latest_session_ts:
+            latest_session_ts = date_str
+
+    session_ids = sorted([sid for sid in session_ids if sid])
+    return {
+        "index_gen": current_index_gen,
+        "session_count": len(session_ids),
+        "latest_session_ts": latest_session_ts,
+        "session_ids_hash": hashlib.sha256("\n".join(session_ids).encode("utf-8")).hexdigest()[:16],
+        "source": source or "all",
+        "date": date or "7d",
+        "project": project or "",
+        "engine": _normalize_ai_engine(engine),
+    }
+
+
 def _fuzzy_match(text_lower: str, query_lower: str, tokens: list):
     """Returns (matched, score). Exact substring → 1.0, token-based → ratio."""
     if query_lower in text_lower:
@@ -1593,7 +1645,33 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             except Exception:
                 overview["events"] = {"count": 0, "items": []}
             try:
-                overview["latest_run"] = _db.twin_run_latest()
+                latest_run = _db.twin_run_latest()
+                if latest_run and latest_run.get("status") == "running":
+                    state = self._get_twin_run_state()
+                    updated_at = _parse_iso_datetime(latest_run.get("updated_at", ""))
+                    is_active = (
+                        state.get("run_id") == latest_run.get("run_id")
+                        and state.get("status") == "running"
+                    )
+                    if updated_at and not is_active and (_utc_now_naive() - updated_at).total_seconds() > 1800:
+                        stage_num = int(latest_run.get("current_stage") or 1)
+                        counts = self._stage_counts(stage_num)
+                        _db.twin_run_update_stage(
+                            latest_run["run_id"],
+                            current_stage=stage_num,
+                            status="stale",
+                            stage_meta={str(stage_num): {
+                                "stage": stage_num,
+                                "status": "stale",
+                                "counts": counts,
+                                "truncated": bool(counts.get("truncated")),
+                                "last_error": "Run became stale after server restart or client disconnect",
+                            }},
+                            last_error="Run became stale after server restart or client disconnect",
+                            finished=True,
+                        )
+                        latest_run = _db.twin_run_get(latest_run["run_id"])
+                overview["latest_run"] = latest_run
             except Exception:
                 overview["latest_run"] = None
             self._json_response(overview)
@@ -3006,14 +3084,38 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             counts["shown"] = min(counts["events"], 120)
             counts["total"] = counts["events"]
             counts["truncated"] = counts["events"] > 120
+            counts["cursor"] = {
+                "input": "evidence_events",
+                "input_total": counts["events"],
+                "input_offset": 0,
+                "input_limit": 120,
+                "output": "judgment_cards",
+                "resume_granularity": "stage",
+                "run_scoped": False,
+            }
         elif stage_num == 3:
             counts["shown"] = min(counts["cards"], 120)
             counts["total"] = counts["cards"]
             counts["truncated"] = counts["cards"] > 120
+            counts["cursor"] = {
+                "input": "judgment_cards",
+                "input_total": counts["cards"],
+                "input_offset": 0,
+                "input_limit": 120,
+                "output": "cognitive_traits",
+                "resume_granularity": "stage",
+                "run_scoped": False,
+            }
         else:
             counts["shown"] = counts.get("events", 0)
             counts["total"] = counts.get("events", 0)
             counts["truncated"] = False
+            counts["cursor"] = {
+                "input": "sessions" if stage_num == 1 else "cognitive_traits",
+                "input_total": counts.get("events" if stage_num == 1 else "traits", 0),
+                "resume_granularity": "stage",
+                "run_scoped": False,
+            }
         return counts
 
     def _persist_twin_stage(self, run_id: str, stage_num: int, status: str,
@@ -3107,12 +3209,15 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             self._set_twin_run_state(status="stage_done", process=None)
             elapsed = round(time.time() - started, 1)
             self._persist_twin_stage(run_id, stage_num, "done", elapsed)
+            counts = self._stage_counts(stage_num)
             self._sse_event({
                 "type": "stage_done",
                 "stage": stage_label,
                 "stage_num": stage_num,
                 "run_id": run_id,
                 "elapsed_seconds": elapsed,
+                "counts": counts,
+                "truncated": bool(counts.get("truncated")),
             })
             return True
         except BrokenPipeError:
@@ -3188,12 +3293,15 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 self._sse_event({"type": "error", "message": f"Stage 4 failed: {msg}", "stage_num": stage_num, "run_id": run_id})
                 return False
             self._persist_twin_stage(run_id, stage_num, "done", elapsed)
+            counts = self._stage_counts(stage_num)
             self._sse_event({
                 "type": "stage_done",
                 "stage": "Stage 4",
                 "stage_num": stage_num,
                 "run_id": run_id,
                 "elapsed_seconds": elapsed,
+                "counts": counts,
+                "truncated": bool(counts.get("truncated")),
             })
             return True
         finally:
@@ -3264,6 +3372,30 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             return
 
         run_id = run_id or ("twrun_" + uuid.uuid4().hex[:10])
+        base_scope = {k: v for k, v in scope.items() if k != "_snapshot_drift"}
+        current_snapshot = _twin_scope_snapshot(source, date, project, engine)
+        prior_snapshot = base_scope.get("_snapshot")
+        if not prior_snapshot:
+            scope = {
+                **base_scope,
+                "_snapshot": current_snapshot,
+            }
+        else:
+            scope = base_scope
+            drift_keys = ["index_gen", "session_count", "latest_session_ts", "session_ids_hash"]
+            drift = {
+                key: {"previous": prior_snapshot.get(key), "current": current_snapshot.get(key)}
+                for key in drift_keys
+                if prior_snapshot.get(key) != current_snapshot.get(key)
+            }
+            if drift:
+                scope = {
+                    **base_scope,
+                    "_snapshot_drift": {
+                        "detected_at": _utc_now_naive().isoformat(),
+                        "fields": drift,
+                    },
+                }
         _db.twin_run_upsert(run_id, scope, start_stage=start_stage,
                             current_stage=start_stage, status="running")
         self._set_twin_run_state(
@@ -3279,6 +3411,11 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         try:
             self._sse_event({"type": "run_started", "run_id": run_id, "scope": scope,
                              "start_stage": start_stage, "resume": resume})
+            if scope.get("_snapshot_drift"):
+                self._sse_event({"type": "text", "content": (
+                    "\n\n⚠️ Run snapshot differs from the current index. "
+                    "Continuing with the persisted run state; restart if you want to include newly indexed sessions.\n"
+                )})
 
             if start_stage <= 1:
                 self._sse_event({"type": "text", "content": (

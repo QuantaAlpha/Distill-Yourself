@@ -2,7 +2,7 @@
 
 > 让与 AI 的对话沉淀为可复用的资产，而不是用完即弃。
 
-ConvoLab 是一个本地运行的 AI 会话分析工具。它会读取你与 Claude Code、Codex 等编程助手产生的全部对话，索引成一个可检索、可分析的知识库；在此之上，它能归纳出你的开发习惯、偏好与反复纠正过的要点，并把这些结论回写进 AI 的配置文件，让之后的协作越来越贴合你的方式。整套工具零依赖、纯本地运行，数据不离开你的机器。
+ConvoLab 是一个本地运行的 AI 会话分析工具。它会读取你与 Claude Code、Codex 等编程助手产生的全部对话，索引成一个可检索、可分析的知识库；在此之上，它能归纳出你的开发习惯、偏好与反复纠正过的要点，并把这些结论回写进 AI 的配置文件，让之后的协作越来越贴合你的方式。整套工具不需要安装 Python/Node 依赖，采用本地优先存储，不上传你的会话数据。
 
 它适合每天大量使用 AI 编程助手、又希望把这些对话真正利用起来的开发者。
 
@@ -31,7 +31,7 @@ flowchart LR
 
 ## 一键安装
 
-ConvoLab 零依赖：不需要 pip、npm 或 Docker，本机有 Python 3.8 及以上版本即可运行。
+ConvoLab 零安装依赖：不需要 pip、npm 或 Docker，本机有 Python 3.8 及以上版本即可运行。
 
 ```bash
 python3 server.py
@@ -39,7 +39,7 @@ python3 server.py
 
 启动后，浏览器打开终端里给出的本地地址就能使用。它会自动扫描 Claude Code 与 Codex 的会话目录，无需手动导入，两类来源会汇总在同一个列表里并标注区分。
 
-浏览、搜索、洞察这些功能不依赖任何 AI 引擎，开箱即用；AI Chat 与进化引擎则需要本机装有 Claude Code 或 Codex 的命令行工具——ConvoLab 直接调用本地 CLI，不需要任何 API key。
+浏览、搜索、洞察这些功能不依赖任何 AI 引擎，开箱即用；AI Chat 与进化引擎则需要本机装有 Claude Code 或 Codex 的命令行工具——ConvoLab 直接调用本地 CLI，不需要在本项目里配置 API key。
 
 ---
 
@@ -126,4 +126,4 @@ flowchart LR
 
 ## 隐私
 
-ConvoLab 全程在本地运行，不联网、不上报、不调用任何外部服务，你的对话数据只留在自己机器上。
+ConvoLab 的索引、SQLite 存储和会话分析都在本机完成，不上报遥测，也不会上传你的对话数据。默认前端会从 CDN 加载 D3.js 静态资源用于图表；如果你需要完全离线运行，可以把 D3 vendor 到 `static/` 并调整 `static/index.html`。AI Chat、Evolve 和 Distill 会调用本机安装的 Claude Code 或 Codex CLI，实际网络行为取决于这些 CLI 自身配置。
