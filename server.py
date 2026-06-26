@@ -1166,38 +1166,6 @@ def _normalize_ai_engine(engine: str) -> str:
     return engine
 
 
-def _evolve_cache_key(tab: str, source: str, date: str, project: str, engine: str) -> str:
-    """Stable short cache key for a specific Evolve tab and analysis scope."""
-    raw = json.dumps(
-        {
-            "tab": tab,
-            "source": source or "all",
-            "date": date or "7d",
-            "project": project or "",
-            "engine": _normalize_ai_engine(engine),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def _evolve_cache_path(tab: str, source: str, date: str, project: str, engine: str) -> Path:
-    key = _evolve_cache_key(tab, source, date, project, engine)
-    return CACHE_DIR / "evolve" / f"{tab}.{key}.json"
-
-
-def _latest_evolve_cache_path(tab: str) -> Path:
-    """Return newest scoped Evolve cache for Twin context, falling back to legacy."""
-    cache_dir = CACHE_DIR / "evolve"
-    scoped = sorted(
-        cache_dir.glob(f"{tab}.*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    ) if cache_dir.exists() else []
-    if scoped:
-        return scoped[0]
-    return cache_dir / f"{tab}.json"
 
 
 def _detect_ai_engine():
@@ -1349,7 +1317,8 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_callback
             remaining = deadline - time.time()
             if remaining <= 0:
                 proc.kill()
-                yield {"type": "error", "message": "Timeout"}
+                yield {"type": "timeout", "content": accumulated_text,
+                       "message": f"Timeout ({timeout // 60} min limit)"}
                 return
             ready, _, _ = _select.select([proc.stdout], [], [], min(remaining, 1.0))
             if ready:
@@ -1797,25 +1766,23 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
     _AI_TABS = {"profile", "memory", "rules", "signals", "patterns"}
 
     def _get_evolve_tab(self, tab: str, refresh: bool, source: str, date: str, project: str, engine: str = "auto") -> dict:
-        """Get evolve tab data: serve cache or run analyze.py / AI engine to generate."""
+        """Get evolve tab data: serve DB cache or run AI engine to generate."""
+        import db as _db
         try:
             engine = _normalize_ai_engine(engine)
         except ValueError as e:
             return self._evolve_fallback(tab, str(e))
-        cache_path = _evolve_cache_path(tab, source, date, project, engine)
 
-        # If not refreshing and cache exists, serve it
-        if not refresh and cache_path.exists():
-            try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
+        # If not refreshing, serve from DB
+        if not refresh:
+            row = _db.evolve_get(tab, source, date, project, engine)
+            if row:
+                return row["data"]
 
         if tab in self._DIRECT_TABS:
             return self._evolve_direct(tab, source, date, project)
         else:
-            return self._evolve_via_ai(tab, source, date, project, cache_path, engine)
+            return self._evolve_via_ai(tab, source, date, project, engine)
 
     def _evolve_direct(self, tab: str, source: str, date: str, project: str) -> dict:
         """Run analyze.py directly for rules/signals/patterns."""
@@ -1841,14 +1808,14 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         }
         return fallbacks.get(tab, {})
 
-    def _evolve_via_ai(self, tab: str, source: str, date: str, project: str, cache_path: Path, engine: str = "auto") -> dict:
-        """Run AI engine to analyze conversations and write results via evolve-write."""
+    def _evolve_via_ai(self, tab: str, source: str, date: str, project: str, engine: str = "auto") -> dict:
+        """Run AI engine to analyze conversations; AI writes result to SQLite via evolve-write CLI."""
+        import db as _db
         cli_path = str(Path(__file__).resolve().parent / "analyze.py")
-        cache_key = _evolve_cache_key(tab, source, date, project, engine)
-        prompt = self._build_evolve_prompt(tab, source, date, project, cli_path, cache_key)
+        prompt = self._build_evolve_prompt(tab, source, date, project, cli_path, engine)
 
         try:
-            _run_ai_engine(prompt, allow_write=True, timeout=300, engine_override=engine)
+            _run_ai_engine(prompt, allow_write=True, timeout=600, engine_override=engine)
         except FileNotFoundError as e:
             return self._evolve_fallback(tab, str(e))
         except subprocess.TimeoutExpired:
@@ -1856,33 +1823,30 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             return self._evolve_fallback(tab, str(e))
 
-        # After AI engine finishes, read the cache file it wrote via evolve-write
-        if cache_path.exists():
-            try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
+        # AI wrote to SQLite via evolve-write CLI — read it back
+        row = _db.evolve_get(tab, source, date, project, engine)
+        if row:
+            return row["data"]
 
-        engine = _detect_ai_engine() or "AI"
-        return self._evolve_fallback(tab, f"{engine} did not produce valid output")
+        engine_name = _detect_ai_engine() or "AI"
+        return self._evolve_fallback(tab, f"{engine_name} did not produce valid output")
 
     def _handle_evolve_stream(self, tab: str, source: str, date: str, project: str, engine: str = "auto"):
         """SSE streaming for AI evolve tabs (profile/memory)."""
+        import db as _db
         try:
             engine = _normalize_ai_engine(engine)
         except ValueError as e:
             self._start_sse()
             self._sse_event({"type": "error", "message": str(e)})
             return
-        cache_path = _evolve_cache_path(tab, source, date, project, engine)
         cli_path = str(Path(__file__).resolve().parent / "analyze.py")
-        cache_key = _evolve_cache_key(tab, source, date, project, engine)
-        prompt = self._build_evolve_prompt(tab, source, date, project, cli_path, cache_key)
+        prompt = self._build_evolve_prompt(tab, source, date, project, cli_path, engine)
 
         self._start_sse()
+        stream = _run_ai_engine_stream(prompt, allow_write=True, timeout=600, engine_override=engine)
         try:
-            for evt in _run_ai_engine_stream(prompt, allow_write=True, timeout=600, engine_override=engine):
+            for evt in stream:
                 self._sse_event(evt)
         except BrokenPipeError:
             return
@@ -1892,18 +1856,16 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             except BrokenPipeError:
                 return
             return
+        finally:
+            stream.close()
 
-        # After streaming completes, read the cache file the AI wrote
+        # AI wrote to SQLite via evolve-write CLI — read it back
         try:
-            if cache_path.exists():
-                try:
-                    with open(cache_path, "r", encoding="utf-8") as f:
-                        result = json.load(f)
-                    self._sse_event({"type": "evolve_result", "data": result})
-                except (json.JSONDecodeError, OSError):
-                    self._sse_event({"type": "error", "message": "AI did not produce valid output"})
+            row = _db.evolve_get(tab, source, date, project, engine)
+            if row:
+                self._sse_event({"type": "evolve_result", "data": row["data"]})
             else:
-                self._sse_event({"type": "error", "message": "AI did not write result file"})
+                self._sse_event({"type": "error", "message": "AI did not write result to database"})
         except BrokenPipeError:
             return
 
@@ -2043,21 +2005,18 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         except Exception:
             return ""
 
-    def _build_evolve_prompt(self, tab: str, source: str, date: str, project: str, cli_path: str, cache_key: str = "") -> str:
+    def _build_evolve_prompt(self, tab: str, source: str, date: str, project: str, cli_path: str, engine: str = "auto") -> str:
         """Build a prompt that instructs the AI to progressively explore data via CLI tools."""
         cli_flags = f"--date {shlex.quote(date)} --source {shlex.quote(source)}"
         if project:
             cli_flags += f" --project {shlex.quote(project)}"
 
-        write_cmd = f"python3 {cli_path} evolve-write --tab {tab}"
-        if cache_key:
-            write_cmd += f" --cache-key {cache_key}"
+        write_cmd = f"python3 {cli_path} evolve-write --tab {tab} --source {source} --date {date} --engine {engine}"
+        if project:
+            write_cmd += f' --project "{project}"'
 
-        # For profile/memory: use pre-computed digest; for other tabs: use CLI exploration
-        use_digest = tab in ("profile", "memory")
-        digest = ""
-        if use_digest:
-            digest = self._collect_profile_digest(source, date, project, cli_path)
+        # All AI tabs benefit from pre-computed digest (corrections, friction, queries, decisions)
+        digest = self._collect_profile_digest(source, date, project, cli_path)
 
         parts = [
             "# Background",
@@ -2069,7 +2028,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         ]
 
         digest_cmd = f"python3 {shlex.quote(cli_path)} profile-digest {cli_flags}"
-        if use_digest and digest:
+        if tab in ("profile", "memory") and digest:
             # Digest-based flow: main agent sees full digest, sub-agents run command to get it
             parts.extend([
                 "# Pre-computed Profile Digest",
@@ -2182,6 +2141,14 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 parts.extend(["# Pre-collected Data (do NOT re-run these)", "", "=== STATS ===", stats, ""])
             if aggregates:
                 parts.extend(["=== AGGREGATES ===", aggregates, ""])
+            if digest:
+                parts.extend([
+                    "",
+                    "# Pre-computed Profile Digest (corrections, friction, queries, decisions — do NOT re-run profile-digest)",
+                    "",
+                    digest,
+                    "",
+                ])
 
             claude_dir = str(Path.home() / ".claude" / "projects")
             codex_dir = str(Path.home() / ".codex")
@@ -2726,19 +2693,31 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         context_type = data.get("contextType", "")
         session_id = data.get("sessionId", "")
         scope = data.get("scope", {})
+        messages = data.get("messages", [])
 
         if not prompt:
             self._error(400, "No prompt")
             return
 
-        full_prompt = self._build_chat_prompt(prompt, context_type, session_id, scope)
+        full_prompt = self._build_chat_prompt(prompt, context_type, session_id, scope, messages)
         self._start_sse()
 
+        # Global analysis needs more time (sub-agents, CLI exploration)
+        chat_timeout = int(data.get("timeout", 900))
+        chat_timeout = max(60, min(chat_timeout, 1800))  # clamp 1min-30min
+        stream = _run_ai_engine_stream(full_prompt, allow_write=False, timeout=chat_timeout)
         try:
-            for evt in _run_ai_engine_stream(full_prompt, allow_write=False, timeout=300):
+            for evt in stream:
                 self._sse_event(evt)
+        except BrokenPipeError:
+            return
         except Exception as e:
-            self._sse_event({"type": "error", "message": str(e)})
+            try:
+                self._sse_event({"type": "error", "message": str(e)})
+            except BrokenPipeError:
+                pass
+        finally:
+            stream.close()
 
     def _handle_chat_legacy(self):
         """Original blocking chat endpoint (kept for compatibility)."""
@@ -2752,15 +2731,18 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         context_type = data.get("contextType", "")
         session_id = data.get("sessionId", "")
         scope = data.get("scope", {})
+        messages = data.get("messages", [])
 
         if not prompt:
             self._error(400, "No prompt")
             return
 
-        full_prompt = self._build_chat_prompt(prompt, context_type, session_id, scope)
+        full_prompt = self._build_chat_prompt(prompt, context_type, session_id, scope, messages)
 
         try:
-            stdout, stderr, _ = _run_ai_engine(full_prompt, allow_write=False, timeout=300)
+            legacy_timeout = int(data.get("timeout", 900))
+            legacy_timeout = max(60, min(legacy_timeout, 1800))
+            stdout, stderr, _ = _run_ai_engine(full_prompt, allow_write=False, timeout=legacy_timeout)
             output = stdout.strip()
             if not output and stderr:
                 stderr = stderr.strip()
@@ -2775,13 +2757,73 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         except FileNotFoundError as e:
             output = f"Error: {e}"
         except subprocess.TimeoutExpired:
-            output = "Error: Request timed out (5 min limit)"
+            output = f"Error: Request timed out ({legacy_timeout // 60} min limit)"
         except Exception as e:
             output = f"Error: {str(e)}"
 
         self._json_response({"response": output})
 
-    def _build_chat_prompt(self, prompt: str, context_type: str, session_id: str, scope: dict = None) -> str:
+    @staticmethod
+    def _compress_chat_history(messages: list) -> str:
+        """Compress chat history into a bounded transcript for prompt inclusion."""
+        if not messages or not isinstance(messages, list):
+            return ""
+        MAX_TOTAL_CHARS = 200_000  # ~50k tokens budget
+        ASSISTANT_TRUNCATE = 3000  # per-message cap for assistant
+
+        # Filter and validate
+        valid = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role not in ("user", "assistant") or not isinstance(content, str):
+                continue
+            # Skip error/abort messages
+            if content.startswith("**Error:**") or content.endswith("*(已停止)*"):
+                continue
+            valid.append((role, content))
+
+        if not valid:
+            return ""
+
+        # Truncate long assistant messages
+        processed = []
+        for role, content in valid:
+            if role == "assistant" and len(content) > ASSISTANT_TRUNCATE:
+                content = content[:ASSISTANT_TRUNCATE - 200] + "\n...[truncated]...\n" + content[-150:]
+            processed.append((role, content))
+
+        # Check total size; if over budget, keep head 2 + as many tail as fit
+        total = sum(len(c) for _, c in processed)
+        if total > MAX_TOTAL_CHARS and len(processed) > 4:
+            head = processed[:2]
+            head_size = sum(len(c) for _, c in head)
+            remaining = MAX_TOTAL_CHARS - head_size - 100  # 100 for omission marker
+            tail = []
+            for role, content in reversed(processed[2:]):
+                if remaining - len(content) < 0 and tail:
+                    break
+                tail.insert(0, (role, content))
+                remaining -= len(content)
+            omitted = len(processed) - len(head) - len(tail)
+            processed = head + [(None, f"[... {omitted} earlier messages omitted ...]")] + tail
+
+        # Format as numbered transcript
+        lines = []
+        idx = 1
+        for role, content in processed:
+            if role is None:
+                lines.append(content)
+            else:
+                label = "User" if role == "user" else "Assistant"
+                lines.append(f"[{idx}] {label}:\n{content}")
+                idx += 1
+
+        return "\n\n".join(lines)
+
+    def _build_chat_prompt(self, prompt: str, context_type: str, session_id: str, scope: dict = None, messages: list = None) -> str:
         """Build a context-enriched prompt for the AI engine with rich metadata and CLI tools."""
         cli_path = str(Path(__file__).resolve().parent / "analyze.py")
         context_parts = [
@@ -2806,6 +2848,8 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 source = meta.get("source", "claude")
                 msg_count = meta.get("userMessageCount", 0)
 
+                context_parts.append("--- Analysis Context ---")
+                context_parts.append("")
                 context_parts.append(f"You are analyzing a {source} session: '{title}' from project '{project}'.")
                 context_parts.append(f"Quick read: python3 {cli_path} read {session_id}")
                 context_parts.append(f"Session file (JSONL): {fp}")
@@ -2836,9 +2880,10 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             if scope.get("project"):
                 cli_flags.append(f"--project \"{scope['project']}\"")
             flags_str = " ".join(cli_flags) if cli_flags else ""
+            context_parts.append("--- Analysis Context ---")
+            context_parts.append("")
             context_parts.append(f"Current scope filters: {flags_str or '(none)'}")
             context_parts.append(f"IMPORTANT: Always pass these flags to the CLI tool. Example: python3 {cli_path} stats {flags_str}")
-            context_parts.append(f"Start with: python3 {cli_path} stats {flags_str}")
             context_parts.append("")
 
             with _index_lock:
@@ -2884,6 +2929,58 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             # Compact project breakdown
             top_projects = sorted(proj_counts.items(), key=lambda x: -x[1])[:10]
             context_parts.append("Projects: " + ", ".join(f"{p}({c})" for p, c in top_projects))
+            context_parts.append("")
+
+            # Pre-computed data: digest + stats + aggregates (same as Evolve)
+            source = scope.get("source", "all")
+            date = scope.get("date", "7d")
+            project = scope.get("project", "")
+
+            digest = self._collect_profile_digest(source, date, project, cli_path)
+            if digest:
+                context_parts.append("# Pre-computed Profile Digest (data overview — do NOT re-run profile-digest)")
+                context_parts.append(digest)
+                context_parts.append("")
+
+            stats = self._collect_stats(source, date, project, cli_path)
+            if stats:
+                context_parts.append("# Pre-collected Stats (do NOT re-run stats)")
+                context_parts.append(stats)
+                context_parts.append("")
+
+            aggregates = self._collect_aggregates()
+            if aggregates:
+                context_parts.append("# Pre-collected Aggregates (do NOT re-run aggregates)")
+                context_parts.append(aggregates)
+                context_parts.append("")
+
+            # Sub-agent guidance for complex analysis
+            if total > 10:
+                digest_cmd = f"python3 {cli_path} profile-digest --date {date} --source {source}" + (f' --project "{project}"' if project else "")
+                context_parts.extend([
+                    "# Execution Strategy",
+                    "",
+                    "For complex analysis tasks, dispatch 2-3 sub-agents (via Agent tool) in parallel for efficiency.",
+                    "Each agent's prompt MUST include:",
+                    f"  - Digest command: `{digest_cmd}` (agent runs this to get the overview)",
+                    f"  - CLI tool: `python3 {cli_path} <command> {flags_str}`",
+                    "  - Its assigned focus area and specific exploration instructions",
+                    "",
+                    "Efficiency rules:",
+                    "- Use the digest above as a map — skip to relevant sections, don't re-scan everything.",
+                    "- Batch CLI commands in one Bash call (e.g. echo '=== A ==='; python3 ... ; echo '=== B ==='; python3 ...)",
+                    "- Use `read -s <id>` for session context, `search <keyword>` for targeted exploration.",
+                    "- Do NOT re-run stats/aggregates/profile-digest — that data is already above.",
+                    "",
+                ])
+
+        # Append chat history if available (multi-turn context)
+        chat_history = self._compress_chat_history(messages) if messages else ""
+        if chat_history:
+            context_parts.append("")
+            context_parts.append("--- Chat History ---")
+            context_parts.append("")
+            context_parts.append(chat_history)
 
         if context_parts:
             return "\n".join(context_parts) + "\n\n--- User Request ---\n" + prompt
@@ -2891,6 +2988,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 
     def _handle_evolve_sync(self):
         """Handle POST /api/evolve/sync — preview or execute sync to Claude Code."""
+        import db as _db
         try:
             data = json.loads(self._read_post_body())
         except json.JSONDecodeError:
@@ -2916,29 +3014,29 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         result = {}
 
         if "memory" in targets:
-            memory_cache = _evolve_cache_path("memory", source, date, project, engine)
-            if memory_cache.exists():
+            row = _db.evolve_get("memory", source, date, project, engine)
+            if row:
                 try:
-                    mem_data = json.loads(memory_cache.read_text(encoding="utf-8"))
+                    mem_data = row["data"]
                     if action == "preview":
                         result["memory"] = _evolve_sync_memory_preview(mem_data)
                     else:
                         result["memory"] = _evolve_sync_memory_execute(mem_data)
-                except (json.JSONDecodeError, OSError) as e:
+                except Exception as e:
                     result["memory"] = {"error": str(e)}
             else:
                 result["memory"] = {"error": "Memory cache not found — run Refresh first"}
 
         if "claude_md" in targets:
-            profile_cache = _evolve_cache_path("profile", source, date, project, engine)
-            if profile_cache.exists():
+            row = _db.evolve_get("profile", source, date, project, engine)
+            if row:
                 try:
-                    prof_data = json.loads(profile_cache.read_text(encoding="utf-8"))
+                    prof_data = row["data"]
                     if action == "preview":
                         result["claude_md"] = _evolve_sync_claude_md_preview(prof_data)
                     else:
                         result["claude_md"] = _evolve_sync_claude_md_execute(prof_data)
-                except (json.JSONDecodeError, OSError) as e:
+                except Exception as e:
                     result["claude_md"] = {"error": str(e)}
             else:
                 result["claude_md"] = {"error": "Profile cache not found — run Refresh first"}
@@ -3070,15 +3168,17 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             state = self._get_twin_run_state()
             return state.get("run_id") == run_id and bool(state.get("cancel_requested"))
 
+        stream = None
         try:
-            for evt in _run_ai_engine_stream(
+            stream = _run_ai_engine_stream(
                 prompt,
                 allow_write=True,
                 timeout=600,
                 engine_override=engine,
                 proc_callback=_set_proc,
                 cancel_callback=_cancelled,
-            ):
+            )
+            for evt in stream:
                 if evt.get("type") == "error":
                     evt = dict(evt)
                     evt["stage"] = stage_label
@@ -3124,6 +3224,8 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             return False
         finally:
             self._set_twin_run_state(process=None)
+            if stream is not None:
+                stream.close()
 
     def _run_twin_compile_stage(self, cli_path: str, run_id: str) -> bool:
         """Run Stage 4 with cancellation and timeout support."""
@@ -3481,24 +3583,20 @@ Quality requirements:
             "existing_cards_truncated": existing_card_total > len(existing_cards),
         }
 
-        # Get latest Profile/Memory as supplementary input, preferring scoped caches.
-        profile_cache = _latest_evolve_cache_path("profile")
-        memory_cache = _latest_evolve_cache_path("memory")
+        # Get latest Profile/Memory as supplementary input from SQLite.
         profile_summary = ""
         memory_summary = ""
         try:
-            if profile_cache.exists():
-                with open(profile_cache) as f:
-                    pd = json.load(f)
-                cats = [c.get("name", "") for c in pd.get("categories", [])]
+            pr = _db.evolve_latest("profile")
+            if pr:
+                cats = [c.get("name", "") for c in pr["data"].get("categories", [])]
                 profile_summary = f"Existing Profile categories: {', '.join(cats)}"
         except Exception:
             pass
         try:
-            if memory_cache.exists():
-                with open(memory_cache) as f:
-                    md = json.load(f)
-                labels = [n.get("label", "") for n in md.get("nodes", [])]
+            mr = _db.evolve_latest("memory")
+            if mr:
+                labels = [n.get("label", "") for n in mr["data"].get("nodes", [])]
                 memory_summary = f"Existing Memory labels: {', '.join(labels)}"
         except Exception:
             pass

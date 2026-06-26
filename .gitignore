@@ -11,7 +11,7 @@ docs/research/
 docs/decisions/
 docs/reference/
 docs/superpowers/
-docs/DEV_NOTES.md
+docs/*
 .planning/
 AGENTS.md
 DESIGN.md

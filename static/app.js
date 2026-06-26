@@ -30,12 +30,15 @@
   let sessionChatCache = {}; // {[sessionId]: {messages:[{role,content}]}}
   let sessionAiLoading = false;
   let globalAiLoading = false;
+  let sessionAiHandle = null; // sendChatStream handle for abort
+  let globalAiHandle = null;
 
   // Global AI scope state
   let globalScopeSource = "all";
   let globalScopeDate = "7d";
   let globalScopeProject = "";
   let globalScopeEngine = "auto";
+  let chatTimeout = parseInt(localStorage.getItem("chatview-timeout") || "900", 10); // seconds
 
   // Insights page state
   let insightsActiveTab = "heatmap";
@@ -263,10 +266,15 @@
     // ── Session AI bindings (right panel) ──
     const sessionAiSend = $("#session-ai-send");
     const sessionAiInput = $("#session-ai-input");
-    if (sessionAiSend) sessionAiSend.addEventListener("click", () => submitSessionAi());
+    if (sessionAiSend) sessionAiSend.addEventListener("click", () => {
+      if (sessionAiLoading && sessionAiHandle) { _stopSessionAi(); } else { submitSessionAi(); }
+    });
     if (sessionAiInput) {
       sessionAiInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitSessionAi(); }
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          if (sessionAiLoading && sessionAiHandle) { _stopSessionAi(); } else { submitSessionAi(); }
+        }
       });
       sessionAiInput.addEventListener("input", () => autoResizeTextarea(sessionAiInput));
     }
@@ -278,10 +286,15 @@
     // ── Global AI bindings (AI page chat panel) ──
     const chatSendBtn = $("#ai-chat-send");
     const chatInput = $("#ai-chat-input");
-    if (chatSendBtn) chatSendBtn.addEventListener("click", () => submitGlobalAi());
+    if (chatSendBtn) chatSendBtn.addEventListener("click", () => {
+      if (globalAiLoading && globalAiHandle) { _stopGlobalAi(); } else { submitGlobalAi(); }
+    });
     if (chatInput) {
       chatInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitGlobalAi(); }
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          if (globalAiLoading && globalAiHandle) { _stopGlobalAi(); } else { submitGlobalAi(); }
+        }
       });
       chatInput.addEventListener("input", () => autoResizeTextarea(chatInput));
     }
@@ -2002,10 +2015,11 @@
    *   .onError(fn) — called with error message
    *   .abort()     — cancel the stream
    */
-  function sendChatStream(prompt, contextType, sessionId, scope) {
-    const body = {prompt, contextType, sessionId: sessionId || null};
+  function sendChatStream(prompt, contextType, sessionId, scope, messages) {
+    const body = {prompt, contextType, sessionId: sessionId || null, timeout: chatTimeout};
     if (scope) body.scope = scope;
-    const callbacks = { text: null, tool: null, done: null, error: null };
+    if (messages && messages.length) body.messages = messages;
+    const callbacks = { text: null, tool: null, done: null, error: null, abort: null };
     const controller = new AbortController();
 
     const handle = {
@@ -2013,6 +2027,7 @@
       onTool(fn) { callbacks.tool = fn; return handle; },
       onDone(fn) { callbacks.done = fn; return handle; },
       onError(fn) { callbacks.error = fn; return handle; },
+      onAbort(fn) { callbacks.abort = fn; return handle; },
       abort() { controller.abort(); },
     };
 
@@ -2051,7 +2066,9 @@
       }
       return pump();
     }).catch(err => {
-      if (err.name !== "AbortError" && callbacks.error) {
+      if (err.name === "AbortError") {
+        if (callbacks.abort) callbacks.abort(state.text);
+      } else if (callbacks.error) {
         callbacks.error(err.message);
       }
     });
@@ -2059,22 +2076,40 @@
     return handle;
   }
 
+  function _appendContinueButton(container, onClick) {
+    const wrap = document.createElement("div");
+    wrap.className = "chat-continue-wrap";
+    const btn = document.createElement("button");
+    btn.className = "btn-continue";
+    btn.textContent = "继续分析";
+    btn.addEventListener("click", () => {
+      wrap.remove();
+      onClick();
+    });
+    wrap.appendChild(btn);
+    container.appendChild(wrap);
+    _autoScroll(container);
+  }
+
   function _handleStreamEvent(evt, callbacks, state) {
     switch (evt.type) {
       case "text":
         state.text += evt.content;
-        // Pass raw chunk (not accumulated) — each block accumulates its own
         if (callbacks.text) callbacks.text(evt.content);
         break;
       case "tool":
         if (callbacks.tool) callbacks.tool(evt);
         break;
       case "result":
-        // Claude's final result — treat as a text chunk for the current block
         state.text = evt.content;
         break;
       case "done":
         if (callbacks.done) callbacks.done(evt.content || state.text);
+        break;
+      case "timeout":
+        // Timeout with partial text — treat as done-with-partial so history is preserved
+        state.text = evt.content || state.text;
+        if (callbacks.done) callbacks.done(state.text, true); // second arg = isTimeout
         break;
       case "error":
         if (callbacks.error) callbacks.error(evt.message);
@@ -2145,9 +2180,12 @@
 
     // Show streaming bubble
     sessionAiLoading = true;
+    _setSessionAiButton(true);
     const assistantTurn = currentSessionId === targetSessionId
       ? createAssistantTurn(container) : null;
-    sendChatStream(text, "session", targetSessionId)
+    const handle = sendChatStream(text, "session", targetSessionId, undefined, cache.messages.slice(0, -1));
+    sessionAiHandle = handle;
+    handle
       .onText(chunk => {
         if (assistantTurn && currentSessionId === targetSessionId) {
           assistantTurn.updateText(chunk);
@@ -2158,24 +2196,59 @@
           assistantTurn.addTool(evt);
         }
       })
-      .onDone(fullText => {
+      .onDone((fullText, isTimeout) => {
+        if (sessionAiHandle !== handle) return;
         sessionAiLoading = false;
+        sessionAiHandle = null;
+        _setSessionAiButton(false);
         const reply = fullText || "(empty response)";
         cache.messages.push({role: "assistant", content: reply});
         saveChatToStorage();
         if (assistantTurn && currentSessionId === targetSessionId) {
           assistantTurn.finalize(reply);
+          if (isTimeout) _appendContinueButton(container, () => submitSessionAi("继续"));
         }
       })
       .onError(msg => {
+        if (sessionAiHandle !== handle) return;
         sessionAiLoading = false;
+        sessionAiHandle = null;
+        _setSessionAiButton(false);
         const reply = `**Error:** ${msg}`;
         cache.messages.push({role: "assistant", content: reply});
         saveChatToStorage();
         if (assistantTurn && currentSessionId === targetSessionId) {
           assistantTurn.finalize(reply);
         }
+      })
+      .onAbort(partialText => {
+        if (sessionAiHandle !== handle) return;
+        sessionAiLoading = false;
+        sessionAiHandle = null;
+        _setSessionAiButton(false);
+        const reply = (partialText || "") + "\n\n*(已停止)*";
+        cache.messages.push({role: "assistant", content: reply});
+        saveChatToStorage();
+        if (assistantTurn && currentSessionId === targetSessionId) {
+          assistantTurn.finalize(reply);
+          _appendContinueButton(container, () => submitSessionAi("继续"));
+        }
       });
+  }
+
+  function _setSessionAiButton(loading) {
+    const btn = $("#session-ai-send");
+    if (!btn) return;
+    if (loading) { btn.textContent = "■ Stop"; btn.classList.add("btn-stop"); }
+    else { btn.textContent = "Send"; btn.classList.remove("btn-stop"); }
+  }
+
+  function _stopSessionAi() {
+    if (sessionAiHandle) sessionAiHandle.abort();
+    // Don't null sessionAiHandle here — let onAbort callback do cleanup
+    // (otherwise the stale-callback guard blocks finalize)
+    sessionAiLoading = false;
+    _setSessionAiButton(false);
   }
 
   // ── Global AI (evolve chat panel) ───────────────────────────────
@@ -2335,6 +2408,33 @@
     };
     bar.appendChild(engineSelect);
 
+    // Timeout selector
+    const timeoutLabel = document.createElement("span");
+    timeoutLabel.className = "scope-label";
+    timeoutLabel.textContent = "Timeout";
+    bar.appendChild(timeoutLabel);
+
+    const timeoutSelect = document.createElement("select");
+    timeoutSelect.id = "ai-scope-timeout";
+    [
+      { key: 300, label: "5 min" },
+      { key: 600, label: "10 min" },
+      { key: 900, label: "15 min" },
+      { key: 1200, label: "20 min" },
+      { key: 1800, label: "30 min" },
+    ].forEach(t => {
+      const opt = document.createElement("option");
+      opt.value = t.key;
+      opt.textContent = t.label;
+      timeoutSelect.appendChild(opt);
+    });
+    timeoutSelect.value = chatTimeout;
+    timeoutSelect.onchange = () => {
+      chatTimeout = parseInt(timeoutSelect.value, 10);
+      localStorage.setItem("chatview-timeout", String(chatTimeout));
+    };
+    bar.appendChild(timeoutSelect);
+
     // Scope stats
     let scopeFiltered = filtered;
     if (globalScopeProject) scopeFiltered = scopeFiltered.filter(s => s.project === globalScopeProject);
@@ -2407,59 +2507,99 @@
 
     // Show streaming bubble
     globalAiLoading = true;
+    _setGlobalAiButton(true);
     const assistantTurn = createAssistantTurn(container);
 
-    sendChatStream(text, "global", null, scope)
+    const chat = globalChatHistory.find(c => c.id === currentGlobalChatId);
+    const priorMsgs = chat ? chat.messages.slice(0, -1) : [];
+    const handle = sendChatStream(text, "global", null, scope, priorMsgs);
+    globalAiHandle = handle;
+    handle
       .onText(chunk => {
         assistantTurn.updateText(chunk);
       })
       .onTool(evt => {
         assistantTurn.addTool(evt);
       })
-      .onDone(fullText => {
+      .onDone((fullText, isTimeout) => {
+        if (globalAiHandle !== handle) return;
         globalAiLoading = false;
+        globalAiHandle = null;
+        _setGlobalAiButton(false);
         const reply = fullText || "(empty response)";
         assistantTurn.finalize(reply);
         saveGlobalChatMessage("assistant", reply);
         // Update title
-        const chat = globalChatHistory.find(c => c.id === currentGlobalChatId);
-        if (chat && chat.title === "New Analysis") {
-          chat.title = text.substring(0, 40) + (text.length > 40 ? "…" : "");
+        const chat2 = globalChatHistory.find(c => c.id === currentGlobalChatId);
+        if (chat2 && chat2.title === "New Analysis") {
+          chat2.title = text.substring(0, 40) + (text.length > 40 ? "…" : "");
           renderGlobalChatSidebar();
         }
         saveChatToStorage();
 
-        // Check if this was an Evolve-related analysis
-        const evolveTabMap = {
-          "自动生成CLAUDE.md规则": "rules", "规则生成": "rules",
-          "可沉淀的知识": "memory", "知识沉淀": "memory",
-          "用户画像": "profile",
-          "纠正AI的场景": "signals", "纠正模式": "signals",
-          "反复出现的问题模式": "patterns", "重复模式": "patterns",
-        };
-        let targetTab = null;
-        for (const [keyword, tab] of Object.entries(evolveTabMap)) {
-          if (text.includes(keyword)) { targetTab = tab; break; }
-        }
-        if (targetTab) {
-          const parsed = window.parseEvolveResponseExternal ? window.parseEvolveResponseExternal(targetTab, reply) : null;
-          if (parsed && !parsed._parseError) {
-            const itemCount = Object.values(parsed).reduce((sum, v) => sum + (Array.isArray(v) ? v.length : 0), 0);
-            const summaryText = `✅ 分析完成：发现 ${itemCount} 条结果。3 秒后跳转到 Evolve → ${targetTab}`;
-            appendChatMsg(container, "assistant", summaryText);
-            setTimeout(() => {
-              if (window.navigateToEvolveTab) window.navigateToEvolveTab(targetTab, parsed);
-            }, 3000);
+        if (isTimeout) {
+          _appendContinueButton(container, () => submitGlobalAi("继续"));
+        } else {
+          // Check if this was an Evolve-related analysis
+          const evolveTabMap = {
+            "自动生成CLAUDE.md规则": "rules", "规则生成": "rules",
+            "可沉淀的知识": "memory", "知识沉淀": "memory",
+            "用户画像": "profile",
+            "纠正AI的场景": "signals", "纠正模式": "signals",
+            "反复出现的问题模式": "patterns", "重复模式": "patterns",
+          };
+          let targetTab = null;
+          for (const [keyword, tab] of Object.entries(evolveTabMap)) {
+            if (text.includes(keyword)) { targetTab = tab; break; }
+          }
+          if (targetTab) {
+            const parsed = window.parseEvolveResponseExternal ? window.parseEvolveResponseExternal(targetTab, reply) : null;
+            if (parsed && !parsed._parseError) {
+              const itemCount = Object.values(parsed).reduce((sum, v) => sum + (Array.isArray(v) ? v.length : 0), 0);
+              const summaryText = `✅ 分析完成：发现 ${itemCount} 条结果。3 秒后跳转到 Evolve → ${targetTab}`;
+              appendChatMsg(container, "assistant", summaryText);
+              setTimeout(() => {
+                if (window.navigateToEvolveTab) window.navigateToEvolveTab(targetTab, parsed);
+              }, 3000);
+            }
           }
         }
       })
       .onError(msg => {
+        if (globalAiHandle !== handle) return;
         globalAiLoading = false;
+        globalAiHandle = null;
+        _setGlobalAiButton(false);
         const reply = `**Error:** ${msg}`;
         assistantTurn.finalize(reply);
         saveGlobalChatMessage("assistant", reply);
         saveChatToStorage();
+      })
+      .onAbort(partialText => {
+        if (globalAiHandle !== handle) return;
+        globalAiLoading = false;
+        globalAiHandle = null;
+        _setGlobalAiButton(false);
+        const reply = (partialText || "") + "\n\n*(已停止)*";
+        assistantTurn.finalize(reply);
+        saveGlobalChatMessage("assistant", reply);
+        saveChatToStorage();
+        _appendContinueButton(container, () => submitGlobalAi("继续"));
       });
+  }
+
+  function _setGlobalAiButton(loading) {
+    const btn = $("#ai-chat-send");
+    if (!btn) return;
+    if (loading) { btn.textContent = "■ Stop"; btn.classList.add("btn-stop"); }
+    else { btn.textContent = "Send"; btn.classList.remove("btn-stop"); }
+  }
+
+  function _stopGlobalAi() {
+    if (globalAiHandle) globalAiHandle.abort();
+    // Don't null globalAiHandle here — let onAbort callback do cleanup
+    globalAiLoading = false;
+    _setGlobalAiButton(false);
   }
 
   function initNewGlobalChat() {
