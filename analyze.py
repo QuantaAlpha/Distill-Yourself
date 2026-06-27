@@ -409,8 +409,8 @@ def cmd_queries(args):
             print(f"    sid:{q['sessionId']}")
 
 
-def cmd_corrections(args):
-    """Find user correction / dissatisfaction patterns across sessions."""
+def _data_corrections(args):
+    """Compute correction data and return as a list of dicts (sorted by date desc)."""
     # Correction signal patterns (Chinese + English)
     patterns = [
         # Chinese: explicit correction
@@ -655,6 +655,12 @@ def cmd_corrections(args):
             })
 
     corrections.sort(key=lambda c: c.get("date", ""), reverse=True)
+    return corrections
+
+
+def cmd_corrections(args):
+    """Find user correction / dissatisfaction patterns across sessions."""
+    corrections = _data_corrections(args)
 
     # Stats
     user_src = [c for c in corrections if c.get("source") == "user"]
@@ -662,11 +668,12 @@ def cmd_corrections(args):
     ai_insight = [c for c in corrections if c.get("source") == "ai" and c.get("kind") == "insight"]
     confirmed = [c for c in user_src if c.get("aiConfirmed")]
 
+    shown = corrections[:args.limit]
     if args.json:
-        print(json.dumps(corrections[:args.limit], ensure_ascii=False, indent=2))
+        print(json.dumps(shown, ensure_ascii=False, indent=2))
     else:
         print(f"Found {len(corrections)} (user:{len(user_src)} ai-correction:{len(ai_corr)} ai-insight:{len(ai_insight)} confirmed:{len(confirmed)}):\n")
-        for c in corrections[:args.limit]:
+        for c in shown:
             signals = ", ".join(c["signals"])
             text = c['text'][:180].replace('\n', ' ')
             if c.get("source") == "user":
@@ -685,8 +692,8 @@ def cmd_corrections(args):
             print(f"    sid:{c['sessionId']}")
 
 
-def cmd_decisions(args):
-    """Extract potential decision points from conversations."""
+def _data_decisions(args):
+    """Compute decision data and return as a list of dicts (sorted by date desc)."""
     # Tighter decision patterns — require decision-making context words
     decision_re = re.compile(
         r'(?:决定[了用采]|最终选|采用了?|放弃了?|'
@@ -753,20 +760,26 @@ def cmd_decisions(args):
                     })
 
     decisions.sort(key=lambda d: d.get("date", ""), reverse=True)
+    return decisions
 
+
+def cmd_decisions(args):
+    """Extract potential decision points from conversations."""
+    decisions = _data_decisions(args)
+    shown = decisions[:args.limit]
     if args.json:
-        print(json.dumps(decisions[:args.limit], ensure_ascii=False, indent=2))
+        print(json.dumps(shown, ensure_ascii=False, indent=2))
     else:
         print(f"Found {len(decisions)} potential decision points:\n")
-        for d in decisions[:args.limit]:
+        for d in shown:
             print(f"  [{d['date']}] {d['project']} — {d['title']}")
             print(f"  > {d['text'][:250]}")
             print(f"  session: {d['sessionId']}")
             print()
 
 
-def cmd_errors(args):
-    """Extract error patterns from tool results across sessions."""
+def _data_errors(args):
+    """Compute error data and return as a list of dicts (sorted by count desc)."""
     filtered = _get_filtered(args)
 
     err_re = re.compile(
@@ -832,17 +845,22 @@ def cmd_errors(args):
             continue
 
     sorted_errors = sorted(groups.items(), key=lambda x: -x[1]["count"])
+    return [{"pattern": k, "count": v["count"], "sessions": len(v["sessions"]),
+             "projects": sorted(v["projects"]), "sample": v["sample"]}
+            for k, v in sorted_errors]
 
+
+def cmd_errors(args):
+    """Extract error patterns from tool results across sessions."""
+    errors = _data_errors(args)
+    shown = errors[:args.limit]
     if args.json:
-        out = [{"pattern": k, "count": v["count"], "sessions": len(v["sessions"]),
-                "projects": sorted(v["projects"]), "sample": v["sample"]}
-               for k, v in sorted_errors[:args.limit]]
-        print(json.dumps(out, ensure_ascii=False, indent=2))
+        print(json.dumps(shown, ensure_ascii=False, indent=2))
     else:
-        print(f"Found {len(sorted_errors)} error patterns:\n")
-        for key, data in sorted_errors[:args.limit]:
-            projs = ", ".join(sorted(data["projects"]))
-            print(f"  [{data['count']}x · {len(data['sessions'])} sessions] {projs}")
+        print(f"Found {len(errors)} error patterns:\n")
+        for data in shown:
+            projs = ", ".join(data["projects"])
+            print(f"  [{data['count']}x · {data['sessions']} sessions] {projs}")
             print(f"  {data['sample']}")
             print()
 
@@ -912,8 +930,8 @@ def cmd_stats(args):
         print(f"  {pname:40s} {count:4d} ({pct:.0f}%)")
 
 
-def cmd_files(args):
-    """Show most-edited files across sessions."""
+def _data_files(args):
+    """Compute file data and return as a list of dicts (sorted by edits+writes desc)."""
     filtered = _get_filtered(args)
 
     file_freq = {}
@@ -989,21 +1007,26 @@ def cmd_files(args):
             continue
 
     sorted_files = sorted(file_freq.items(), key=lambda x: -(x[1]["edits"] + x[1]["writes"]))
+    return [{"path": fp, **{k: v if not isinstance(v, set) else len(v) for k, v in data.items()}}
+            for fp, data in sorted_files]
 
+
+def cmd_files(args):
+    """Show most-edited files across sessions."""
+    files = _data_files(args)
+    shown = files[:args.limit]
     if args.json:
-        out = [{"path": fp, **{k: v if not isinstance(v, set) else len(v) for k, v in data.items()}}
-               for fp, data in sorted_files[:args.limit]]
-        print(json.dumps(out, ensure_ascii=False, indent=2))
+        print(json.dumps(shown, ensure_ascii=False, indent=2))
     else:
-        print(f"Top edited files ({len(sorted_files)} total):\n")
-        for fp, data in sorted_files[:args.limit]:
-            print(f"  {fp}")
-            print(f"    edits={data['edits']}  writes={data['writes']}  reads={data['reads']}  sessions={len(data['sessions'])}")
+        print(f"Top edited files ({len(files)} total):\n")
+        for data in shown:
+            print(f"  {data['path']}")
+            print(f"    edits={data['edits']}  writes={data['writes']}  reads={data['reads']}  sessions={data['sessions']}")
             print()
 
 
-def cmd_highlights(args):
-    """Per-session one-line highlights: topic, key signals, message count."""
+def _data_highlights(args):
+    """Compute highlights data and return as a list of dicts (sorted by date desc)."""
     # Reuse correction + decision regexes for signal counting
     correction_re = re.compile(
         r'不是这样|不对[，。！\s]|不要这样|你忘了|应该是|错了[，。！\s]|你搞错|这样不行|别这样做|重新来|'
@@ -1021,6 +1044,8 @@ def cmd_highlights(args):
         r'用.+还是|should we|let\'s go with|我们用|最终选|采用|放弃',
         re.IGNORECASE
     )
+
+    results = []
 
     # Try DB first; fall back to old method if DB is empty
     db_sessions = _get_filtered_db(args)
@@ -1043,12 +1068,7 @@ def cmd_highlights(args):
             sess_texts[r["session_id"]].append(r["text"])
 
         items = sorted(db_sessions, key=lambda s: s.get("date", ""), reverse=True)
-        items = items[:args.limit]
 
-        if not args.json:
-            print(f"Highlights for {len(items)} sessions:\n")
-
-        results = []
         for s in items:
             sid = s["id"]
             title = (s.get("title") or "Untitled")[:50]
@@ -1071,30 +1091,15 @@ def cmd_highlights(args):
                     topics.append(text[:80].replace("\n", " "))
 
             topic = topics[0] if topics else title
-            signals = []
-            if corrections:
-                signals.append(f"corr:{corrections}")
-            if decisions:
-                signals.append(f"dec:{decisions}")
-            sig_str = " ".join(signals) if signals else "-"
-
-            if args.json:
-                results.append({
-                    "id": sid, "date": date, "source": source, "project": project,
-                    "title": title, "topic": topic, "messages": msg_count,
-                    "corrections": corrections, "decisions": decisions,
-                })
-            else:
-                print(f"  [{source}] {date} {msg_count:3d}msg {sig_str:12s} {project[:20]:20s} | {topic}")
+            results.append({
+                "id": sid, "date": date, "source": source, "project": project,
+                "title": title, "topic": topic, "messages": msg_count,
+                "corrections": corrections, "decisions": decisions,
+            })
     else:
         filtered = _get_filtered(args)
         items = sorted(filtered.values(), key=lambda m: m.get("date", ""), reverse=True)
-        items = items[:args.limit]
 
-        if not args.json:
-            print(f"Highlights for {len(items)} sessions:\n")
-
-        results = []
         for m in items:
             sid = m.get("id", "")
             title = m.get("title", "Untitled")[:50]
@@ -1118,24 +1123,32 @@ def cmd_highlights(args):
                     topics.append(text[:80].replace("\n", " "))
 
             topic = topics[0] if topics else title
-            signals = []
-            if corrections:
-                signals.append(f"corr:{corrections}")
-            if decisions:
-                signals.append(f"dec:{decisions}")
-            sig_str = " ".join(signals) if signals else "-"
+            results.append({
+                "id": sid, "date": date, "source": source, "project": project,
+                "title": title, "topic": topic, "messages": msg_count,
+                "corrections": corrections, "decisions": decisions,
+            })
 
-            if args.json:
-                results.append({
-                    "id": sid, "date": date, "source": source, "project": project,
-                    "title": title, "topic": topic, "messages": msg_count,
-                    "corrections": corrections, "decisions": decisions,
-                })
-            else:
-                print(f"  [{source}] {date} {msg_count:3d}msg {sig_str:12s} {project[:20]:20s} | {topic}")
+    return results
+
+
+def cmd_highlights(args):
+    """Per-session one-line highlights: topic, key signals, message count."""
+    results = _data_highlights(args)
+    shown = results[:args.limit]
 
     if args.json:
-        print(json.dumps(results, ensure_ascii=False, indent=2))
+        print(json.dumps(shown, ensure_ascii=False, indent=2))
+    else:
+        print(f"Highlights for {len(shown)} sessions:\n")
+        for r in shown:
+            signals = []
+            if r["corrections"]:
+                signals.append(f"corr:{r['corrections']}")
+            if r["decisions"]:
+                signals.append(f"dec:{r['decisions']}")
+            sig_str = " ".join(signals) if signals else "-"
+            print(f"  [{r['source']}] {r['date']} {r['messages']:3d}msg {sig_str:12s} {r['project'][:20]:20s} | {r['topic']}")
 
 
 # ---------------------------------------------------------------------------
@@ -1174,44 +1187,6 @@ def _classify_correction(text, signals):
     return "workflow"  # default
 
 
-def _get_corrections_raw(args):
-    """Run corrections logic and return raw list (reuse cmd_corrections internals)."""
-    # We need to call cmd_corrections but capture the data, not print it.
-    # Easiest: set args.json=True, capture stdout, parse.
-    import copy
-    fake_args = copy.copy(args)
-    fake_args.json = True
-    fake_args.limit = 200
-    old_stdout = sys.stdout
-    sys.stdout = buf = io.StringIO()
-    try:
-        cmd_corrections(fake_args)
-    finally:
-        sys.stdout = old_stdout
-    try:
-        return json.loads(buf.getvalue())
-    except json.JSONDecodeError:
-        return []
-
-
-def _get_errors_raw(args):
-    """Run errors logic and return raw list."""
-    import copy
-    fake_args = copy.copy(args)
-    fake_args.json = True
-    fake_args.limit = 100
-    old_stdout = sys.stdout
-    sys.stdout = buf = io.StringIO()
-    try:
-        cmd_errors(fake_args)
-    finally:
-        sys.stdout = old_stdout
-    try:
-        return json.loads(buf.getvalue())
-    except json.JSONDecodeError:
-        return []
-
-
 def _write_evolve_cache(tab, data, cache_key=""):
     """Write evolve data to .cache/evolve/<tab>.json."""
     cache_dir = Path(__file__).resolve().parent / ".cache" / "evolve"
@@ -1225,7 +1200,7 @@ def _write_evolve_cache(tab, data, cache_key=""):
 
 def cmd_evolve_rules(args):
     """Generate rules data for Evolve Rules tab."""
-    corrections = _get_corrections_raw(args)
+    corrections = _data_corrections(args)[:200]
 
     # Group corrections by category → build rules
     from collections import defaultdict
@@ -1302,7 +1277,7 @@ def cmd_evolve_rules(args):
 
 def cmd_evolve_signals(args):
     """Generate signals data for Evolve Signals tab."""
-    corrections = _get_corrections_raw(args)
+    corrections = _data_corrections(args)[:200]
 
     # Build timeline (group by date, count by category)
     from collections import defaultdict
@@ -1342,8 +1317,8 @@ def cmd_evolve_signals(args):
 
 def cmd_evolve_patterns(args):
     """Generate patterns data for Evolve Patterns tab."""
-    corrections = _get_corrections_raw(args)
-    errors = _get_errors_raw(args)
+    corrections = _data_corrections(args)[:200]
+    errors = _data_errors(args)[:100]
 
     from collections import defaultdict
 
@@ -1710,7 +1685,7 @@ def cmd_profile_digest(args):
     ]
 
     # --- correction episodes (grouped by signal cluster) ---
-    corrections = _get_corrections_raw(args)
+    corrections = _data_corrections(args)[:200]
     cat_groups = defaultdict(list)
     for c in corrections:
         cat = _classify_correction(c.get("text", ""), c.get("signals", []))
@@ -1802,20 +1777,7 @@ def cmd_profile_digest(args):
     result["positive_signals"] = unique_positive[:10]
 
     # --- decisions ---
-    import copy
-    dec_args = copy.copy(args)
-    dec_args.json = True
-    dec_args.limit = 200
-    old_stdout = sys.stdout
-    sys.stdout = buf = io.StringIO()
-    try:
-        cmd_decisions(dec_args)
-    finally:
-        sys.stdout = old_stdout
-    try:
-        all_decisions = json.loads(buf.getvalue())
-    except json.JSONDecodeError:
-        all_decisions = []
+    all_decisions = _data_decisions(args)[:200]
 
     result["decisions"] = {
         "total": len(all_decisions),
@@ -1826,19 +1788,7 @@ def cmd_profile_digest(args):
     }
 
     # --- files ---
-    file_args = copy.copy(args)
-    file_args.json = True
-    file_args.limit = 10
-    old_stdout = sys.stdout
-    sys.stdout = buf = io.StringIO()
-    try:
-        cmd_files(file_args)
-    finally:
-        sys.stdout = old_stdout
-    try:
-        all_files = json.loads(buf.getvalue())
-    except json.JSONDecodeError:
-        all_files = []
+    all_files = _data_files(args)[:10]
 
     # Extension distribution
     ext_counts = defaultdict(int)
@@ -1858,19 +1808,7 @@ def cmd_profile_digest(args):
     }
 
     # --- errors ---
-    err_args = copy.copy(args)
-    err_args.json = True
-    err_args.limit = 5
-    old_stdout = sys.stdout
-    sys.stdout = buf = io.StringIO()
-    try:
-        cmd_errors(err_args)
-    finally:
-        sys.stdout = old_stdout
-    try:
-        all_errors = json.loads(buf.getvalue())
-    except json.JSONDecodeError:
-        all_errors = []
+    all_errors = _data_errors(args)[:5]
 
     result["errors"] = {
         "top": [
@@ -1880,19 +1818,7 @@ def cmd_profile_digest(args):
     }
 
     # --- friction hotspots (top sessions by correction count) ---
-    hl_args = copy.copy(args)
-    hl_args.json = True
-    hl_args.limit = 999
-    old_stdout = sys.stdout
-    sys.stdout = buf = io.StringIO()
-    try:
-        cmd_highlights(hl_args)
-    finally:
-        sys.stdout = old_stdout
-    try:
-        all_highlights = json.loads(buf.getvalue())
-    except json.JSONDecodeError:
-        all_highlights = []
+    all_highlights = _data_highlights(args)[:999]
 
     hotspots = sorted(all_highlights, key=lambda h: -h.get("corrections", 0))
     result["friction_hotspots"] = [
