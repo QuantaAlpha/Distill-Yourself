@@ -1,0 +1,44 @@
+name: Test
+
+on:
+  pull_request:                 # 任何人的 PR 都触发 —— 把关外部 PR 的核心
+  push:
+    branches: [main]            # 合并进 main 后再跑一次
+
+# 同一 PR 推新 commit 时,自动取消上一次还在跑的 run,省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read                # 最小权限,Fork PR 安全的关键
+
+jobs:
+  # ---- 硬门:语法编译 + 测试。已在干净容器验证全绿,可设为合并必过项 ----
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # 某个版本挂了,其余版本继续跑完
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]   # 采样覆盖,够用又快
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Syntax / import smoke check
+        run: python -m py_compile server.py db.py analyze.py
+      - name: Run test suite
+        run: python -m unittest discover -s tests -v
+        # 零依赖,无需 pip install
+
+  # ---- 硬门:lint。代码已清理干净(ruff check . 全过),作为合并必过项 ----
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install ruff
+      - run: ruff check .
