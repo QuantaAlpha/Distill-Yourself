@@ -8,11 +8,7 @@
 
 Your Claude Code and Codex sessions contain decisions, debugging insights, and preferences you've repeated dozens of times — but they vanish when the terminal closes. Distill Yourself indexes that history locally, makes it searchable, and writes selected insights back into your Claude Code config so you never repeat yourself.
 
-<a href="docs/video/full-demo.mp4">
-  <img src="docs/images/readme/demo-preview.jpg" alt="Distill Yourself demo video preview" width="720">
-</a>
-
-[Click the preview to watch the full demo video (7:33)](docs/video/full-demo.mp4)
+<img src="docs/images/readme/twin-cognitive-model-new.png" alt="Cognitive Model — avatar, evidence events, judgment cards, and traits" width="760">
 
 [Quick Start](#quick-start) · [Features](#features) · [User Guide](docs/USER_GUIDE.md) · [API Reference](#rest-api)
 
@@ -27,6 +23,16 @@ Your Claude Code and Codex sessions contain decisions, debugging insights, and p
 ---
 
 ## Quick Start
+
+<div align="center">
+
+<a href="docs/video/full-demo.mp4">
+  <img src="docs/images/readme/demo-preview.jpg" alt="Distill Yourself demo video preview" width="720">
+</a>
+
+[Click the preview to watch the full demo video (7:33)](docs/video/full-demo.mp4)
+
+</div>
 
 **Option A — Install globally, run from anywhere:**
 
@@ -95,8 +101,6 @@ The namesake feature. Analyzes your full conversation history across three layer
 - **L3 — Cognitive Traits**: Generalized personality and work-style traits, each grounded in multiple judgment cards
 
 The model includes a generated cognitive avatar and a one-line persona summary. Everything is traceable — click any trait to see the judgment cards and raw evidence behind it. Use it to understand what your future AI sessions should remember about how you think and decide.
-
-![Cognitive Model — avatar, evidence events, judgment cards, and traits](docs/images/readme/twin-cognitive-model-new.png)
 
 The Runtime Pack compiles these traits into a concise, readable summary of who you are as a developer — ready to be synced into your AI's config.
 
