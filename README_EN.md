@@ -26,11 +26,11 @@ Your Claude Code and Codex sessions contain decisions, debugging insights, and p
 
 <div align="center">
 
-<a href="https://github.com/QuantaAlpha/Distill_Yourself/raw/refs/heads/main/docs/video/full-demo.mp4">
+<a href="https://github.com/user-attachments/assets/49b60596-70c7-4fe0-b96a-cf1f9c54242c">
   <img src="docs/images/readme/demo-preview.jpg" alt="Distill Yourself demo video preview" width="720">
 </a>
 
-[Click the preview to watch the full demo video (7:33)](https://github.com/QuantaAlpha/Distill_Yourself/raw/refs/heads/main/docs/video/full-demo.mp4)
+[Click the preview to watch the full demo video (7:33)](https://github.com/user-attachments/assets/49b60596-70c7-4fe0-b96a-cf1f9c54242c)
 
 </div>
 
@@ -108,7 +108,7 @@ The Runtime Pack compiles these traits into a concise, readable summary of who y
 
 ![Runtime Pack — cognitive traits compiled into a developer summary](docs/images/readme/twin-runtime-pack.png)
 
-[▶ Watch the Cognitive Model demo clip (1:55)](docs/video/chapters/cognitive-model.mp4)
+[▶ Watch the Cognitive Model demo clip (1:55)](https://github.com/user-attachments/assets/0da8dea7-0f06-402a-ada4-dd99a5a636d5)
 
 ### Evolve Engine
 
@@ -126,7 +126,7 @@ Analyzes recurring preferences, corrections, and work patterns, then prepares co
 
 ![Evolve Rules — P0/P1/P2 with frequency and evidence](docs/images/readme/evolve-rules.png)
 
-[▶ Watch the Evolve demo clip (1:55)](docs/video/chapters/evolve.mp4)
+[▶ Watch the Evolve demo clip (1:55)](https://github.com/user-attachments/assets/bd94949b-7c9b-49a1-93ba-505e68214a16)
 
 ### Browse & Search
 
@@ -137,7 +137,7 @@ Analyzes recurring preferences, corrections, and work patterns, then prepares co
 
 ![Session detail view](docs/images/user-guide/02-session.jpg)
 
-[▶ Watch the Browse & Search demo clip (0:55)](docs/video/chapters/browse-search.mp4)
+[▶ Watch the Browse & Search demo clip (0:55)](https://github.com/user-attachments/assets/68d9faab-611e-4926-b6b6-cd962124b1c6)
 
 ### Insights
 
@@ -151,7 +151,7 @@ Five analytics views computed locally — no AI engine needed:
 
 ![Tool usage heatmap](docs/images/readme/insights-heatmap.png)
 
-[▶ Watch the Insights demo clip (0:50)](docs/video/chapters/insights.mp4)
+[▶ Watch the Insights demo clip (0:50)](https://github.com/user-attachments/assets/66cabd0f-a1b1-47b8-bdcb-f8b1e70b318b)
 
 ### AI Chat
 
