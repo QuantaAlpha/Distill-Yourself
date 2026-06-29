@@ -98,41 +98,45 @@ class _AnalyzeDBTestCase(unittest.TestCase):
     """Base that sets up a temp SQLite DB and isolates PROJECTS_DIR for analyze functions."""
 
     def setUp(self):
-        import server as _server
-        self._orig_db_path = db.DB_PATH
-        self._orig_cache_dir = db.CACHE_DIR
-        self._orig_projects_dir = _server.PROJECTS_DIR
-        self._orig_index_cache = _server.INDEX_CACHE
-        self._orig_server_cache_dir = _server.CACHE_DIR
-        self._orig_codex_sessions = _server.CODEX_SESSIONS_DIR
-        self._orig_codex_archived = _server.CODEX_ARCHIVED_DIR
-        self._orig_codex_index = _server.CODEX_INDEX_FILE
+        from chatview import index as _idx
+        from chatview.db import core as _dbcore
+        self._orig_db_path = _dbcore.DB_PATH
+        self._orig_cache_dir = _dbcore.CACHE_DIR
+        self._orig_projects_dir = _idx.PROJECTS_DIR
+        self._orig_index_cache = _idx.INDEX_CACHE
+        self._orig_idx_cache_dir = _idx.CACHE_DIR
+        self._orig_codex_sessions = _idx.CODEX_SESSIONS_DIR
+        self._orig_codex_archived = _idx.CODEX_ARCHIVED_DIR
+        self._orig_codex_index = _idx.CODEX_INDEX_FILE
+        self._orig_index = _idx._index
         self._tmpdir = tempfile.mkdtemp()
-        db.CACHE_DIR = Path(self._tmpdir)
-        db.DB_PATH = Path(self._tmpdir) / "sessions.db"
-        db._local = threading.local()
+        _dbcore.CACHE_DIR = Path(self._tmpdir)
+        _dbcore.DB_PATH = Path(self._tmpdir) / "sessions.db"
+        _dbcore._local = threading.local()
         db.init_db()
         # Point all dirs to empty temp dir so build_index finds nothing
-        _server.PROJECTS_DIR = Path(self._tmpdir) / "projects"
-        _server.PROJECTS_DIR.mkdir()
-        _server.CACHE_DIR = Path(self._tmpdir) / ".cache"
-        _server.INDEX_CACHE = _server.CACHE_DIR / "index.json"
-        _server.CODEX_SESSIONS_DIR = Path(self._tmpdir) / "codex_sessions"
-        _server.CODEX_ARCHIVED_DIR = Path(self._tmpdir) / "codex_archived"
-        _server.CODEX_INDEX_FILE = Path(self._tmpdir) / "codex_index.jsonl"
-        _server._index = {"projects": {}, "sessions": {}, "_file_mtimes": {}}
+        _idx.PROJECTS_DIR = Path(self._tmpdir) / "projects"
+        _idx.PROJECTS_DIR.mkdir()
+        _idx.CACHE_DIR = Path(self._tmpdir) / ".cache"
+        _idx.INDEX_CACHE = _idx.CACHE_DIR / "index.json"
+        _idx.CODEX_SESSIONS_DIR = Path(self._tmpdir) / "codex_sessions"
+        _idx.CODEX_ARCHIVED_DIR = Path(self._tmpdir) / "codex_archived"
+        _idx.CODEX_INDEX_FILE = Path(self._tmpdir) / "codex_index.jsonl"
+        _idx._index = {"projects": {}, "sessions": {}, "_file_mtimes": {}}
 
     def tearDown(self):
-        import server as _server
-        db.DB_PATH = self._orig_db_path
-        db.CACHE_DIR = self._orig_cache_dir
-        db._local = threading.local()
-        _server.PROJECTS_DIR = self._orig_projects_dir
-        _server.INDEX_CACHE = self._orig_index_cache
-        _server.CACHE_DIR = self._orig_server_cache_dir
-        _server.CODEX_SESSIONS_DIR = self._orig_codex_sessions
-        _server.CODEX_ARCHIVED_DIR = self._orig_codex_archived
-        _server.CODEX_INDEX_FILE = self._orig_codex_index
+        from chatview import index as _idx
+        from chatview.db import core as _dbcore
+        _dbcore.DB_PATH = self._orig_db_path
+        _dbcore.CACHE_DIR = self._orig_cache_dir
+        _dbcore._local = threading.local()
+        _idx.PROJECTS_DIR = self._orig_projects_dir
+        _idx.INDEX_CACHE = self._orig_index_cache
+        _idx.CACHE_DIR = self._orig_idx_cache_dir
+        _idx.CODEX_SESSIONS_DIR = self._orig_codex_sessions
+        _idx.CODEX_ARCHIVED_DIR = self._orig_codex_archived
+        _idx.CODEX_INDEX_FILE = self._orig_codex_index
+        _idx._index = self._orig_index
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     @staticmethod

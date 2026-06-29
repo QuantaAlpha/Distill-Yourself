@@ -1,0 +1,136 @@
+/* ============================================================
+   Claude Chat Viewer — Light Premium Theme
+   ============================================================ */
+
+:root {
+  --bg: #f6f7f9;
+  --bg-surface: #ffffff;
+  --bg-surface2: #f0f1f4;
+  --bg-hover: #eaeaee;
+  --bg-active: #e0e0e5;
+  --text: #1d1d1f;
+  --text-secondary: #475569;
+  --text-muted: #8a94a6;
+  --border: #d2d2d7;
+  --border-light: #e5e7eb;
+  --accent: #5856d6;
+  --accent-dim: rgba(88, 86, 214, 0.08);
+  --accent-light: rgba(88, 86, 214, 0.15);
+
+  /* User message */
+  --user-bg: #eef2ff;
+  --user-border: #b7d7ff;
+  --user-accent: #2563eb;
+  --user-text: #172554;
+
+  /* Assistant text card — warm amber for distinction from user blue */
+  --reply-bg: #fffbeb;
+  --reply-border: #fde68a;
+  --reply-accent: #d97706;
+
+  /* Tool colors */
+  --bash-bg: #f0fdf4; --bash-border: #bbf7d0; --bash-accent: #16a34a; --bash-text: #14532d;
+  --read-bg: #fffbeb; --read-border: #fde68a; --read-accent: #d97706; --read-text: #78350f;
+  --edit-bg: #fff7ed; --edit-border: #fed7aa; --edit-accent: #ea580c; --edit-text: #7c2d12;
+  --grep-bg: #eff6ff; --grep-border: #bfdbfe; --grep-accent: #2563eb; --grep-text: #1e3a5f;
+  --write-bg: #fef2f2; --write-border: #fecaca; --write-accent: #dc2626; --write-text: #7f1d1d;
+  --agent-bg: #faf5ff; --agent-border: #e9d5ff; --agent-accent: #9333ea; --agent-text: #581c87;
+  --result-bg: #f0fdfa; --result-border: #99f6e4; --result-accent: #0d9488; --result-text: #134e4a;
+  --thinking-bg: #faf5ff; --thinking-border: #e9d5ff; --thinking-accent: #7c3aed; --thinking-text: #5b21b6;
+
+  --search-highlight: #f59e0b;
+  --search-highlight-bg: rgba(245, 158, 11, 0.2);
+  --shadow-sm: 0 2px 8px rgba(15,23,42,0.04);
+  --shadow-md: 0 8px 24px rgba(15,23,42,0.06);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --sidebar-width: 300px;
+  --header-height: 56px;
+  --font-mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+}
+
+:root[data-theme="dark"] {
+  --bg: #111827;
+  --bg-surface: #172033;
+  --bg-surface2: #202a3d;
+  --bg-hover: #263348;
+  --bg-active: #314059;
+  --text: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --border: #3b485f;
+  --border-light: #2d3a4f;
+  --accent: #8b8af7;
+  --accent-dim: rgba(139, 138, 247, 0.14);
+  --accent-light: rgba(139, 138, 247, 0.24);
+  --user-bg: #1e3a5f;
+  --user-border: #2f65a3;
+  --user-accent: #93c5fd;
+  --user-text: #eff6ff;
+  --reply-bg: #2f2717;
+  --reply-border: #6b541d;
+  --reply-accent: #fbbf24;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.25);
+  --shadow-md: 0 8px 24px rgba(0,0,0,0.28);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.hidden { display: none !important; }
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ---- Buttons ---- */
+.btn-text {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  color: var(--text-secondary); font-size: 12px; padding: 5px 12px;
+  border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; font-weight: 500;
+}
+.btn-text:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
+.btn-text.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+/* Stop button state — shared across Chat Send, Evolve Refresh, Twin Analyze */
+.btn-stop {
+  background: #e53e3e !important; color: #fff !important; border-color: #e53e3e !important;
+}
+.btn-stop:hover { filter: brightness(1.1); }
+/* Continue button after timeout/abort */
+.chat-continue-wrap { text-align: center; padding: 8px 0; }
+.btn-continue {
+  background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm);
+  padding: 6px 20px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+}
+.btn-continue:hover { filter: brightness(1.1); }
+#session-ai-send.btn-stop, #ai-chat-send.btn-stop {
+  background: #e53e3e !important; color: #fff !important;
+}
+.btn-icon {
+  background: transparent; border: none; color: var(--text-secondary);
+  font-size: 18px; cursor: pointer; padding: 4px; border-radius: var(--radius-sm);
+}
+.btn-icon:hover { background: var(--bg-hover); color: var(--text); }
+
+.badge {
+  font-size: 10px; color: var(--text-muted);
+  background: var(--bg-surface2); padding: 1px 6px; border-radius: 10px;
+}
+
+.md-pre {
+  background: var(--bg-surface2); padding: 8px 12px; border-radius: 4px;
+  overflow-x: auto; margin: 6px 0; font-size: 12px;
+}
+.md-code {
+  background: var(--bg-surface2); padding: 1px 4px; border-radius: 3px; font-size: 12px;
+}

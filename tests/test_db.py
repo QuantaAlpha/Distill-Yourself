@@ -41,19 +41,21 @@ _ASST_SNIPPETS = [
 
 class BaseTestCase(unittest.TestCase):
     def setUp(self):
-        self._orig_db_path = db.DB_PATH
-        self._orig_cache_dir = db.CACHE_DIR
-        self._tmpdir = tempfile.mkdtemp()
         from pathlib import Path
-        db.CACHE_DIR = Path(self._tmpdir)
-        db.DB_PATH = Path(self._tmpdir) / "sessions.db"
-        db._local = threading.local()
+        from chatview.db import core as _dbcore
+        self._orig_db_path = _dbcore.DB_PATH
+        self._orig_cache_dir = _dbcore.CACHE_DIR
+        self._tmpdir = tempfile.mkdtemp()
+        _dbcore.CACHE_DIR = Path(self._tmpdir)
+        _dbcore.DB_PATH = Path(self._tmpdir) / "sessions.db"
+        _dbcore._local = threading.local()
         db.init_db()
 
     def tearDown(self):
-        db.DB_PATH = self._orig_db_path
-        db.CACHE_DIR = self._orig_cache_dir
-        db._local = threading.local()
+        from chatview.db import core as _dbcore
+        _dbcore.DB_PATH = self._orig_db_path
+        _dbcore.CACHE_DIR = self._orig_cache_dir
+        _dbcore._local = threading.local()
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
 
@@ -64,18 +66,20 @@ class BaseTestCase(unittest.TestCase):
 class TestSchemaMigration(unittest.TestCase):
 
     def setUp(self):
-        self._orig_db_path = db.DB_PATH
-        self._orig_cache_dir = db.CACHE_DIR
-        self._tmpdir = tempfile.mkdtemp()
         from pathlib import Path
-        db.CACHE_DIR = Path(self._tmpdir)
-        db.DB_PATH = Path(self._tmpdir) / "sessions.db"
-        db._local = threading.local()
+        from chatview.db import core as _dbcore
+        self._orig_db_path = _dbcore.DB_PATH
+        self._orig_cache_dir = _dbcore.CACHE_DIR
+        self._tmpdir = tempfile.mkdtemp()
+        _dbcore.CACHE_DIR = Path(self._tmpdir)
+        _dbcore.DB_PATH = Path(self._tmpdir) / "sessions.db"
+        _dbcore._local = threading.local()
 
     def tearDown(self):
-        db.DB_PATH = self._orig_db_path
-        db.CACHE_DIR = self._orig_cache_dir
-        db._local = threading.local()
+        from chatview.db import core as _dbcore
+        _dbcore.DB_PATH = self._orig_db_path
+        _dbcore.CACHE_DIR = self._orig_cache_dir
+        _dbcore._local = threading.local()
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_init_db_migrates_legacy_twin_tables_before_run_id_indexes(self):

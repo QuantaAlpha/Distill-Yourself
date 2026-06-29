@@ -1,0 +1,524 @@
+"""AI engine abstraction layer — detect, run, and stream Codex / Claude CLI."""
+
+import json
+import os
+import re
+import signal
+import subprocess
+import threading
+import time
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# AI Engine detection and execution (Codex → claude -p fallback)
+# ---------------------------------------------------------------------------
+_ai_engine_cache = None  # "codex" | "claude" | ""
+
+
+def _normalize_error(msg: str) -> str:
+    """Normalize error message for grouping: strip paths, numbers, hashes."""
+    s = msg.strip()
+    # Remove file paths
+    s = re.sub(r'(/[^\s:]+)', '<path>', s)
+    # Remove line numbers
+    s = re.sub(r'line \d+', 'line N', s, flags=re.IGNORECASE)
+    # Remove hex addresses
+    s = re.sub(r'0x[0-9a-f]+', '0xN', s, flags=re.IGNORECASE)
+    return s[:150]
+
+
+def _normalize_ai_engine(engine: str) -> str:
+    """Normalize and validate the requested local AI CLI."""
+    engine = (engine or "auto").strip().lower()
+    if engine not in {"auto", "codex", "claude"}:
+        raise ValueError(f"Invalid AI engine: {engine}")
+    return engine
+
+
+def _kill_process_group(proc):
+    if not proc or proc.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+        proc.wait(timeout=2)
+    except Exception:
+        try:
+            if os.name == "posix":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+
+
+def _drain_text_pipe(pipe, sink, limit=12000):
+    if not pipe:
+        return
+    try:
+        for line in pipe:
+            sink.append(line)
+            while sum(len(s) for s in sink) > limit and sink:
+                sink.pop(0)
+    except Exception:
+        pass
+
+
+def _run_ai_command(cmd, *, prompt_input=None, timeout=300):
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE if prompt_input is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=(os.name == "posix"),
+    )
+    try:
+        stdout, stderr = proc.communicate(input=prompt_input, timeout=timeout)
+        return stdout, stderr, proc.returncode
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=1)
+        except Exception:
+            stdout, stderr = "", ""
+        return stdout or "", (stderr or "") + f"\nTimeout after {timeout}s", 124
+
+
+def _detect_ai_engine():
+    """Auto-detect available AI CLI: Claude Code first, then Codex."""
+    global _ai_engine_cache
+    if _ai_engine_cache is not None:
+        return _ai_engine_cache
+    for name, cmd in [("claude", ["claude", "--version"]), ("codex", ["codex", "--version"])]:
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=5)
+            if result.returncode == 0:
+                _ai_engine_cache = name
+                print(f"AI engine: {name}")
+                return _ai_engine_cache
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+    _ai_engine_cache = ""
+    return _ai_engine_cache
+
+
+def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto"):
+    """Execute prompt via detected AI engine. Returns (stdout, stderr, returncode).
+    Raises FileNotFoundError if no engine available.
+    Auto-falls back from codex to claude on codex errors."""
+    engine_override = _normalize_ai_engine(engine_override)
+    engine = engine_override if engine_override != "auto" else _detect_ai_engine()
+    if engine == "codex":
+        sandbox = "workspace-write" if allow_write else "read-only"
+        stdout, stderr, rc = _run_ai_command(
+            ["codex", "--sandbox", sandbox, "--ask-for-approval", "never",
+             "exec", "--skip-git-repo-check", prompt],
+            timeout=timeout,
+        )
+        # Fallback: if codex failed and engine was auto-detected, try claude
+        if rc != 0 and engine_override in ("auto", "", None):
+            print(f"Codex failed (rc={rc}), falling back to claude")
+            engine = "claude"
+        else:
+            return stdout, stderr, rc
+    if engine == "claude":
+        return _run_ai_command(
+            ["claude", "-p"],
+            prompt_input=prompt,
+            timeout=timeout,
+        )
+    raise FileNotFoundError(
+        "No AI engine found. Install Codex (npm i -g @openai/codex) "
+        "or Claude Code (npm i -g @anthropic-ai/claude-code)."
+    )
+
+
+def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_override="auto"):
+    """Execute prompt via detected AI engine, yielding SSE events as JSONL lines arrive.
+
+    Yields dicts: {"type": "tool", "name": ..., "status": ...}
+                  {"type": "text", "content": ...}
+                  {"type": "done", "content": ...}
+                  {"type": "error", "message": ...}
+
+    Auto-falls back from codex to claude on codex errors (e.g. usage limits).
+    """
+    engine_override = _normalize_ai_engine(engine_override)
+    engine = engine_override if engine_override != "auto" else _detect_ai_engine()
+    if not engine:
+        yield {"type": "error", "message": "No AI engine found"}
+        return
+
+    # For codex with auto-detection: quick health check before committing.
+    # Codex retries internally (5x WS + 5x HTTP) which can take 30-60s.
+    # Instead, run a fast test with a tiny prompt + 8s timeout.
+    if engine == "codex" and engine_override in ("auto", "", None):
+        try:
+            test = subprocess.run(
+                ["codex", "--sandbox", "read-only", "--ask-for-approval", "never",
+                 "exec", "--json", "--skip-git-repo-check", "echo ok"],
+                capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
+            )
+            # Check for error events in output
+            has_error = False
+            for line in test.stdout.strip().split("\n"):
+                try:
+                    obj = json.loads(line)
+                    if obj.get("type") in ("error", "turn.failed"):
+                        has_error = True
+                        break
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            if test.returncode != 0 or has_error:
+                raise RuntimeError("codex health check failed")
+        except (subprocess.TimeoutExpired, RuntimeError, FileNotFoundError, OSError):
+            yield {"type": "text", "content": "Codex unavailable, falling back to Claude...\n"}
+            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout)
+            return
+        # Codex passed health check — use it
+        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout)
+        return
+
+    yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout)
+
+
+def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
+    """Core streaming loop for a single engine. Yields event dicts."""
+    if engine == "codex":
+        sandbox = "workspace-write" if allow_write else "read-only"
+        cmd = ["codex", "--sandbox", sandbox, "--ask-for-approval", "never",
+               "exec", "--json", "--skip-git-repo-check", prompt]
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1, stdin=subprocess.DEVNULL,
+            start_new_session=(os.name == "posix"),
+        )
+    else:  # claude
+        cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
+               "--allowedTools", "Bash,Read,Grep,Glob,Write,Edit,Agent"]
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1,
+            start_new_session=(os.name == "posix"),
+        )
+        # Write prompt in a thread to avoid blocking on large prompts
+        # (macOS pipe buffer is ~64KB, prompt can be 100KB+)
+        import threading
+        def _feed_stdin():
+            try:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+        threading.Thread(target=_feed_stdin, daemon=True).start()
+
+    accumulated_text = ""
+    stderr_tail = []
+    stderr_thread = threading.Thread(target=_drain_text_pipe, args=(proc.stderr, stderr_tail), daemon=True)
+    stderr_thread.start()
+    try:
+        import select as _select
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                _kill_process_group(proc)
+                yield {"type": "timeout", "content": accumulated_text,
+                       "message": f"Timeout ({timeout // 60} min limit)"}
+                return
+            ready, _, _ = _select.select([proc.stdout], [], [], min(remaining, 1.0))
+            if ready:
+                line = proc.stdout.readline()
+                if not line:
+                    break  # EOF
+                line = line.strip()
+                if not line:
+                    continue
+                evts = _parse_stream_event(engine, line)
+                if evts:
+                    if not isinstance(evts, list):
+                        evts = [evts]
+                    for evt in evts:
+                        if evt["type"] == "text":
+                            accumulated_text += evt["content"]
+                        yield evt
+            elif proc.poll() is not None:
+                for line in proc.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    evts = _parse_stream_event(engine, line)
+                    if evts:
+                        if not isinstance(evts, list):
+                            evts = [evts]
+                        for evt in evts:
+                            if evt["type"] == "text":
+                                accumulated_text += evt["content"]
+                            yield evt
+                break
+    except Exception as e:
+        yield {"type": "error", "message": str(e)}
+    finally:
+        if proc.poll() is None:
+            _kill_process_group(proc)
+        proc.wait()
+        stderr_thread.join(timeout=1)
+
+    if proc.returncode not in (0, None):
+        stderr_text = "".join(stderr_tail).strip()
+        detail = f": {stderr_text[:1000]}" if stderr_text else ""
+        yield {"type": "error", "message": f"{engine} exited with code {proc.returncode}{detail}"}
+        return
+
+    yield {"type": "done", "content": accumulated_text}
+
+
+def _select_cognitive_avatar(force=False, run_id=""):
+    """Select cognitive avatar via AI. Returns selection dict or None.
+
+    Checks evolve_cache for existing selection; if stale or missing, calls AI
+    with traits + stripped cognitive_models.json to pick the best match.
+    """
+    from chatview import db as _db
+    _db.init_db()
+
+    CACHE_TAB = "twin_avatar"
+    CACHE_SCOPE = {"source": "all", "date_range": "all", "project": run_id or "", "engine": "auto"}
+
+    # Check if traits exist
+    where = "status IN ('confirmed','emerging')"
+    params = ()
+    if run_id:
+        where += " AND run_id=?"
+        params = (run_id,)
+    traits = _db.cm_get_all("cognitive_traits",
+                            where=where, params=params,
+                            order="strength DESC", limit=15)
+    if not traits:
+        return None
+
+    # Check freshness: compare traits updated_at vs cache updated_at
+    if not force:
+        cached = _db.evolve_get(CACHE_TAB, **CACHE_SCOPE)
+        if cached:
+            traits_max_updated = max(
+                (t.get("updated_at") or "" for t in traits), default=""
+            )
+            if not traits_max_updated or cached["updated_at"] >= traits_max_updated:
+                return cached["data"]
+
+    # Load cognitive models JSON (stripped for prompt)
+    models_path = Path(__file__).resolve().parent.parent / "static" / "assets" / "cognitive-avatars" / "v2" / "cognitive_models.json"
+    try:
+        with open(models_path, "r", encoding="utf-8") as f:
+            models_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+    compact_models = []
+    for m in models_data.get("models", []):
+        binding = m.get("avatar_binding", {})
+        primary = binding.get("primary_visual_persona", {})
+        compact_models.append({
+            "id": m["id"],
+            "axis": m.get("axis", ""),
+            "summary": m.get("summary", ""),
+            "signals": m.get("signals", []),
+            "thinking_mode": m.get("thinking_mode", []),
+            "persona_id": primary.get("persona_id", ""),
+        })
+
+    traits_json = json.dumps([{
+        "name": t.get("name", ""),
+        "category": t.get("category", ""),
+        "description": t.get("description", ""),
+        "strength": t.get("strength", 0.65),
+        "status": t.get("status", ""),
+    } for t in traits], ensure_ascii=False)
+
+    models_json = json.dumps(compact_models, ensure_ascii=False)
+
+    prompt = f"""你是一个认知模型匹配专家。根据用户的认知特质，从 48 个认知模型中选出最匹配的。
+
+## 用户认知特质
+
+{traits_json}
+
+## 可选认知模型（48 个）
+
+{models_json}
+
+## 任务
+
+选出最匹配用户认知特质的 TOP 3 模型。考虑：
+- 分类轴与特质类别的对应关系
+- signals 与用户行为描述的语义相似度
+- thinking_mode 与用户思维模式的匹配度
+
+同时为排名第一的模型生成一个**个性化的类型名称**（persona_title），不要照搬模型名，而是根据用户特质组合起一个更贴切的称呼（4-8个字，比如"极简架构师"、"证据驱动的实用派"）。
+
+## 输出格式（仅输出 JSON，不要其他文字）
+
+{{"persona_title": "个性化类型名称", "selections": [{{"model_id": "cm_XXX", "confidence": 0.9, "rationale": "一句话理由"}}, {{"model_id": "cm_XXX", "confidence": 0.7, "rationale": "一句话理由"}}, {{"model_id": "cm_XXX", "confidence": 0.5, "rationale": "一句话理由"}}]}}"""
+
+    try:
+        stdout, stderr, rc = _run_ai_engine(prompt, allow_write=False, timeout=120)
+    except FileNotFoundError:
+        return None
+
+    if rc != 0 or not stdout:
+        return None
+
+    # Parse AI response — extract JSON from output
+    text = stdout.strip()
+    # Try to find JSON in the output
+    json_start = text.find("{")
+    json_end = text.rfind("}") + 1
+    if json_start < 0 or json_end <= json_start:
+        return None
+
+    try:
+        result = json.loads(text[json_start:json_end])
+    except json.JSONDecodeError:
+        return None
+
+    selections = result.get("selections", [])
+    if not selections:
+        return None
+
+    # Validate primary model_id and look up full model info from original JSON
+    primary = selections[0]
+    model_id = primary.get("model_id", "")
+    full_lookup = {m["id"]: m for m in models_data.get("models", [])}
+    prompt_ids = {m["id"] for m in compact_models}
+    if model_id not in prompt_ids or model_id not in full_lookup:
+        return None
+
+    full_model = full_lookup[model_id]
+    persona_id = full_model.get("avatar_binding", {}).get("primary_visual_persona", {}).get("persona_id", "")
+    selection = {
+        "model_id": model_id,
+        "model_name": full_model.get("name", ""),
+        "persona_id": persona_id,
+        "persona_name": full_model.get("avatar_binding", {}).get("primary_visual_persona", {}).get("persona_name", ""),
+        "persona_title": result.get("persona_title", ""),
+        "confidence": primary.get("confidence", 0),
+        "rationale": primary.get("rationale", ""),
+        "runner_up_ids": [s["model_id"] for s in selections[1:] if s.get("model_id") in prompt_ids],
+    }
+
+    # Persist to evolve_cache
+    _db.evolve_upsert(CACHE_TAB, **CACHE_SCOPE, data_json=json.dumps(selection, ensure_ascii=False))
+    return selection
+
+
+def _parse_stream_event(engine: str, line: str) -> dict:
+    """Parse a JSONL line from Codex or Claude into a normalized event."""
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+    if engine == "codex":
+        evt_type = obj.get("type", "")
+        # Tool execution started
+        if evt_type == "item.started":
+            item = obj.get("item", {})
+            if item.get("type") == "command_execution":
+                cmd = item.get("command", "")
+                # Clean up shell wrapper
+                if cmd.startswith("/bin/"):
+                    parts = cmd.split('"', 1)
+                    cmd = parts[1].rstrip('"') if len(parts) > 1 else cmd
+                return {"type": "tool", "name": "Bash", "status": "running",
+                        "detail": cmd[:200]}
+        # Tool execution completed
+        elif evt_type == "item.completed":
+            item = obj.get("item", {})
+            if item.get("type") == "command_execution":
+                output = item.get("aggregated_output", "")
+                return {"type": "tool", "name": "Bash", "status": "done",
+                        "detail": output or ""}
+            elif item.get("type") == "agent_message":
+                text = item.get("text", "")
+                if text:
+                    return {"type": "text", "content": text}
+        # Codex error / turn failed (e.g. usage limit)
+        elif evt_type in ("error", "turn.failed"):
+            msg = obj.get("message", "") or obj.get("error", {}).get("message", "")
+            return {"type": "error", "message": f"codex: {msg}" if msg else "codex: unknown error"}
+        # Turn completed (usage stats)
+        elif evt_type == "turn.completed":
+            usage = obj.get("usage", {})
+            return {"type": "usage", "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0)}
+
+    elif engine == "claude":
+        evt_type = obj.get("type", "")
+        # Assistant message — may contain multiple content blocks (text + tool_use)
+        if evt_type == "assistant":
+            msg = obj.get("message", {})
+            content_blocks = msg.get("content", [])
+            events = []
+            pending_text = []
+            for blk in content_blocks:
+                if not isinstance(blk, dict):
+                    continue
+                if blk.get("type") == "text":
+                    pending_text.append(blk.get("text", ""))
+                elif blk.get("type") == "tool_use":
+                    # Flush pending text before tool
+                    if pending_text:
+                        events.append({"type": "text", "content": "\n".join(pending_text)})
+                        pending_text = []
+                    name = blk.get("name", "")
+                    inp = blk.get("input", {})
+                    detail = ""
+                    if name in ("Bash", "bash"):
+                        detail = inp.get("command", "")[:200]
+                    elif name in ("Read", "read_file"):
+                        detail = inp.get("file_path", "")
+                    elif name in ("Edit", "Write"):
+                        detail = inp.get("file_path", "")
+                    elif name in ("Grep", "Glob"):
+                        detail = inp.get("pattern", "")
+                    elif name == "Agent":
+                        desc = inp.get("description", "")
+                        prompt = inp.get("prompt", "")
+                        detail = desc if desc else (prompt[:300] if prompt else "")
+                    event = {"type": "tool", "name": name, "status": "running",
+                             "detail": detail, "_tool_use_id": blk.get("id", "")}
+                    if name == "Agent" and inp.get("prompt"):
+                        event["prompt"] = inp["prompt"]
+                    events.append(event)
+            # Flush trailing text
+            if pending_text:
+                events.append({"type": "text", "content": "\n".join(pending_text)})
+            return events if events else None
+        # Tool result — mark corresponding tool as done
+        elif evt_type == "user":
+            msg = obj.get("message", {})
+            content_blocks = msg.get("content", [])
+            events = []
+            for blk in content_blocks:
+                if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                    output = blk.get("content", "")
+                    # Truncate output for display
+                    if isinstance(output, list):
+                        output = " ".join(
+                            b.get("text", "") for b in output if isinstance(b, dict)
+                        )
+                    events.append({"type": "tool", "name": "", "status": "done",
+                                   "detail": str(output),
+                                   "_tool_use_id": blk.get("tool_use_id", "")})
+            return events if events else None
+        # Final result
+        elif evt_type == "result":
+            result_text = obj.get("result", "")
+            if result_text:
+                return {"type": "result", "content": result_text}
+
+    return None

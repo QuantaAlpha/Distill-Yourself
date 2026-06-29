@@ -46,7 +46,7 @@ class TestPersonaAvatarStaticIntegration(unittest.TestCase):
         self.assertEqual(len(re.findall(r'image: "assets/cognitive-avatars/v2/images/', script)), 32)
 
     def test_twin_css_avatar_picker_is_modal_and_scrollable(self):
-        css = read_static("style.css")
+        css = read_static("css/twin.css")
 
         self.assertIn("#twin-persona-options", css)
         self.assertIn("position: fixed", css)
@@ -54,7 +54,7 @@ class TestPersonaAvatarStaticIntegration(unittest.TestCase):
         self.assertIn("max-height", css)
 
     def test_twin_avatar_picker_groups_multiple_types_per_row(self):
-        css = read_static("style.css")
+        css = read_static("css/twin.css")
 
         self.assertIn(".twin-persona-group", css)
         self.assertIn(".twin-persona-style-options", css)

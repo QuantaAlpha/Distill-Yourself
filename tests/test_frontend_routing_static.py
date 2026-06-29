@@ -51,6 +51,38 @@ class TestFrontendRoutingStatic(unittest.TestCase):
         self.assertIn('currentView === "search"', script)
         self.assertIn("doSearch(searchInput.value.trim())", script)
 
+    def test_welcome_cards_include_three_primary_entrypoints_and_six_insights(self):
+        html = read_index_html()
+        script = read_app_js()
+
+        self.assertEqual(html.count('<button class="welcome-card'), 9)
+        for action in ("sessions", "ai", "twin", "heatmap", "hotspots", "errors", "profile", "health", "snippets"):
+            self.assertIn(f'data-action="{action}"', html)
+
+        self.assertIn('<span class="welcome-card-title">Sessions</span>', html)
+        self.assertIn('<span class="welcome-card-title">AI Evolve</span>', html)
+        self.assertIn('<span class="welcome-card-title">Distill Yourself</span>', html)
+        self.assertIn('action === "sessions"', script)
+        self.assertIn('action === "twin"', script)
+
+    def test_welcome_cards_use_premium_primary_and_tool_groups(self):
+        html = read_index_html()
+
+        self.assertIn('class="welcome-primary-grid"', html)
+        self.assertIn('class="welcome-tools-head"', html)
+        self.assertIn('class="welcome-tool-grid"', html)
+        self.assertEqual(html.count("welcome-primary-card"), 3)
+        self.assertEqual(html.count("welcome-tool-card"), 6)
+
+    def test_mobile_topbar_can_shrink_without_horizontal_overflow(self):
+        css_path = os.path.join(ROOT, "static", "css", "layout.css")
+        with open(css_path, encoding="utf-8") as f:
+            css = f.read()
+
+        self.assertIn("@media (max-width: 768px)", css)
+        self.assertIn(".topbar-right { display: none; }", css)
+        self.assertIn(".search-wrapper { min-width: 0;", css)
+
 
 if __name__ == "__main__":
     unittest.main()

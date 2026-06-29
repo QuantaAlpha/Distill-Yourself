@@ -19,7 +19,6 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import server
-import db
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +68,9 @@ class APITestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        from chatview import index as _idx
+        from chatview.db import core as _dbcore
+
         cls._tmpdir = tempfile.mkdtemp()
 
         # Create a fake projects dir with one session file
@@ -79,27 +81,30 @@ class APITestCase(unittest.TestCase):
             for obj in _make_session_jsonl():
                 f.write(json.dumps(obj) + "\n")
 
-        # Monkey-patch server globals to point at temp dir
-        cls._orig_projects_dir = server.PROJECTS_DIR
-        cls._orig_cache_dir = server.CACHE_DIR
-        cls._orig_index_cache = server.INDEX_CACHE
-        cls._orig_codex_sessions = server.CODEX_SESSIONS_DIR
-        cls._orig_codex_archived = server.CODEX_ARCHIVED_DIR
-        cls._orig_db_path = db.DB_PATH
-        cls._orig_db_cache_dir = db.CACHE_DIR
+        # Save originals from the actual modules where they live
+        cls._orig_projects_dir = _idx.PROJECTS_DIR
+        cls._orig_cache_dir = _idx.CACHE_DIR
+        cls._orig_index_cache = _idx.INDEX_CACHE
+        cls._orig_codex_sessions = _idx.CODEX_SESSIONS_DIR
+        cls._orig_codex_archived = _idx.CODEX_ARCHIVED_DIR
+        cls._orig_index = _idx._index
+        cls._orig_db_path = _dbcore.DB_PATH
+        cls._orig_db_cache_dir = _dbcore.CACHE_DIR
 
-        server.PROJECTS_DIR = Path(cls._tmpdir) / "projects"
-        server.CACHE_DIR = Path(cls._tmpdir) / ".cache"
-        server.INDEX_CACHE = server.CACHE_DIR / "index.json"
+        # Patch the actual chatview.index module globals
+        _idx.PROJECTS_DIR = Path(cls._tmpdir) / "projects"
+        _idx.CACHE_DIR = Path(cls._tmpdir) / ".cache"
+        _idx.INDEX_CACHE = _idx.CACHE_DIR / "index.json"
         # Isolate Codex dirs to avoid scanning real user data
-        server.CODEX_SESSIONS_DIR = Path(cls._tmpdir) / "codex_sessions"
-        server.CODEX_ARCHIVED_DIR = Path(cls._tmpdir) / "codex_archived"
-        db.CACHE_DIR = Path(cls._tmpdir) / ".cache"
-        db.DB_PATH = db.CACHE_DIR / "sessions.db"
-        db._local = threading.local()
+        _idx.CODEX_SESSIONS_DIR = Path(cls._tmpdir) / "codex_sessions"
+        _idx.CODEX_ARCHIVED_DIR = Path(cls._tmpdir) / "codex_archived"
+        # Patch the actual chatview.db.core module globals
+        _dbcore.CACHE_DIR = Path(cls._tmpdir) / ".cache"
+        _dbcore.DB_PATH = _dbcore.CACHE_DIR / "sessions.db"
+        _dbcore._local = threading.local()
 
         # Build index with the temp data
-        server._index = {"projects": {}, "sessions": {}, "_file_mtimes": {}}
+        _idx._index = {"projects": {}, "sessions": {}, "_file_mtimes": {}}
         server.build_index(force=True)
 
         # Start server on port 0 (OS picks a free port)
@@ -111,16 +116,20 @@ class APITestCase(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        from chatview import index as _idx
+        from chatview.db import core as _dbcore
+
         cls._server.shutdown()
-        # Restore
-        server.PROJECTS_DIR = cls._orig_projects_dir
-        server.CACHE_DIR = cls._orig_cache_dir
-        server.INDEX_CACHE = cls._orig_index_cache
-        server.CODEX_SESSIONS_DIR = cls._orig_codex_sessions
-        server.CODEX_ARCHIVED_DIR = cls._orig_codex_archived
-        db.DB_PATH = cls._orig_db_path
-        db.CACHE_DIR = cls._orig_db_cache_dir
-        db._local = threading.local()
+        # Restore actual module globals
+        _idx.PROJECTS_DIR = cls._orig_projects_dir
+        _idx.CACHE_DIR = cls._orig_cache_dir
+        _idx.INDEX_CACHE = cls._orig_index_cache
+        _idx.CODEX_SESSIONS_DIR = cls._orig_codex_sessions
+        _idx.CODEX_ARCHIVED_DIR = cls._orig_codex_archived
+        _idx._index = cls._orig_index
+        _dbcore.DB_PATH = cls._orig_db_path
+        _dbcore.CACHE_DIR = cls._orig_db_cache_dir
+        _dbcore._local = threading.local()
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
 
     def _get(self, path):
@@ -211,8 +220,9 @@ class TestSearch(APITestCase):
         code, before = self._get("/api/sessions/check")
         self.assertEqual(code, 200)
 
-        os.makedirs(server.CODEX_SESSIONS_DIR, exist_ok=True)
-        session_file = server.CODEX_SESSIONS_DIR / "rollout-2026-06-10T11-00-00-019f-search-refresh-test.jsonl"
+        from chatview import index as _idx
+        os.makedirs(_idx.CODEX_SESSIONS_DIR, exist_ok=True)
+        session_file = _idx.CODEX_SESSIONS_DIR / "rollout-2026-06-10T11-00-00-019f-search-refresh-test.jsonl"
         fresh_text = "fresh codex search phrase"
         with open(session_file, "w", encoding="utf-8") as f:
             for obj in _make_codex_jsonl(text=fresh_text):

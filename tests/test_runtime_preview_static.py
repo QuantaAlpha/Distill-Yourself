@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class RuntimePreviewStaticTests(unittest.TestCase):
     def test_runtime_preview_renders_partitioned_sections(self):
         twin_js = (ROOT / "static" / "twin.js").read_text(encoding="utf-8")
-        style_css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+        style_css = (ROOT / "static" / "css" / "twin.css").read_text(encoding="utf-8")
 
         self.assertIn("function renderRuntimePreviewSections", twin_js)
         self.assertIn("twin-runtime-compact-summary", twin_js)

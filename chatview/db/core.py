@@ -1,0 +1,296 @@
+"""Database connection, schema initialization, and migrations."""
+
+import json
+import sqlite3
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+CACHE_DIR = Path(__file__).resolve().parent.parent.parent / ".cache"
+DB_PATH = CACHE_DIR / "sessions.db"
+
+_local = threading.local()
+
+
+# ---------------------------------------------------------------------------
+# Connection
+# ---------------------------------------------------------------------------
+def get_conn() -> sqlite3.Connection:
+    """Return a thread-local sqlite3.Connection with WAL mode and Row factory."""
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        _local.conn = conn
+    return conn
+
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+def init_db():
+    """Create all tables and indexes if they don't exist."""
+    conn = get_conn()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id          TEXT PRIMARY KEY,
+            title       TEXT,
+            date        TEXT,
+            last_date   TEXT,
+            file_path   TEXT UNIQUE,
+            file_size   INTEGER,
+            file_mtime  REAL,
+            user_message_count INTEGER,
+            preview     TEXT,
+            project     TEXT,
+            project_name TEXT,
+            source      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_date         ON sessions(date);
+        CREATE INDEX IF NOT EXISTS idx_sessions_project_name ON sessions(project_name);
+        CREATE INDEX IF NOT EXISTS idx_sessions_source       ON sessions(source);
+
+        CREATE TABLE IF NOT EXISTS messages (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            idx        INTEGER,
+            role       TEXT,
+            text       TEXT,
+            ts         TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_messages_session      ON messages(session_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_role         ON messages(role);
+        CREATE INDEX IF NOT EXISTS idx_messages_session_role ON messages(session_id, role);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            text,
+            content=messages,
+            content_rowid=id
+        );
+
+        CREATE TABLE IF NOT EXISTS aggregates (
+            key        TEXT PRIMARY KEY,
+            value      TEXT,
+            updated_at TEXT
+        );
+
+        -- =================================================================
+        -- Insights pre-aggregated tables (incremental via file_mtime)
+        -- =================================================================
+
+        -- Tool usage: one row per (session, day, tool)
+        CREATE TABLE IF NOT EXISTS insight_tool_usage (
+            session_id  TEXT NOT NULL,
+            day         TEXT NOT NULL,
+            tool_name   TEXT NOT NULL,
+            count       INTEGER DEFAULT 1,
+            PRIMARY KEY (session_id, day, tool_name),
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_usage_day ON insight_tool_usage(day);
+
+        -- File references: one row per (session, file_path)
+        CREATE TABLE IF NOT EXISTS insight_file_refs (
+            session_id  TEXT NOT NULL,
+            file_path   TEXT NOT NULL,
+            count       INTEGER DEFAULT 1,
+            project     TEXT,
+            PRIMARY KEY (session_id, file_path),
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_refs_path ON insight_file_refs(file_path);
+
+        -- Error occurrences: one row per (session, normalized_error)
+        CREATE TABLE IF NOT EXISTS insight_errors (
+            session_id  TEXT NOT NULL,
+            error_key   TEXT NOT NULL,
+            day         TEXT,
+            project     TEXT,
+            count       INTEGER DEFAULT 1,
+            PRIMARY KEY (session_id, error_key),
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_errors_key ON insight_errors(error_key);
+
+        -- Snippets: one row per code block
+        CREATE TABLE IF NOT EXISTS insight_snippets (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT NOT NULL,
+            language    TEXT,
+            code        TEXT,
+            context     TEXT,
+            date        TEXT,
+            applied     INTEGER DEFAULT 0,
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_snippets_session ON insight_snippets(session_id);
+
+        -- =================================================================
+        -- Cognitive Handbook tables (Digital Twin 4-layer pipeline)
+        -- L1: evidence_events  L2: judgment_cards + card_relations
+        -- L3: cognitive_traits  L4: runtime pack (computed, not stored)
+        -- =================================================================
+
+        -- L1: Evidence Events
+        CREATE TABLE IF NOT EXISTS evidence_events (
+            id          TEXT PRIMARY KEY,
+            run_id      TEXT,
+            session_id  TEXT,
+            event_index INTEGER,
+            card_id     TEXT,
+            task_type   TEXT,
+            ai_action   TEXT,
+            user_reaction TEXT,
+            resolution  TEXT,
+            lesson      TEXT,
+            signal_type TEXT,
+            signal_intensity REAL,
+            domain      TEXT,
+            created_at  TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(id),
+            FOREIGN KEY (card_id) REFERENCES judgment_cards(id) ON DELETE SET NULL,
+            UNIQUE(run_id, session_id, event_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_evidence_session ON evidence_events(session_id);
+        CREATE INDEX IF NOT EXISTS idx_evidence_domain  ON evidence_events(domain);
+        CREATE INDEX IF NOT EXISTS idx_evidence_signal  ON evidence_events(signal_type);
+        CREATE INDEX IF NOT EXISTS idx_evidence_card    ON evidence_events(card_id);
+
+        -- L2: Judgment Cards
+        CREATE TABLE IF NOT EXISTS judgment_cards (
+            id              TEXT PRIMARY KEY,
+            run_id          TEXT,
+            applies_when    TEXT,
+            judgment        TEXT,
+            agent_action    TEXT,
+            exceptions      TEXT,
+            tags            TEXT,
+            confidence      REAL,
+            status          TEXT DEFAULT 'hypothesis',
+            evidence_count  INTEGER DEFAULT 0,
+            created_at      TEXT,
+            updated_at      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_cards_status ON judgment_cards(status);
+        CREATE INDEX IF NOT EXISTS idx_cards_confidence ON judgment_cards(confidence);
+
+        -- L2: Card Relations
+        CREATE TABLE IF NOT EXISTS card_relations (
+            from_id     TEXT,
+            to_id       TEXT,
+            relation    TEXT,
+            PRIMARY KEY (from_id, to_id, relation),
+            FOREIGN KEY (from_id) REFERENCES judgment_cards(id),
+            FOREIGN KEY (to_id) REFERENCES judgment_cards(id)
+        );
+
+        -- L3: Cognitive Traits
+        CREATE TABLE IF NOT EXISTS cognitive_traits (
+            id                  TEXT PRIMARY KEY,
+            run_id              TEXT,
+            name                TEXT,
+            category            TEXT,
+            description         TEXT,
+            strength            REAL,
+            supporting_card_ids TEXT,
+            status              TEXT DEFAULT 'hypothesis',
+            evidence_count      INTEGER DEFAULT 0,
+            updated_at          TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_traits_category ON cognitive_traits(category);
+        CREATE INDEX IF NOT EXISTS idx_traits_status ON cognitive_traits(status);
+
+        -- =================================================================
+        -- Evolve cache
+        -- =================================================================
+        CREATE TABLE IF NOT EXISTS evolve_cache (
+            tab         TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'all',
+            date_range  TEXT NOT NULL DEFAULT '7d',
+            project     TEXT NOT NULL DEFAULT '',
+            engine      TEXT NOT NULL DEFAULT 'auto',
+            data        TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            PRIMARY KEY (tab, source, date_range, project, engine)
+        );
+        CREATE INDEX IF NOT EXISTS idx_evolve_tab     ON evolve_cache(tab);
+        CREATE INDEX IF NOT EXISTS idx_evolve_updated  ON evolve_cache(updated_at);
+    """)
+    _ensure_column(conn, "evidence_events", "run_id", "TEXT")
+    _ensure_column(conn, "judgment_cards", "run_id", "TEXT")
+    _ensure_column(conn, "cognitive_traits", "run_id", "TEXT")
+    _migrate_evidence_run_unique(conn)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_run ON evidence_events(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_session ON evidence_events(session_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_domain ON evidence_events(domain)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_signal ON evidence_events(signal_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_card ON evidence_events(card_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cards_run ON judgment_cards(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_traits_run ON cognitive_traits(run_id)")
+    conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str):
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _migrate_evidence_run_unique(conn: sqlite3.Connection):
+    """Replace legacy UNIQUE(session_id,event_index) with run-scoped uniqueness."""
+    indexes = conn.execute("PRAGMA index_list(evidence_events)").fetchall()
+    has_legacy_unique = False
+    for idx in indexes:
+        name = idx[1]
+        unique = idx[2]
+        if not unique:
+            continue
+        cols = [r[2] for r in conn.execute(f"PRAGMA index_info({name})").fetchall()]
+        if cols == ["session_id", "event_index"]:
+            has_legacy_unique = True
+            break
+    if not has_legacy_unique:
+        return
+
+    conn.execute("ALTER TABLE evidence_events RENAME TO evidence_events_legacy")
+    conn.execute("""
+        CREATE TABLE evidence_events (
+            id          TEXT PRIMARY KEY,
+            run_id      TEXT,
+            session_id  TEXT,
+            event_index INTEGER,
+            card_id     TEXT,
+            task_type   TEXT,
+            ai_action   TEXT,
+            user_reaction TEXT,
+            resolution  TEXT,
+            lesson      TEXT,
+            signal_type TEXT,
+            signal_intensity REAL,
+            domain      TEXT,
+            created_at  TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(id),
+            FOREIGN KEY (card_id) REFERENCES judgment_cards(id) ON DELETE SET NULL,
+            UNIQUE(run_id, session_id, event_index)
+        )
+    """)
+    legacy_cols = {row[1] for row in conn.execute("PRAGMA table_info(evidence_events_legacy)").fetchall()}
+    select_run = "run_id" if "run_id" in legacy_cols else "NULL AS run_id"
+    conn.execute(f"""
+        INSERT OR IGNORE INTO evidence_events
+        (id, run_id, session_id, event_index, card_id, task_type, ai_action,
+         user_reaction, resolution, lesson, signal_type, signal_intensity, domain, created_at)
+        SELECT id, {select_run}, session_id, event_index, card_id, task_type, ai_action,
+               user_reaction, resolution, lesson, signal_type, signal_intensity, domain, created_at
+        FROM evidence_events_legacy
+    """)
+    conn.execute("DROP TABLE evidence_events_legacy")
