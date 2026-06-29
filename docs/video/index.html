@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Distill Yourself Demo Video</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f9;
+      color: #1f2328;
+    }
+
+    body {
+      margin: 0;
+    }
+
+    main {
+      box-sizing: border-box;
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 40px 20px 56px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1.1;
+    }
+
+    p {
+      margin: 0 0 24px;
+      color: #57606a;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      max-height: 72vh;
+      border-radius: 8px;
+      background: #000;
+      box-shadow: 0 20px 50px rgb(31 35 40 / 14%);
+    }
+
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+
+    a {
+      color: #0969da;
+      text-decoration: none;
+    }
+
+    nav a {
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: #fff;
+      font-size: 14px;
+    }
+
+    nav a[aria-current="true"] {
+      border-color: #0969da;
+      color: #fff;
+      background: #0969da;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="title">Distill Yourself Demo Video</h1>
+    <p id="description">Watch the demo in your browser.</p>
+    <video id="player" controls preload="metadata" playsinline></video>
+    <nav id="playlist" aria-label="Demo videos"></nav>
+  </main>
+
+  <script>
+    const videos = {
+      "full-demo": {
+        title: "Full Demo",
+        description: "Complete Distill Yourself walkthrough (7:33).",
+        src: "full-demo.mp4"
+      },
+      "cognitive-model": {
+        title: "Cognitive Model",
+        description: "Cognitive model demo clip (1:55).",
+        src: "chapters/cognitive-model.mp4"
+      },
+      "evolve": {
+        title: "Evolve Engine",
+        description: "Evolve demo clip (1:55).",
+        src: "chapters/evolve.mp4"
+      },
+      "browse-search": {
+        title: "Browse & Search",
+        description: "Browse and search demo clip (0:55).",
+        src: "chapters/browse-search.mp4"
+      },
+      "insights": {
+        title: "Insights",
+        description: "Insights demo clip (0:50).",
+        src: "chapters/insights.mp4"
+      }
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    const selected = videos[params.get("v")] ? params.get("v") : "full-demo";
+    const video = videos[selected];
+
+    document.title = `${video.title} - Distill Yourself`;
+    document.getElementById("title").textContent = video.title;
+    document.getElementById("description").textContent = video.description;
+    document.getElementById("player").src = video.src;
+
+    const playlist = document.getElementById("playlist");
+    for (const [key, item] of Object.entries(videos)) {
+      const link = document.createElement("a");
+      link.href = `?v=${key}`;
+      link.textContent = item.title;
+      if (key === selected) {
+        link.setAttribute("aria-current", "true");
+      }
+      playlist.appendChild(link);
+    }
+  </script>
+</body>
+</html>
