@@ -294,6 +294,14 @@ python3 server.py          # 启动开发服务器
 
 ---
 
+## 致谢
+
+感谢以下同学对本项目的贡献和支持：
+
+**Huacan Wang** · **Yifan Zhou** · **Jun Han** · **Zhenheng Tang** · **Huanxuan Liao** · **Weida Wang** · **Yanlun Tu** · **Peijie Dong** · **Shizhou Huang** · **Ronghao Chen**
+
+---
+
 ## 许可证
 
 [MIT](LICENSE)

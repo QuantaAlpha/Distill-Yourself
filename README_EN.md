@@ -289,6 +289,14 @@ Join the community to share tips, feedback, and ideas about Distill Yourself.
 
 ---
 
+## Acknowledgements
+
+Thanks to the following contributors for their support:
+
+**Huacan Wang** · **Yifan Zhou** · **Jun Han** · **Zhenheng Tang** · **Huanxuan Liao** · **Weida Wang** · **Yanlun Tu** · **Peijie Dong** · **Shizhou Huang** · **Ronghao Chen**
+
+---
+
 ## License
 
 [MIT](LICENSE)
