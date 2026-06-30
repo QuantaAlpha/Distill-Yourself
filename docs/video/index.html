@@ -7,217 +7,261 @@
   <style>
     :root {
       color-scheme: dark;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #080a0f;
-      color: #f6f8fb;
-      --panel: rgb(15 23 42 / 72%);
-      --line: rgb(148 163 184 / 20%);
-      --muted: #aab8cc;
-      --accent: #38bdf8;
+      --bg: #05080d;
+      --bg-2: #081119;
+      --panel: rgba(8, 18, 28, 0.82);
+      --panel-strong: rgba(10, 24, 36, 0.94);
+      --line: rgba(142, 224, 255, 0.22);
+      --line-strong: rgba(142, 224, 255, 0.42);
+      --text: #f3f7fb;
+      --muted: #9fb1c2;
+      --soft: #d6e5ef;
+      --cyan: #35d9ff;
+      --green: #54f2b6;
+      --amber: #ffc857;
+      --blue: #66a6ff;
+      --violet: #a892ff;
+      --shadow-cyan: 0 0 32px rgba(53, 217, 255, 0.22);
+      --shadow-green: 0 0 28px rgba(84, 242, 182, 0.16);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
     }
 
     * {
       box-sizing: border-box;
     }
 
+    html {
+      scroll-behavior: smooth;
+    }
+
     body {
-      margin: 0;
       min-height: 100vh;
+      margin: 0;
       background:
-        linear-gradient(rgb(255 255 255 / 3%) 1px, transparent 1px),
-        linear-gradient(90deg, rgb(255 255 255 / 3%) 1px, transparent 1px),
-        radial-gradient(circle at 18% 12%, rgb(38 99 235 / 28%), transparent 30rem),
-        radial-gradient(circle at 88% 10%, rgb(20 184 166 / 20%), transparent 28rem),
-        linear-gradient(145deg, #080a0f 0%, #111827 46%, #0b1120 100%);
-      background-size: 40px 40px, 40px 40px, auto, auto, auto;
+        linear-gradient(rgba(53, 217, 255, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(53, 217, 255, 0.06) 1px, transparent 1px),
+        radial-gradient(circle at 16% 10%, rgba(53, 217, 255, 0.18), transparent 30rem),
+        radial-gradient(circle at 86% 8%, rgba(84, 242, 182, 0.13), transparent 32rem),
+        linear-gradient(180deg, rgba(8, 30, 46, 0.62), transparent 38rem),
+        linear-gradient(180deg, var(--bg), #071017 44%, #05080d);
+      background-size: 42px 42px, 42px 42px, auto, auto, auto, auto;
+      font-size: 16px;
+      line-height: 1.6;
+      letter-spacing: 0;
+      overflow-x: hidden;
     }
 
     body::before {
       position: fixed;
       inset: 0;
+      z-index: 0;
       pointer-events: none;
       content: "";
-      background: linear-gradient(180deg, rgb(8 10 15 / 12%), #080a0f 92%);
+      background:
+        linear-gradient(180deg, transparent, rgba(84, 242, 182, 0.07), transparent),
+        repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0, rgba(255, 255, 255, 0.025) 1px, transparent 1px, transparent 5px);
+      opacity: 0.42;
+      mix-blend-mode: screen;
     }
 
-    main {
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .page-shell {
       position: relative;
-      width: min(1180px, 100%);
+      z-index: 1;
+      width: min(1180px, calc(100% - 40px));
       margin: 0 auto;
-      padding: 32px 20px 56px;
     }
 
-    header {
+    .site-header {
+      position: sticky;
+      top: 14px;
+      z-index: 20;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 34px;
+      gap: 18px;
+      min-height: 58px;
+      margin: 14px 0 22px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(4, 10, 16, 0.76);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(18px);
     }
 
-    .brand {
+    .brand-lockup {
       display: inline-flex;
       align-items: center;
       gap: 10px;
-      font-size: 15px;
+      min-width: 0;
+      color: var(--soft);
+      font-size: 0.96rem;
       font-weight: 700;
-      letter-spacing: 0;
-      color: #dbeafe;
     }
 
     .brand-mark {
       display: inline-grid;
-      width: 30px;
-      height: 30px;
+      width: 34px;
+      height: 34px;
       place-items: center;
-      border: 1px solid rgb(96 165 250 / 34%);
+      border: 1px solid rgba(84, 242, 182, 0.55);
       border-radius: 8px;
-      background: linear-gradient(135deg, rgb(37 99 235 / 40%), rgb(20 184 166 / 22%));
-      box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%);
+      color: var(--green);
+      background: linear-gradient(135deg, rgba(84, 242, 182, 0.16), rgba(53, 217, 255, 0.08));
+      box-shadow: var(--shadow-green);
+      font-size: 0.74rem;
     }
 
-    .brand-mark::before {
-      width: 12px;
-      height: 12px;
-      border: 2px solid #bfdbfe;
-      border-radius: 4px;
-      content: "";
+    .nav-links {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
-    .back-link {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 9px 14px;
-      color: #cbd5e1;
-      background: var(--panel);
-      box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
-      font-size: 14px;
-      text-decoration: none;
+    .nav-links a {
+      padding: 7px 10px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
     }
 
-    .back-link:hover {
-      border-color: rgb(203 213 225 / 48%);
-      color: #fff;
+    .nav-links a:hover,
+    .nav-links a:focus-visible {
+      color: var(--text);
+      border-color: var(--line);
+      background: rgba(53, 217, 255, 0.08);
+      outline: none;
     }
 
-    .intro {
+    .hero {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 24px;
+      grid-template-columns: minmax(0, 0.82fr) minmax(420px, 1.18fr);
+      gap: 28px;
       align-items: end;
-      margin-bottom: 24px;
+      padding: 42px 0 32px;
     }
 
-    .eyebrow {
-      display: inline-flex;
-      margin-bottom: 12px;
-      border: 1px solid rgb(96 165 250 / 30%);
-      border-radius: 999px;
-      padding: 6px 10px;
-      color: #93c5fd;
-      background: rgb(30 64 175 / 18%);
-      font-size: 13px;
-      font-weight: 650;
+    .hero-copy {
+      position: relative;
+      padding: 18px 0 6px;
     }
 
-    .copy {
-      max-width: 780px;
-    }
-
-    .meta {
-      min-width: 210px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 14px 16px;
-      background: var(--panel);
-      box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
-    }
-
-    .meta-label {
-      margin-bottom: 4px;
-      color: #7dd3fc;
-      font-size: 12px;
-      font-weight: 700;
+    .eyebrow,
+    .section-kicker {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 0.78rem;
+      font-weight: 800;
       text-transform: uppercase;
     }
 
-    .meta-value {
-      color: #f8fafc;
-      font-size: 20px;
-      font-weight: 750;
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
     }
 
     h1 {
-      margin: 0 0 12px;
-      font-size: clamp(34px, 5vw, 58px);
-      line-height: 1.1;
+      max-width: 680px;
+      margin-bottom: 14px;
+      font-size: clamp(3rem, 7vw, 5.9rem);
+      line-height: 0.95;
+      font-weight: 850;
       letter-spacing: 0;
     }
 
-    p {
-      margin: 0;
-      max-width: 720px;
-      color: var(--muted);
-      font-size: 17px;
-      line-height: 1.6;
+    .hero-subtitle {
+      max-width: 680px;
+      margin: 0 0 22px;
+      color: var(--soft);
+      font-size: 1.08rem;
+      line-height: 1.75;
     }
 
-    .stage {
-      overflow: hidden;
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .meta-pill {
       border: 1px solid var(--line);
-      border-radius: 20px;
-      padding: 0;
-      background: linear-gradient(180deg, rgb(255 255 255 / 12%), rgb(255 255 255 / 4%));
-      box-shadow: 0 28px 80px rgb(0 0 0 / 38%);
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: var(--soft);
+      background: rgba(8, 18, 28, 0.62);
+      font-size: 0.86rem;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     }
 
-    .stage-bar {
+    .player-panel {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--panel-strong);
+      box-shadow: var(--shadow-cyan), 0 28px 70px rgba(0, 0, 0, 0.42);
+    }
+
+    .panel-topline {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 14px;
+      gap: 12px;
+      min-height: 44px;
+      padding: 10px 12px;
       border-bottom: 1px solid var(--line);
-      padding: 12px 14px;
-      background: rgb(2 6 23 / 48%);
+      background: rgba(3, 10, 16, 0.7);
     }
 
-    .window-controls {
+    .panel-controls {
       display: flex;
       gap: 7px;
     }
 
-    .window-controls span {
+    .panel-controls span {
       width: 10px;
       height: 10px;
       border-radius: 999px;
-      background: #64748b;
+      background: var(--muted);
     }
 
-    .window-controls span:nth-child(1) {
-      background: #fb7185;
+    .panel-controls span:nth-child(1) {
+      background: #ff6f91;
     }
 
-    .window-controls span:nth-child(2) {
-      background: #fbbf24;
+    .panel-controls span:nth-child(2) {
+      background: var(--amber);
     }
 
-    .window-controls span:nth-child(3) {
-      background: #34d399;
+    .panel-controls span:nth-child(3) {
+      background: var(--green);
     }
 
-    .stage-title {
+    .panel-title {
       overflow: hidden;
-      color: #cbd5e1;
-      font-size: 13px;
-      font-weight: 650;
+      color: var(--soft);
+      font-size: 0.82rem;
+      font-weight: 700;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .stage-status {
-      color: #93c5fd;
-      font-size: 12px;
-      font-weight: 700;
+    .panel-status {
+      color: var(--cyan);
+      font-size: 0.76rem;
+      font-weight: 800;
     }
 
     video {
@@ -227,128 +271,435 @@
       background: #000;
     }
 
-    nav {
+    .chapter-strip {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 16px;
+      gap: 10px;
+      margin-top: 12px;
     }
 
-    a {
-      color: #93c5fd;
-      text-decoration: none;
-    }
-
-    nav a {
-      min-height: 76px;
+    .chapter-link {
+      min-height: 78px;
       border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 12px 14px;
-      color: #cbd5e1;
-      background: var(--panel);
-      box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%);
-      font-size: 14px;
-      font-weight: 600;
+      border-radius: 8px;
+      padding: 11px 12px;
+      color: var(--muted);
+      background: rgba(4, 10, 16, 0.66);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
 
-    nav a:hover {
-      border-color: rgb(125 211 252 / 42%);
-      color: #f8fafc;
+    .chapter-link:hover,
+    .chapter-link:focus-visible {
+      color: var(--text);
+      border-color: var(--line-strong);
+      background: rgba(53, 217, 255, 0.08);
+      outline: none;
     }
 
-    nav a[aria-current="true"] {
-      border-color: rgb(96 165 250 / 75%);
-      color: #fff;
-      background:
-        linear-gradient(135deg, rgb(37 99 235 / 88%), rgb(8 145 178 / 82%)),
-        var(--panel);
-      box-shadow: 0 12px 24px rgb(37 99 235 / 26%);
+    .chapter-link[aria-current="true"] {
+      color: var(--text);
+      border-color: rgba(84, 242, 182, 0.62);
+      background: linear-gradient(145deg, rgba(84, 242, 182, 0.16), rgba(53, 217, 255, 0.11));
+      box-shadow: var(--shadow-green);
     }
 
-    .nav-title,
-    .nav-meta {
+    .chapter-title,
+    .chapter-meta {
       display: block;
     }
 
-    .nav-title {
-      margin-bottom: 8px;
-      color: inherit;
+    .chapter-title {
+      margin-bottom: 7px;
+      font-size: 0.92rem;
+      font-weight: 800;
     }
 
-    .nav-meta {
-      color: rgb(203 213 225 / 72%);
-      font-size: 12px;
-      font-weight: 650;
+    .chapter-meta {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
     }
 
-    nav a[aria-current="true"] .nav-meta {
-      color: rgb(255 255 255 / 78%);
+    .scroll-hint {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin: 30px auto 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .scroll-line {
+      width: 36px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--cyan));
+    }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.86fr) minmax(340px, 1.14fr);
+      gap: 22px;
+      padding: 42px 0 28px;
+    }
+
+    .content-panel,
+    .feature-card,
+    .step-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.24);
+    }
+
+    .content-panel {
+      padding: 24px;
+    }
+
+    .content-panel h2 {
+      margin-bottom: 12px;
+      font-size: clamp(2rem, 4vw, 3.4rem);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .content-panel p {
+      margin-bottom: 0;
+      color: var(--soft);
+      font-size: 1rem;
+      line-height: 1.78;
+    }
+
+    .point-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .feature-card {
+      padding: 18px;
+    }
+
+    .feature-card h3 {
+      margin-bottom: 6px;
+      color: var(--text);
+      font-size: 1rem;
+    }
+
+    .feature-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.93rem;
+      line-height: 1.62;
+    }
+
+    .chapter-section {
+      padding: 36px 0 12px;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 16px;
+    }
+
+    .section-heading h2 {
+      margin-bottom: 0;
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      line-height: 1;
+    }
+
+    .section-heading p {
+      max-width: 460px;
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .chapter-cards {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .step-card {
+      display: grid;
+      min-height: 190px;
+      padding: 16px;
+      align-content: space-between;
+      color: var(--soft);
+    }
+
+    .step-card[aria-current="true"] {
+      border-color: rgba(84, 242, 182, 0.62);
+      background: linear-gradient(180deg, rgba(84, 242, 182, 0.12), rgba(8, 18, 28, 0.82));
+      box-shadow: var(--shadow-green);
+    }
+
+    .step-number {
+      color: var(--green);
+      font-size: 0.78rem;
+      font-weight: 850;
+    }
+
+    .step-card h3 {
+      margin: 12px 0 8px;
+      font-size: 1.05rem;
+      line-height: 1.25;
+    }
+
+    .step-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+
+    /* ── Video modal ── */
+    .video-modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.88);
+      backdrop-filter: blur(12px);
+      cursor: pointer;
+    }
+
+    .video-modal-overlay.active {
+      display: flex;
+    }
+
+    .video-modal {
+      position: relative;
+      width: min(92vw, 1200px);
+      cursor: default;
+    }
+
+    .video-modal video {
+      width: 100%;
+      max-height: 85vh;
+      border-radius: 8px;
+      box-shadow: 0 0 60px rgba(53, 217, 255, 0.25), 0 32px 80px rgba(0, 0, 0, 0.6);
+    }
+
+    .video-modal-close {
+      position: absolute;
+      top: -42px;
+      right: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 12px;
+      color: var(--muted);
+      background: rgba(4, 10, 16, 0.7);
+      font-size: 0.82rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .video-modal-close:hover {
+      color: var(--text);
+      border-color: var(--line-strong);
+    }
+
+    /* ── Clickable player overlay ── */
+    .player-wrap {
+      position: relative;
+      cursor: pointer;
+    }
+
+    .player-wrap .play-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.25);
+      transition: background 0.2s;
+    }
+
+    .player-wrap:hover .play-overlay {
+      background: rgba(0, 0, 0, 0.12);
+    }
+
+    .play-overlay svg {
+      width: 64px;
+      height: 64px;
+      filter: drop-shadow(0 2px 12px rgba(0,0,0,0.5));
+      transition: transform 0.2s;
+    }
+
+    .player-wrap:hover .play-overlay svg {
+      transform: scale(1.1);
+    }
+
+    .footer-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 44px 0 20px;
+      flex-wrap: wrap;
+    }
+
+    .action-link {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 13px;
+      color: var(--soft);
+      background: rgba(4, 10, 16, 0.7);
+      font-size: 0.92rem;
+      font-weight: 750;
+    }
+
+    .action-link.primary {
+      border-color: rgba(84, 242, 182, 0.56);
+      color: #04100c;
+      background: linear-gradient(135deg, var(--green), var(--cyan));
+    }
+
+    @media (max-width: 920px) {
+      .hero,
+      .content-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        padding-top: 26px;
+      }
+
+      .chapter-strip,
+      .chapter-cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
     }
 
     @media (max-width: 640px) {
-      main {
-        padding: 20px 14px 36px;
+      .page-shell {
+        width: min(100% - 24px, 1180px);
       }
 
-      header {
+      .site-header {
+        position: static;
         align-items: flex-start;
         flex-direction: column;
-        margin-bottom: 26px;
       }
 
-      .intro {
-        grid-template-columns: 1fr;
+      h1 {
+        font-size: clamp(2.7rem, 16vw, 4.3rem);
       }
 
-      .meta {
-        min-width: 0;
-      }
-
-      .stage {
-        border-radius: 14px;
-      }
-
-      .stage-title {
+      .panel-title {
         display: none;
       }
 
-      nav {
+      .chapter-strip,
+      .chapter-cards {
         grid-template-columns: 1fr;
+      }
+
+      .section-heading {
+        align-items: flex-start;
+        flex-direction: column;
       }
     }
   </style>
 </head>
 <body>
-  <main>
-    <header>
-      <a class="brand" href="https://github.com/QuantaAlpha/Distill_Yourself"><span class="brand-mark" aria-hidden="true"></span> Distill Yourself</a>
-      <a class="back-link" href="https://github.com/QuantaAlpha/Distill_Yourself">Back to docs</a>
+  <div class="page-shell">
+    <header class="site-header">
+      <a class="brand-lockup" href="https://github.com/QuantaAlpha/Distill-Yourself">
+        <span class="brand-mark" aria-hidden="true">DY</span>
+        <span>Distill Yourself</span>
+      </a>
+      <nav class="nav-links" aria-label="Page navigation">
+        <a href="#overview">Overview</a>
+        <a href="#chapters">Chapters</a>
+        <a href="../">Home</a>
+        <a href="https://github.com/QuantaAlpha/Distill-Yourself">GitHub</a>
+      </nav>
     </header>
-    <section class="intro" aria-labelledby="title">
-      <div class="copy">
-        <span class="eyebrow">Demo Library</span>
-        <h1 id="title">Distill Yourself Demo Video</h1>
-        <p id="description">Watch the demo in your browser.</p>
-      </div>
-      <aside class="meta" aria-label="Current video details">
-        <div class="meta-label">Now playing</div>
-        <div class="meta-value" id="duration">7:33</div>
-      </aside>
-    </section>
-    <section class="stage" aria-label="Video player">
-      <div class="stage-bar" aria-hidden="true">
-        <div class="window-controls">
-          <span></span>
-          <span></span>
-          <span></span>
+
+    <main>
+      <section class="hero" aria-labelledby="title">
+        <div class="hero-copy">
+          <p class="eyebrow">Demo Theater</p>
+          <h1 id="title">Distill Yourself Demo Video</h1>
+          <p class="hero-subtitle" id="description">Watch the demo in your browser.</p>
+          <div class="hero-meta">
+            <span class="meta-pill" id="duration">7:33</span>
+            <span class="meta-pill">Original audio</span>
+            <span class="meta-pill">Repository-hosted video</span>
+          </div>
         </div>
-        <div class="stage-title" id="stage-title">Distill Yourself Demo Video</div>
-        <div class="stage-status">HD</div>
+
+        <div>
+          <section class="player-panel" aria-label="Video player">
+            <div class="panel-topline" aria-hidden="true">
+              <div class="panel-controls">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div class="panel-title" id="stage-title">Distill Yourself Demo Video</div>
+              <div class="panel-status">HD</div>
+            </div>
+            <div class="player-wrap" id="player-wrap">
+              <div class="play-overlay" id="play-overlay">
+                <svg viewBox="0 0 80 80" fill="none"><circle cx="40" cy="40" r="38" fill="rgba(0,0,0,0.45)" stroke="rgba(255,255,255,0.8)" stroke-width="2.5"/><polygon points="33,24 33,56 58,40" fill="rgba(255,255,255,0.92)"/></svg>
+              </div>
+              <video id="player" preload="none" playsinline></video>
+            </div>
+          </section>
+          <nav class="chapter-strip" id="playlist" aria-label="Demo videos"></nav>
+        </div>
+      </section>
+
+      <div class="scroll-hint" aria-hidden="true">
+        <span class="scroll-line"></span>
+        <span>Scroll for context</span>
+        <span class="scroll-line"></span>
       </div>
-      <video id="player" controls preload="none" playsinline></video>
-    </section>
-    <nav id="playlist" aria-label="Demo videos"></nav>
-  </main>
+
+      <section class="content-grid" id="overview" aria-labelledby="overview-title">
+        <article class="content-panel">
+          <p class="section-kicker">What this part shows</p>
+          <h2 id="overview-title">A guided view of your AI history.</h2>
+          <p id="overview-text">This demo shows how Distill Yourself turns Claude Code and Codex sessions into searchable context, durable judgment, and reusable memory for future work.</p>
+        </article>
+        <div class="point-list" id="points"></div>
+      </section>
+
+      <section class="chapter-section" id="chapters" aria-labelledby="chapters-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">Jump to a chapter</p>
+            <h2 id="chapters-title">Choose the exact workflow.</h2>
+          </div>
+          <p>README links open this page with the matching chapter selected, so every feature link lands on the right video and explanation.</p>
+        </div>
+        <div class="chapter-cards" id="chapter-cards"></div>
+      </section>
+
+      <div class="footer-actions">
+        <a class="action-link primary" href="https://github.com/QuantaAlpha/Distill-Yourself">Open repository</a>
+        <a class="action-link" href="https://github.com/QuantaAlpha/Distill-Yourself#quick-start">Read Quick Start</a>
+      </div>
+    </main>
+  </div>
+
+  <div class="video-modal-overlay" id="video-modal-overlay">
+    <div class="video-modal" id="video-modal">
+      <button class="video-modal-close" id="modal-close">ESC to close</button>
+      <video id="modal-player" controls autoplay playsinline></video>
+    </div>
+  </div>
 
   <script>
     const videos = {
@@ -357,35 +708,70 @@
         description: "Complete Distill Yourself walkthrough (7:33).",
         duration: "7:33",
         poster: "../images/readme/demo-preview.jpg",
-        src: "full-demo.mp4"
+        src: "full-demo.mp4",
+        overviewTitle: "See the full local-first memory loop.",
+        overview: "The full demo moves from browsing Claude Code and Codex history to extracting patterns, reviewing insights, and preparing reusable AI configuration updates.",
+        points: [
+          ["Unified history", "Search and browse Claude Code plus Codex sessions from one local index."],
+          ["Traceable intelligence", "Move from raw evidence to judgment cards, traits, and concrete recommendations."],
+          ["Closed loop", "Preview what should become durable memory before syncing anything back."]
+        ]
       },
       "cognitive-model": {
         title: "Cognitive Model",
         description: "Cognitive model demo clip (1:55).",
         duration: "1:55",
         poster: "../images/readme/twin-cognitive-model.png",
-        src: "chapters/cognitive-model.mp4"
+        src: "chapters/cognitive-model.mp4",
+        overviewTitle: "Understand how your work style is distilled.",
+        overview: "This chapter focuses on the three-layer cognitive model: evidence events, judgment cards, and generalized traits that explain how you decide and collaborate.",
+        points: [
+          ["Evidence first", "Start from concrete behavior signals extracted from real conversations."],
+          ["Judgment cards", "Condense repeated decisions and corrections into reusable working preferences."],
+          ["Runtime profile", "Compile traits into a concise developer summary future AI sessions can use."]
+        ]
       },
       "evolve": {
         title: "Evolve Engine",
         description: "Evolve demo clip (1:55).",
         duration: "1:55",
         poster: "../images/readme/evolve-rules.png",
-        src: "chapters/evolve.mp4"
+        src: "chapters/evolve.mp4",
+        overviewTitle: "Review what should become durable memory.",
+        overview: "This chapter shows how recurring preferences, corrections, and patterns are surfaced for review before anything is written back to AI configuration.",
+        points: [
+          ["Preference graph", "See the memories and behavioral patterns the system believes are worth retaining."],
+          ["Rules and signals", "Inspect repeated corrections and whether they are increasing or decreasing."],
+          ["Explicit sync", "Nothing is written silently; every update stays reviewable before sync."]
+        ]
       },
       "browse-search": {
         title: "Browse & Search",
         description: "Browse and search demo clip (0:55).",
         duration: "0:55",
         poster: "../images/user-guide/02-session.jpg",
-        src: "chapters/browse-search.mp4"
+        src: "chapters/browse-search.mp4",
+        overviewTitle: "Find the exact conversation context fast.",
+        overview: "This chapter demonstrates full-text search, source filters, session outlines, and structured reading across Claude Code and Codex histories.",
+        points: [
+          ["Dual-source browsing", "Claude Code and Codex sessions are shown together with clear source labels."],
+          ["Focused search", "Search titles and message content, then jump directly to matched context."],
+          ["Structured reading", "Expand messages, inspect tool calls, and keep session summaries nearby."]
+        ]
       },
       "insights": {
         title: "Insights",
         description: "Insights demo clip (0:50).",
         duration: "0:50",
         poster: "../images/readme/insights-heatmap.png",
-        src: "chapters/insights.mp4"
+        src: "chapters/insights.mp4",
+        overviewTitle: "Scan local analytics without an AI engine.",
+        overview: "This chapter highlights local analytics views such as tool heatmaps, file hotspots, project health, error patterns, and generated code snippets.",
+        points: [
+          ["Usage heatmap", "See which tool types are used most heavily over time."],
+          ["Project signals", "Identify active projects, file hotspots, and recurring error clusters."],
+          ["Local computation", "Analytics are computed from your local index without sending conversation data out."]
+        ]
       }
     };
 
@@ -398,20 +784,71 @@
     document.getElementById("description").textContent = video.description;
     document.getElementById("duration").textContent = video.duration;
     document.getElementById("stage-title").textContent = video.title;
+    document.getElementById("overview-title").textContent = video.overviewTitle;
+    document.getElementById("overview-text").textContent = video.overview;
+
     const player = document.getElementById("player");
     player.poster = video.poster;
     player.src = video.src;
 
     const playlist = document.getElementById("playlist");
+    const chapterCards = document.getElementById("chapter-cards");
+    const points = document.getElementById("points");
+
     for (const [key, item] of Object.entries(videos)) {
       const link = document.createElement("a");
+      link.className = "chapter-link";
       link.href = `?v=${key}`;
-      link.innerHTML = `<span class="nav-title">${item.title}</span><span class="nav-meta">${item.duration}</span>`;
+      link.innerHTML = `<span class="chapter-title">${item.title}</span><span class="chapter-meta">${item.duration}</span>`;
       if (key === selected) {
         link.setAttribute("aria-current", "true");
       }
       playlist.appendChild(link);
+
+      const card = document.createElement("a");
+      card.className = "step-card";
+      card.href = `?v=${key}`;
+      card.innerHTML = `<span class="step-number">${item.duration}</span><div><h3>${item.title}</h3><p>${item.description}</p></div>`;
+      if (key === selected) {
+        card.setAttribute("aria-current", "true");
+      }
+      chapterCards.appendChild(card);
     }
+
+    // ── Video modal logic ──
+    const overlay = document.getElementById("video-modal-overlay");
+    const modalPlayer = document.getElementById("modal-player");
+    const playerWrap = document.getElementById("player-wrap");
+
+    function openModal() {
+      modalPlayer.src = player.src;
+      modalPlayer.currentTime = 0;
+      overlay.classList.add("active");
+      document.body.style.overflow = "hidden";
+    }
+
+    function closeModal() {
+      overlay.classList.remove("active");
+      modalPlayer.pause();
+      modalPlayer.removeAttribute("src");
+      document.body.style.overflow = "";
+    }
+
+    playerWrap.addEventListener("click", openModal);
+    document.getElementById("modal-close").addEventListener("click", closeModal);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeModal();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && overlay.classList.contains("active")) closeModal();
+    });
+
+    video.points.forEach(([title, body]) => {
+      const card = document.createElement("article");
+      card.className = "feature-card";
+      card.innerHTML = `<h3>${title}</h3><p>${body}</p>`;
+      points.appendChild(card);
+    });
   </script>
 </body>
 </html>

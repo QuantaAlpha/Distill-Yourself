@@ -211,26 +211,43 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             _handle_twin_runs(self)
         elif path == "/api/twin/overview":
             overview = {}
+            run_id = params.get("run_id", [None])[0]
+            # When run_id is given, scope counts/items to that run; else global.
+            _ow = ("run_id=?", (run_id,)) if run_id else ("", ())
             try:
-                card_count = _db.cm_count("judgment_cards")
+                card_count = _db.cm_count("judgment_cards", where=_ow[0], params=_ow[1])
                 card_items = _db.cm_get_all(
-                    "judgment_cards", order="confidence DESC", limit=5
+                    "judgment_cards",
+                    where=_ow[0],
+                    params=_ow[1],
+                    order="confidence DESC",
+                    limit=5,
                 )
                 overview["cards"] = {"count": card_count, "items": card_items}
             except Exception:
                 overview["cards"] = {"count": 0, "items": []}
             try:
-                trait_count = _db.cm_count("cognitive_traits")
+                trait_count = _db.cm_count(
+                    "cognitive_traits", where=_ow[0], params=_ow[1]
+                )
                 trait_items = _db.cm_get_all(
-                    "cognitive_traits", order="strength DESC", limit=50
+                    "cognitive_traits",
+                    where=_ow[0],
+                    params=_ow[1],
+                    order="strength DESC",
+                    limit=50,
                 )
                 overview["traits"] = {"count": trait_count, "items": trait_items}
             except Exception:
                 overview["traits"] = {"count": 0, "items": []}
             try:
-                event_count = _db.cm_count("evidence_events")
+                event_count = _db.cm_count(
+                    "evidence_events", where=_ow[0], params=_ow[1]
+                )
                 event_items = _db.cm_get_all(
                     "evidence_events",
+                    where=_ow[0],
+                    params=_ow[1],
                     order="signal_intensity DESC, created_at DESC",
                     limit=3,
                 )
@@ -238,7 +255,12 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             except Exception:
                 overview["events"] = {"count": 0, "items": []}
             try:
-                cached = _db.evolve_latest("twin_avatar")
+                # run-scoped avatar matches the write scope used by
+                # _select_cognitive_avatar (project=run_id); no global fallback.
+                if run_id:
+                    cached = _db.evolve_get("twin_avatar", "all", "all", run_id, "auto")
+                else:
+                    cached = _db.evolve_latest("twin_avatar")
                 overview["avatar_selection"] = cached["data"] if cached else None
             except Exception:
                 overview["avatar_selection"] = None
@@ -246,10 +268,11 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         elif path == "/api/twin/avatar-selection":
             _db.init_db()
             lang = params.get("lang", ["zh"])[0]
+            run_id = params.get("run_id", [None])[0] or ""
             # GET 必须快速返回：只读缓存，绝不在请求线程内触发耗时 AI 选择
             # （AI 选择由 twin 分析的后台 SSE 流以 force=True 预先计算并写缓存）。
             selection = _select_cognitive_avatar(
-                force=False, lang=lang, cache_only=True
+                force=False, lang=lang, cache_only=True, run_id=run_id
             )
             if selection:
                 _json_response(self, selection)
@@ -258,6 +281,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         elif path == "/api/twin/events":
             signal_type = params.get("signal_type", [None])[0]
             domain = params.get("domain", [None])[0]
+            run_id = params.get("run_id", [None])[0]
             limit = _int_param(params, "limit", 200)
             where_parts, where_params = [], []
             if signal_type:
@@ -266,6 +290,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             if domain:
                 where_parts.append("domain LIKE ?")
                 where_params.append(f"%{domain}%")
+            if run_id:
+                where_parts.append("run_id=?")
+                where_params.append(run_id)
             where = " AND ".join(where_parts)
             items = _db.cm_get_all(
                 "evidence_events",
@@ -279,6 +306,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             status = params.get("status", [None])[0]
             tag = params.get("tag", [None])[0]
             sort = params.get("sort", ["confidence"])[0]
+            run_id = params.get("run_id", [None])[0]
             limit = _int_param(params, "limit", 500)
             where_parts, where_params = [], []
             if status:
@@ -287,6 +315,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             if tag:
                 where_parts.append("tags LIKE ?")
                 where_params.append(f"%{tag}%")
+            if run_id:
+                where_parts.append("run_id=?")
+                where_params.append(run_id)
             where = " AND ".join(where_parts)
             order = "confidence DESC" if sort == "confidence" else "updated_at DESC"
             items = _db.cm_get_all(
@@ -300,6 +331,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         elif path == "/api/twin/traits":
             status = params.get("status", [None])[0]
             category = params.get("category", [None])[0]
+            run_id = params.get("run_id", [None])[0]
             limit = _int_param(params, "limit", 500)
             where_parts, where_params = [], []
             if status:
@@ -308,6 +340,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             if category:
                 where_parts.append("category=?")
                 where_params.append(category)
+            if run_id:
+                where_parts.append("run_id=?")
+                where_params.append(run_id)
             where = " AND ".join(where_parts)
             items = _db.cm_get_all(
                 "cognitive_traits",
@@ -344,15 +379,23 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"trait": trait, "supporting_cards": cards})
         elif path == "/api/twin/runtime-preview":
             lang = params.get("lang", ["zh"])[0]
+            run_id = params.get("run_id", [None])[0]
+            rp_where = "status IN ('confirmed','emerging')"
+            rp_params = ()
+            if run_id:
+                rp_where += " AND run_id=?"
+                rp_params = (run_id,)
             cards = _db.cm_get_all(
                 "judgment_cards",
-                where="status IN ('confirmed','emerging')",
+                where=rp_where,
+                params=rp_params,
                 order="confidence DESC",
                 limit=25,
             )
             traits = _db.cm_get_all(
                 "cognitive_traits",
-                where="status IN ('confirmed','emerging')",
+                where=rp_where,
+                params=rp_params,
                 order="strength DESC",
                 limit=15,
             )

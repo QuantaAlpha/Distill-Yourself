@@ -200,6 +200,17 @@ class TestFrontendStreamingStatic(unittest.TestCase):
                 marker,
             )
 
+    def test_evolve_sync_chrome_keeps_header_scoped_to_active_tab(self):
+        script = read_static("evolve.js")
+        chrome_body = script[
+            script.index("function _syncEvolveChrome(") : script.index(
+                "function _updateEvolveHeader(",
+                script.index("function _syncEvolveChrome("),
+            )
+        ]
+
+        self.assertIn("_updateEvolveHeader(evolveActiveTab", chrome_body)
+
     def test_evolve_progress_summary_block_matches_twin_style(self):
         script = read_static("evolve.js")
 
@@ -207,6 +218,15 @@ class TestFrontendStreamingStatic(unittest.TestCase):
         self.assertIn("function _updateProgressSummary(", script)
         self.assertIn("evolve-progress-summary", script)
         self.assertIn("_updateProgressSummary(tab, progressState, true)", script)
+
+    def test_evolve_progress_summary_styles_exist(self):
+        css = read_static("css/evolve.css")
+
+        self.assertIn(".evolve-progress-summary", css)
+        self.assertIn(".evolve-progress-head", css)
+        self.assertIn(".evolve-progress-runid", css)
+        self.assertIn(".evolve-progress-live", css)
+        self.assertIn("@keyframes evolve-progress-glow", css)
 
     def test_evolve_restore_does_not_persist_inactive_running_as_error(self):
         script = read_static("evolve.js")
@@ -237,6 +257,25 @@ class TestFrontendStreamingStatic(unittest.TestCase):
 
         self.assertIn("cache", restore_body)
         self.assertIn("normalizeEvolveData(tab, cache.data)", restore_body)
+
+    def test_evolve_server_loaded_cache_resyncs_active_header(self):
+        script = read_static("evolve.js")
+
+        interrupted_body = script[
+            script.index("function _showInterruptedBanner") : script.index(
+                "function bindEvolveEvents",
+                script.index("function _showInterruptedBanner"),
+            )
+        ]
+        preload_body = script[
+            script.index("function _loadServerCacheForMissingTabs") : script.index(
+                "function _progressParams",
+                script.index("function _loadServerCacheForMissingTabs"),
+            )
+        ]
+
+        self.assertIn("_syncEvolveChrome(tab, scope)", interrupted_body)
+        self.assertIn("_syncEvolveChrome(tab, scope)", preload_body)
 
     def test_evolve_restore_running_clears_transient_timeout_cache(self):
         script = read_static("evolve.js")
@@ -337,7 +376,22 @@ class TestFrontendStreamingStatic(unittest.TestCase):
         ]
 
         self.assertIn("!evolveStreamAborts[evolveActiveTab]", locale_body)
-        self.assertIn("!evolveLoadingTabs[evolveActiveTab]", locale_body)
+        self.assertIn(
+            "!_isTabLoadingForScope(evolveActiveTab, getEvolveScope())",
+            locale_body,
+        )
+
+    def test_evolve_refresh_controls_use_scope_aware_loading_checks(self):
+        script = read_static("evolve.js")
+        bind_body = script[
+            script.index("function bindEvolveEvents()") : script.index(
+                "function switchEvolveTab(",
+                script.index("function bindEvolveEvents()"),
+            )
+        ]
+
+        self.assertIn("_isTabLoadingForScope(evolveActiveTab, activeScope)", bind_body)
+        self.assertNotIn("evolveLoadingTabs[evolveActiveTab]", bind_body)
 
     def test_evolve_terminal_events_do_not_require_stream_container(self):
         script = read_static("evolve.js")

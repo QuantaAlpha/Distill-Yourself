@@ -119,6 +119,16 @@ def _run_twin_ai_stage(
     Returns False when the client disconnects mid-stream (caller should stop
     sending further SSE events), but the AI process is allowed to finish.
     """
+    def _on_proc_start(proc):
+        # Register the live subprocess for cancellation the instant it is
+        # created — not after the first streamed event — so /api/twin/cancel can
+        # terminate it even during the codex→claude fallback's pre-stream gap,
+        # where the proc is born after an initial text event has been yielded.
+        if proc is not None and proc.poll() is None:
+            with _analyze_lock:
+                global _active_analyze_proc
+                _active_analyze_proc = proc
+
     stream = _run_ai_engine_stream(
         prompt,
         allow_write=True,
@@ -126,26 +136,10 @@ def _run_twin_ai_stage(
         engine_override=engine,
         proc_ref=proc_ref,
         for_twin=True,
+        on_proc_start=_on_proc_start,
     )
     disconnected = False
     try:
-        # Prime the generator so the proc is created, then register it globally
-        # (the generator creates the proc before its first yield)
-        try:
-            first_evt = next(stream)
-        except StopIteration:
-            return True
-        if proc_ref is not None and proc_ref[0] is not None:
-            with _analyze_lock:
-                global _active_analyze_proc
-                _active_analyze_proc = proc_ref[0]
-        try:
-            _sse_event(handler, first_evt)
-        except BrokenPipeError:
-            disconnected = True
-        if first_evt.get("type") == "error":
-            return False
-
         for evt in stream:
             if disconnected:
                 continue  # drain silently — AI process still writes to DB
@@ -407,7 +401,9 @@ def _handle_twin_analyze(handler):
             except BrokenPipeError:
                 pass
             try:
-                avatar = _select_cognitive_avatar(force=True, run_id=run_id, lang=lang)
+                avatar = _select_cognitive_avatar(
+                    force=True, run_id=run_id, lang=lang, engine=engine
+                )
                 if avatar:
                     match_prefix = "Match result" if en else "匹配结果"
                     try:
@@ -961,16 +957,24 @@ def _latest_twin_run_info():
 
     _db.init_db()
 
-    tables = ["evidence_events", "judgment_cards", "cognitive_traits"]
+    # Each table's recency column differs: cognitive_traits has only updated_at.
+    # A wrong/missing column raises OperationalError (caught by the inner except
+    # below), silently dropping that table from "latest run" selection, so resume
+    # would not be authoritative.
+    table_ts = {
+        "evidence_events": "created_at",
+        "judgment_cards": "created_at",
+        "cognitive_traits": "updated_at",
+    }
     latest_run_id = None
     latest_created = ""
 
     try:
         conn = _db.get_conn()
-        for table in tables:
+        for table, ts_col in table_ts.items():
             try:
                 row = conn.execute(
-                    f"SELECT run_id, MAX(created_at) as latest FROM {table} "
+                    f"SELECT run_id, MAX({ts_col}) as latest FROM {table} "
                     f"WHERE run_id IS NOT NULL AND run_id != ''"
                 ).fetchone()
                 if row and row["latest"] and row["latest"] > latest_created:
@@ -1197,27 +1201,38 @@ def _handle_twin_sync(handler):
     # Read lang from POST body if provided
     raw = _read_post_body(handler)
     lang = "zh"
+    run_id = ""
     if raw:
         try:
             body = _json.loads(raw)
             lang = body.get("lang", "zh")
+            run_id = body.get("run_id", "") or ""
         except Exception:
             pass
 
-    CLAUDE_MD_PATH = Path.home() / ".claude" / "CLAUDE.md"
+    CLAUDE_MD_PATH = Path(
+        os.environ.get("CHATVIEW_CLAUDE_MD") or (Path.home() / ".claude" / "CLAUDE.md")
+    )
     CM_MARKER_START = "<!-- cognitive-handbook:start -->"
     CM_MARKER_END = "<!-- cognitive-handbook:end -->"
 
+    sync_where = "status IN ('confirmed','emerging')"
+    sync_params = ()
+    if run_id:
+        sync_where += " AND run_id=?"
+        sync_params = (run_id,)
     try:
         cards = _db.cm_get_all(
             "judgment_cards",
-            where="status IN ('confirmed','emerging')",
+            where=sync_where,
+            params=sync_params,
             order="confidence DESC",
             limit=25,
         )
         traits = _db.cm_get_all(
             "cognitive_traits",
-            where="status IN ('confirmed','emerging')",
+            where=sync_where,
+            params=sync_params,
             order="strength DESC",
             limit=15,
         )
@@ -1281,7 +1296,10 @@ def _handle_twin_sync(handler):
         claude_md_status = "appended"
 
     _safe_write_claude_md(
-        new_text, marker_start=CM_MARKER_START, marker_end=CM_MARKER_END
+        new_text,
+        marker_start=CM_MARKER_START,
+        marker_end=CM_MARKER_END,
+        target_path=CLAUDE_MD_PATH,
     )
 
     _json_response(

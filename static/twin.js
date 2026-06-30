@@ -245,7 +245,7 @@
     renderPersonaOptions(sel, manualOption ? manualOption.avatarId : "");
 
     if (traits && traits.length) {
-      fetch(`/api/twin/avatar-selection?lang=${encodeURIComponent(_getLang())}`)
+      fetch(_withRunId("/api/twin/avatar-selection"))
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (data && data.persona_id) {
@@ -1085,47 +1085,31 @@
   };
 
   function _initResume() {
-    if (!_activeRunId) {
-      // Resolve default run scope first, then load overview exactly once.
-      fetch("/api/twin/resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: _getLang() }),
-      })
-        .then(r => r.json())
-        .then((d) => {
-          if (d && d.ok && d.run && d.run.run_id) {
-            _activeRunId = d.run.run_id;
-            try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
-            // ── Auto-restore progress view if partial run exists (Fix 1) ──
-            if (d.run.status === "partial" || d.run.status === "interrupted") {
-              hasAnalysisProgress = true;
-              _updateProgressButton();
-            }
-            // ── Resume prompt (Issue 2.1) — but only if NOT still running ──
-            _resumePromptIfNotRunning(d.run);
-          }
-        })
-        .catch(() => {})
-        .finally(() => { loadOverview(); });
-    } else {
-      // Check if we have a partial run and show progress button
-      fetch("/api/twin/resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: _getLang() }),
-      })
-        .then(r => r.json())
-        .then((d) => {
-          if (d && d.ok && d.run && (d.run.status === "partial" || d.run.status === "interrupted")) {
+    // Resolve the authoritative latest run on open, then load overview exactly
+    // once. A stale stored id would otherwise scope every read to nothing.
+    fetch("/api/twin/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lang: _getLang() }),
+    })
+      .then(r => r.json())
+      .then((d) => {
+        if (d && d.ok && d.run && d.run.run_id) {
+          _activeRunId = d.run.run_id;
+          try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+          if (d.run.status === "partial" || d.run.status === "interrupted") {
             hasAnalysisProgress = true;
             _updateProgressButton();
             _resumePromptIfNotRunning(d.run);
           }
-        })
-        .catch(() => {})
-        .finally(() => { loadOverview(); });
-    }
+        } else {
+          _activeRunId = "";
+          hasAnalysisProgress = false;
+          try { localStorage.removeItem("twin-active-run-id"); } catch (e) {}
+        }
+      })
+      .catch(() => { /* network error: keep the stored id, do NOT clear */ })
+      .finally(() => { loadOverview(); });
   }
 
   /** Show the resume prompt only after confirming the backend is NOT running.

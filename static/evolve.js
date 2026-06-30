@@ -341,7 +341,16 @@
   }
 
   function _syncEvolveChrome(tab, scope) {
-    _updateEvolveHeader(tab, scope);
+    const activeScope = getEvolveScope();
+    const headerScope =
+      tab &&
+      scope &&
+      tab === evolveActiveTab &&
+      _currentScopeKey(tab, scope) ===
+        _currentScopeKey(evolveActiveTab, activeScope)
+        ? scope
+        : activeScope;
+    _updateEvolveHeader(evolveActiveTab, headerScope);
     _setEvolveRefreshButton();
     _updateTabStatusIndicators();
     updateEvolveOverviewBar();
@@ -560,9 +569,8 @@
             if (isCurrentScopeKey(tab, scope)) {
               const panel = _ensureTabPanel(tab);
               _renderTabPanel(tab, panel);
-              _updateTabStatusIndicators();
-              updateEvolveOverviewBar();
             }
+            _syncEvolveChrome(tab, scope);
           }
         })
         .catch(() => {});
@@ -579,9 +587,10 @@
     const tabRefresh = $("#evolve-tab-refresh");
     if (tabRefresh)
       tabRefresh.onclick = () => {
+        const activeScope = getEvolveScope();
         if (
           evolveStreamAborts[evolveActiveTab] ||
-          evolveLoadingTabs[evolveActiveTab]
+          _isTabLoadingForScope(evolveActiveTab, activeScope)
         ) {
           _stopEvolveTab(evolveActiveTab);
         } else {
@@ -762,6 +771,7 @@
       s.date || "7d",
       s.project || "",
       s.engine || "auto",
+      s.lang || evolveScopeLang || "zh",
     ].join("::");
   }
 
@@ -951,9 +961,8 @@
             if (isCurrentScopeKey(tab, scope)) {
               const panel = _ensureTabPanel(tab);
               _renderTabPanel(tab, panel);
-              _updateTabStatusIndicators();
-              updateEvolveOverviewBar();
             }
+            _syncEvolveChrome(tab, scope);
             return;
           }
           if (data && data._error === "no_cache") return;
@@ -971,9 +980,8 @@
             if (isCurrentScopeKey(tab, scope)) {
               const panel = _ensureTabPanel(tab);
               _renderTabPanel(tab, panel);
-              _updateTabStatusIndicators();
-              updateEvolveOverviewBar();
             }
+            _syncEvolveChrome(tab, scope);
           }
         })
         .catch(() => {}); // silent — server cache is optional
@@ -3139,7 +3147,7 @@
       // If a tab is mid-stream, don't restart it — only the static DOM labels above refresh.
       if (
         !evolveStreamAborts[evolveActiveTab] &&
-        !evolveLoadingTabs[evolveActiveTab]
+        !_isTabLoadingForScope(evolveActiveTab, getEvolveScope())
       ) {
         const panel = document.querySelector(
           `.evolve-tab-panel[data-tab="${evolveActiveTab}"]`,

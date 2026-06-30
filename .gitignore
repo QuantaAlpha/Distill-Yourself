@@ -4,7 +4,8 @@
 .claude/
 .knowhow/
 .superpowers/
-skills/
+skills/*
+!skills/distill-yourself/
 docs/specs/
 docs/plans/
 docs/research/
@@ -12,6 +13,11 @@ docs/decisions/
 docs/reference/
 docs/superpowers/
 docs/*
+!docs/index.html
+!docs/styles.css
+!docs/script.js
+!docs/assets/
+!docs/assets/**
 !docs/images/
 !docs/images/community/
 !docs/images/community/wechat.png

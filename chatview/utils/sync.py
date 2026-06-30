@@ -23,24 +23,28 @@ MAX_BACKUP_COUNT = 5
 # ---------------------------------------------------------------------------
 
 
-def _backup_path(ts: float | None = None) -> Path:
+def _backup_path(target_path: Path | None = None, ts: float | None = None) -> Path:
     """Return the backup file path with a timestamp suffix."""
+    path = target_path or CLAUDE_MD_PATH
     ts = ts or time.time()
-    return CLAUDE_MD_PATH.with_name(f"CLAUDE.md{BACKUP_SUFFIX}{int(ts)}")
+    return path.with_name(f"{path.name}{BACKUP_SUFFIX}{int(ts)}")
 
 
 def _cleanup_old_backups(
-    max_age_days: int = MAX_BACKUP_AGE_DAYS, max_count: int = MAX_BACKUP_COUNT
+    target_path: Path | None = None,
+    max_age_days: int = MAX_BACKUP_AGE_DAYS,
+    max_count: int = MAX_BACKUP_COUNT,
 ) -> int:
     """Clean up backups older than ``max_age_days``, keeping at most ``max_count`` newest.
 
     Returns the number of backups deleted.
     """
-    backup_dir = CLAUDE_MD_PATH.parent
+    path = target_path or CLAUDE_MD_PATH
+    backup_dir = path.parent
     if not backup_dir.exists():
         return 0
 
-    pattern = f"CLAUDE.md{BACKUP_SUFFIX}*"
+    pattern = f"{path.name}{BACKUP_SUFFIX}*"
     backups: list[tuple[float, Path]] = []
     for p in backup_dir.glob(pattern):
         # Parse timestamp from filename: CLAUDE.md.bak.<timestamp>
@@ -94,6 +98,7 @@ def _safe_write_claude_md(
     marker_start: str = "",
     marker_end: str = "",
     verify_markers: bool = True,
+    target_path: str | Path | None = None,
 ) -> dict:
     """Write ``content`` to ``~/.claude/CLAUDE.md`` with backup, lock, and verification.
 
@@ -104,6 +109,7 @@ def _safe_write_claude_md(
         verify_markers: If True, verify that ``marker_start`` and ``marker_end`` are
             present after writing. If either is missing, restore from backup and
             raise RuntimeError.
+        target_path: Optional destination path. Defaults to ``~/.claude/CLAUDE.md``.
 
     Returns:
         A dict with keys:
@@ -115,28 +121,29 @@ def _safe_write_claude_md(
             to restore from.
         OSError: If file operations fail.
     """
-    CLAUDE_MD_PATH.parent.mkdir(parents=True, exist_ok=True)
+    path = Path(target_path) if target_path else CLAUDE_MD_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     # 1. Create backup
-    backup = _backup_path()
-    if CLAUDE_MD_PATH.exists():
-        shutil.copy2(str(CLAUDE_MD_PATH), str(backup))
+    backup = _backup_path(path)
+    if path.exists():
+        shutil.copy2(str(path), str(backup))
 
     # 2. Acquire exclusive file lock
-    lock_path = CLAUDE_MD_PATH.with_name(".CLAUDE.md.lock")
+    lock_path = path.with_name(f".{path.name}.lock")
     with open(lock_path, "w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
         try:
             # 3. Write content
-            CLAUDE_MD_PATH.write_text(content, encoding="utf-8")
+            path.write_text(content, encoding="utf-8")
 
             # 4. Verify markers
             if verify_markers and marker_start and marker_end:
-                written = CLAUDE_MD_PATH.read_text(encoding="utf-8")
+                written = path.read_text(encoding="utf-8")
                 if marker_start not in written or marker_end not in written:
                     # Restore from backup
-                    if CLAUDE_MD_PATH.exists() and backup.exists():
-                        shutil.copy2(str(backup), str(CLAUDE_MD_PATH))
+                    if path.exists() and backup.exists():
+                        shutil.copy2(str(backup), str(path))
                         raise RuntimeError(
                             f"Verification failed: markers ({marker_start!r}, {marker_end!r}) "
                             f"not found in written content. Restored from {backup}."
@@ -150,7 +157,7 @@ def _safe_write_claude_md(
 
     # 5. Clean up old backups (best-effort)
     try:
-        _cleanup_old_backups()
+        _cleanup_old_backups(path)
     except OSError:
         pass
 
