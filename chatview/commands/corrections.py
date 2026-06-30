@@ -3,12 +3,10 @@
 import json
 import os
 import re
-import sys
 from collections import defaultdict
-from pathlib import Path
 
-from chatview.ai_engine import _normalize_error
 from chatview.commands.analysis import _get_filtered, _get_filtered_db, _get_messages_db
+from chatview.utils.text import normalize_error as _normalize_error
 
 
 # ---------------------------------------------------------------------------
@@ -149,13 +147,14 @@ def _data_corrections(args):
         _db.init_db()
         sids = [s["id"] for s in db_sessions]
         conn = _db.get_conn()
-        placeholders = ",".join("?" * len(sids))
-        msg_rows = conn.execute(f"""
+        # 按 session id 分批查询，规避 SQLite 宿主参数上限。同一 session 的消息必落在
+        # 同一批内，批内 ORDER BY session_id, idx 保证分组顺序正确。
+        msg_rows = _db.query_in_chunks(conn, """
             SELECT m.session_id, m.idx, m.role, m.text
             FROM messages m
             WHERE m.session_id IN ({placeholders})
             ORDER BY m.session_id, m.idx
-        """, sids).fetchall()
+        """, sids)
         # Reconstruct per-session structure
         sess_user = defaultdict(list)
         sess_asst = defaultdict(list)
@@ -512,12 +511,12 @@ def _data_highlights(args):
         # Load user messages in bulk for all sessions
         sids = [s["id"] for s in db_sessions]
         conn = _db.get_conn()
-        placeholders = ",".join("?" * len(sids))
-        msg_rows = conn.execute(f"""
+        # 分批查询规避 SQLite 宿主参数上限；同一 session 落在同一批，分组顺序不受影响。
+        msg_rows = _db.query_in_chunks(conn, """
             SELECT session_id, text FROM messages
             WHERE session_id IN ({placeholders}) AND role='user'
             ORDER BY session_id, idx
-        """, sids).fetchall()
+        """, sids)
         # Group messages by session
         sess_texts = defaultdict(list)
         for r in msg_rows:

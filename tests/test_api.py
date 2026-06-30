@@ -291,5 +291,75 @@ class TestPostChatOversized(APITestCase):
             self.assertEqual(e.code, 413)
 
 
+class TestTwinResume(APITestCase):
+
+    def test_empty_db_returns_ok_false(self):
+        """When no twin data exists, resume returns ok=False with null run."""
+        code, body = self._post("/api/twin/resume", {"lang": "en"})
+        self.assertEqual(code, 200)
+        self.assertFalse(body["ok"])
+        self.assertIsNone(body["run"])
+
+    def test_with_run_data_returns_run_info(self):
+        """When twin data exists, resume returns latest run_id and stats."""
+        from chatview import db as _db
+        _db.init_db()
+        run_id = "run_test_resume_001"
+        # Insert an evidence event with known run_id
+        _db.cm_upsert("evidence_events", "ev_test_resume_001", {
+            "run_id": run_id,
+            "session_id": "sess-1",
+            "event_index": 1,
+            "signal_type": "correction",
+            "signal_intensity": 0.8,
+            "domain": "coding/test",
+            "lesson": "test lesson",
+        })
+        # Insert a judgment card with same run_id
+        _db.cm_upsert("judgment_cards", "jc_test_resume_001", {
+            "run_id": run_id,
+            "applies_when": "test scenario",
+            "judgment": "test judgment",
+            "confidence": 0.7,
+            "status": "hypothesis",
+        })
+        # Insert a trait with same run_id
+        _db.cm_upsert("cognitive_traits", "ct_test_resume_001", {
+            "run_id": run_id,
+            "name": "Test Trait",
+            "category": "价值取向",
+            "description": "test description",
+            "strength": 0.8,
+            "status": "emerging",
+        })
+
+        code, body = self._post("/api/twin/resume", {"lang": "en"})
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertIsNotNone(body["run"])
+        self.assertEqual(body["run"]["run_id"], run_id)
+        self.assertEqual(body["run"]["status"], "completed")
+        self.assertEqual(body["run"]["stats"]["events"], 1)
+        self.assertEqual(body["run"]["stats"]["cards"], 1)
+        self.assertEqual(body["run"]["stats"]["traits"], 1)
+
+
+class TestTwinCancel(APITestCase):
+
+    def test_no_active_analysis_returns_error(self):
+        """Cancel with no active analysis returns ok=False with error message."""
+        code, body = self._post("/api/twin/cancel", {"run_id": "run_nonexistent"})
+        self.assertEqual(code, 200)
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["error"], "No active analysis")
+
+    def test_cancel_without_run_id_works_when_no_active(self):
+        """Cancel without run_id still returns no-active error cleanly."""
+        code, body = self._post("/api/twin/cancel", {})
+        self.assertEqual(code, 200)
+        self.assertFalse(body["ok"])
+        self.assertIn("error", body)
+
+
 if __name__ == "__main__":
     unittest.main()

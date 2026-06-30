@@ -212,7 +212,7 @@
                 </div>
               </button>
             </div>
-            <p class="welcome-hint">按 <kbd>/</kbd> 搜索 · <kbd>j</kbd><kbd>k</kbd> 切换会话 · <kbd>?</kbd> 查看全部快捷键</p>
+            <p class="welcome-hint" id="welcome-hint">按 <kbd>/</kbd> 搜索 · <kbd>j</kbd><kbd>k</kbd> 切换会话 · <kbd>?</kbd> 查看全部快捷键</p>
           </div>
         </div>
         <!-- Insights view (tabbed: hotspots / heatmap / errors / health / snippets) -->
@@ -292,7 +292,7 @@
                 </div>
               </div>
             </div>
-            <div class="resize-handle" data-target="ai-chat-panel"></div>
+            <div class="resize-handle" data-target="ai-chat-panel"><button class="panel-toggle" data-toggle="ai-chat-panel" title="Collapse / expand panel">›</button></div>
             <div id="ai-chat-panel">
               <div id="ai-chat-header" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border-light)">
                 <span style="font-weight:600;font-size:14px">💬 AI Analysis</span>
@@ -325,7 +325,7 @@
           </div>
           <div id="conv-body">
             <div id="messages-container"></div>
-            <div class="resize-handle" data-target="right-panel"></div>
+            <div class="resize-handle" data-target="right-panel"><button class="panel-toggle" data-toggle="right-panel" title="Collapse / expand panel">›</button></div>
             <aside id="right-panel">
               <!-- Tab switcher for right panel -->
               <div id="rp-tabs">
@@ -424,6 +424,7 @@
   </div>
 
   <script type="module" src="js/app.js"></script>
+  <script src="js/toast.js" type="module"></script>
   <script src="evolve.js"></script>
   <script src="twin.js"></script>
 </body>

@@ -6,6 +6,8 @@
   --bg: #f6f7f9;
   --bg-surface: #ffffff;
   --bg-surface2: #f0f1f4;
+  --bg-primary: #fafbff;
+  --bg-tertiary: #f7f8fa;
   --bg-hover: #eaeaee;
   --bg-active: #e0e0e5;
   --text: #1d1d1f;
@@ -53,6 +55,8 @@
   --bg: #111827;
   --bg-surface: #172033;
   --bg-surface2: #202a3d;
+  --bg-primary: #1d2742;
+  --bg-tertiary: #0f1626;
   --bg-hover: #263348;
   --bg-active: #314059;
   --text: #f8fafc;

@@ -88,6 +88,24 @@ const I18N = {
     // ── Dynamic strings (JS) ──
     'chat.continue': '继续',
     'chat.stopped': '*(已停止)*',
+    'conv.copyPath': '复制路径',
+    'conv.loadFailed': '加载会话失败：{msg}',
+    'conv.you': '你',
+    'conv.assistant': '助手',
+    'conv.agent': '🤖 智能体',
+    'conv.image': '图片',
+    'conv.result': '结果',
+    'conv.thinking': '思考中…',
+    'conv.toolCalls': '{n} 次工具调用',
+    'conv.thinkingCount': '{n} 段思考',
+    'conv.showMore': '展开 ↓',
+    'conv.showLess': '收起 ↑',
+    'conv.collapse': '收起 ↑',
+    'conv.expandAll': '全部展开',
+    'conv.collapseAll': '全部收起',
+    'conv.replyCopy.title': '复制',
+    'search.count': '{n} 条结果',
+    'search.noResults': '未找到结果。',
     'chat.continueAnalysis': '继续分析',
     'chat.expandFull': '展开全文 ↓',
     'chat.collapse': '收起 ↑',
@@ -173,6 +191,24 @@ const I18N = {
     // ── Dynamic strings (JS) ──
     'chat.continue': 'Continue',
     'chat.stopped': '*(stopped)*',
+    'conv.copyPath': 'Copy path',
+    'conv.loadFailed': 'Failed to load session: {msg}',
+    'conv.you': 'You',
+    'conv.assistant': 'Assistant',
+    'conv.agent': '🤖 Agent',
+    'conv.image': 'Image',
+    'conv.result': 'Result',
+    'conv.thinking': 'Thinking…',
+    'conv.toolCalls': '{n} tool calls',
+    'conv.thinkingCount': '{n} thinking',
+    'conv.showMore': 'Show more ↓',
+    'conv.showLess': 'Show less ↑',
+    'conv.collapse': 'Collapse ↑',
+    'conv.expandAll': 'Expand All',
+    'conv.collapseAll': 'Collapse All',
+    'conv.replyCopy.title': 'Copy',
+    'search.count': '{n} results',
+    'search.noResults': 'No results found.',
     'chat.continueAnalysis': 'Continue analysis',
     'chat.expandFull': 'Expand all ↓',
     'chat.collapse': 'Collapse ↑',
@@ -180,15 +216,29 @@ const I18N = {
   },
 };
 
-let _lang = localStorage.getItem('chatview-lang') || 'zh';
+// 默认语言：localStorage > 系统语言（navigator.language）> zh
+function _detectDefaultLang() {
+  const saved = localStorage.getItem('chatview-lang');
+  if (saved === 'zh' || saved === 'en') return saved;
+  const sys = (navigator.language || navigator.userLanguage || '').toLowerCase();
+  return sys.startsWith('zh') ? 'zh' : (sys ? 'en' : 'zh');
+}
+
+let _lang = _detectDefaultLang();
 
 /**
  * Translate a key, with optional positional args: t('key', arg0, arg1)
  * Placeholders: {0}, {1}, etc.
  */
 export function t(key, ...args) {
-  const str = (I18N[_lang] && I18N[_lang][key]) || I18N.zh[key] || key;
+  const str = (I18N[_lang] && I18N[_lang][key]) || I18N.zh[key] || I18N.en[key] || key;
   if (!args.length) return str;
+  const _first = args[0];
+  if (_first != null && typeof _first === 'object' && !Array.isArray(_first)) {
+    let _s = str;
+    for (const _k of Object.keys(_first)) { _s = _s.replace(new RegExp('\\{' + _k + '\\}', 'g'), _first[_k]); }
+    return _s;
+  }
   return str.replace(/\{(\d+)\}/g, (_, i) => (args[+i] != null ? args[+i] : ''));
 }
 
@@ -204,15 +254,17 @@ export function setLang(lang) {
   localStorage.setItem('chatview-lang', lang);
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
   applyLang();
+  window.dispatchEvent(new CustomEvent('localechange', { detail: { locale: lang } }));
 }
 
 /**
  * Re-apply current language to all tagged DOM elements.
  * Call after dynamic content is rendered.
  */
-export function applyLang() {
+export function applyLang(root) {
+  const scope = root || document;
   document.documentElement.lang = _lang === 'zh' ? 'zh-CN' : 'en';
-  document.querySelectorAll('[data-i18n]').forEach(el => {
+  scope.querySelectorAll('[data-i18n]').forEach(el => {
     el.textContent = t(el.dataset.i18n);
   });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
@@ -222,3 +274,16 @@ export function applyLang() {
     el.title = t(el.dataset.i18nTitle);
   });
 }
+
+/** Register extra dictionary entries from non-module scripts (twin.js, evolve.js). */
+export function registerI18n(extra) {
+  for (const loc of Object.keys(extra || {})) {
+    I18N[loc] = Object.assign(I18N[loc] || {}, extra[loc]);
+  }
+}
+
+// ── Expose for non-module scripts (twin.js / evolve.js) ──────────
+window.t = t;
+window.getLang = getLang;
+window.registerI18n = registerI18n;
+window.applyI18nDom = applyLang;

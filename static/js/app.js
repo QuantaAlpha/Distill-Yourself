@@ -8,7 +8,7 @@ import { state } from './state.js';
 import { $, $$, dom, initDom } from './dom.js';
 import { api, initThemeToggle, esc, renderMarkdownSimple, readSseStream, autoResizeTextarea } from './utils.js';
 import { renderSessions, renderProjects, updateWelcomeStats, registerSessionDeps } from './sessions.js';
-import { loadSession, applyUserOnlyFilter, registerConversationDeps } from './conversation.js';
+import { loadSession, applyUserOnlyFilter, registerConversationDeps, renderMessages } from './conversation.js';
 import { doSearch, renderSearchResults, jumpToMessage } from './search.js';
 import { handleKeyboard, buildOutline, highlightOutlineItem } from './keyboard.js';
 import { openInsights, bindInsightsTabs, loadInsightsTab } from './insights.js';
@@ -16,7 +16,7 @@ import { initAiPage, notifyEvolveScopeChanged, loadChatFromStorage, newGlobalCha
 import { exportMarkdown, copyConversation } from './export.js';
 import { openSessionAiPanel, updateSessionAiHeader, restoreSessionAiMessages, submitSessionAi, _stopSessionAi } from './session-ai.js';
 import { loadSessionSummary } from './session-summary.js';
-import { setLang, applyLang, getLang } from './lang.js';
+import { setLang, applyLang, getLang, t } from './lang.js';
 
 // ── Wire cross-module dependencies ─────────────────────────────
 registerSessionDeps({
@@ -145,6 +145,21 @@ function bindWelcomeCards() {
   });
 }
 
+// Render welcome hint with kbd tags and i18n params
+function renderWelcomeHint() {
+  const hint = $("#welcome-hint");
+  if (!hint) return;
+  const keys = ["/", "j", "k", "?"];
+  // 不传位置参数：t() 会把 {0}/{1} 直接替换成字面字符，导致下面 split 占位符失效。
+  // 这里保留原始 {0}~{3} 占位符，再自行 split 注入 <kbd> 标签。
+  const parts = t("welcome.hint").split(/(\{\d+\})/g);
+  hint.innerHTML = parts.map(part => {
+    const m = part.match(/^\{(\d+)\}$/);
+    if (m) return `<kbd>${keys[parseInt(m[1])] || ""}</kbd>`;
+    return esc(part);
+  }).join("");
+}
+
 // ── Event Bindings ─────────────────────────────────────────────
 function bindEvents() {
   // Filter button + popover
@@ -186,6 +201,8 @@ function bindEvents() {
     globalEngineSelect.value = state.globalScopeEngine;
     globalEngineSelect.addEventListener("change", () => {
       state.globalScopeEngine = globalEngineSelect.value;
+      // 持久化引擎选择，刷新后保持
+      localStorage.setItem("chatview-engine", state.globalScopeEngine);
       // Sync with AI page scope bar selector if it exists
       const scopeEngine = $("#ai-scope-engine");
       if (scopeEngine) scopeEngine.value = state.globalScopeEngine;
@@ -215,12 +232,16 @@ function bindEvents() {
         // Re-render welcome stats (pass both sessions and projects)
         const projects = state.allSessions ? [...new Set(state.allSessions.map(s => s.project).filter(Boolean))] : [];
         updateWelcomeStats(state.allSessions, projects);
+        // Re-render welcome hint (kbd tags + params)
+        renderWelcomeHint();
       });
     });
   }
 
   // Apply saved language on load
   applyLang();
+  // Render welcome hint with kbd tags on initial load
+  renderWelcomeHint();
 
   // Global search
   dom.searchInput.addEventListener("input", () => {
@@ -292,7 +313,7 @@ function bindEvents() {
   $("#btn-collapse-all").addEventListener("click", function () {
     state.allCollapsed = !state.allCollapsed;
     // allCollapsed=true means "show expanded" (since initial is collapsed)
-    this.textContent = state.allCollapsed ? "Collapse All" : "Expand All";
+    this.textContent = state.allCollapsed ? t("conv.collapseAll") : t("conv.expandAll");
     this.classList.toggle("active", state.allCollapsed);
     $$(".tool-body, .thinking-body").forEach((el) => {
       el.style.display = state.allCollapsed ? "" : "none";
@@ -309,6 +330,27 @@ function bindEvents() {
     });
     $$(".tool-call-group").forEach((el) => {
       el.classList.toggle("collapsed", !state.allCollapsed);
+    });
+    // Assistant turn bars (process blocks live inside .turn-body)
+    $$(".turn-body").forEach((el) => {
+      el.style.display = state.allCollapsed ? "" : "none";
+    });
+    $$(".turn-collapse-bar").forEach((el) => {
+      el.classList.toggle("collapsed", !state.allCollapsed);
+    });
+    $$(".turn-collapse-toggle").forEach((el) => {
+      el.classList.toggle("open", state.allCollapsed);
+    });
+    // Long assistant replies + collapsible user text
+    const foldLabel = state.allCollapsed ? t("conv.collapse") : t("conv.showMore");
+    $$(".reply-card").forEach((el) => {
+      el.classList.toggle("collapsed", !state.allCollapsed);
+    });
+    $$(".text-collapsible").forEach((el) => {
+      el.classList.toggle("collapsed", !state.allCollapsed);
+    });
+    $$(".reply-fold, .reply-text-toggle, .msg-fold, .text-toggle").forEach((el) => {
+      el.textContent = foldLabel;
     });
   });
 
@@ -389,13 +431,24 @@ function bindEvents() {
     }
   });
 
-  // Mobile sidebar toggle
+  // Sidebar toggle — mobile drawer (.open) + desktop collapse (.collapsed)
   const sidebarToggle = $("#sidebar-toggle");
   const sidebarEl = dom.sidebar;
   const sidebarOverlay = $("#sidebar-overlay");
   if (sidebarToggle && sidebarEl) {
+    // Restore desktop collapsed state
+    if (window.innerWidth > 768 && localStorage.getItem("sidebar-collapsed") === "1") {
+      sidebarEl.classList.add("collapsed");
+    }
     const closeSidebar = () => sidebarEl.classList.remove("open");
-    sidebarToggle.addEventListener("click", () => sidebarEl.classList.toggle("open"));
+    sidebarToggle.addEventListener("click", () => {
+      if (window.innerWidth <= 768) {
+        sidebarEl.classList.toggle("open");
+      } else {
+        const collapsed = sidebarEl.classList.toggle("collapsed");
+        localStorage.setItem("sidebar-collapsed", collapsed ? "1" : "0");
+      }
+    });
     if (sidebarOverlay) sidebarOverlay.addEventListener("click", closeSidebar);
     // Close sidebar when a session is selected on mobile
     dom.sessionList.addEventListener("click", (e) => {
@@ -438,6 +491,7 @@ async function pollOnce() {
         api("/api/sessions"),
       ]);
       state.allSessions = sessions;
+      state.allProjects = projects;
       renderProjects(projects);
       renderSessions(sessions);
       dom.searchStats.textContent = `${sessions.length} sessions`;
@@ -466,9 +520,14 @@ async function detectEngines() {
         opt.textContent = eng.charAt(0).toUpperCase() + eng.slice(1);
         sel.appendChild(opt);
       }
-      // Default to first available (claude preferred)
+      // 优先恢复用户上次保存的引擎选择（若仍可用），否则用第一个（claude 优先）
       if (state.availableEngines.length > 0) {
-        state.globalScopeEngine = state.availableEngines[0];
+        const saved = localStorage.getItem("chatview-engine");
+        if (saved && state.availableEngines.includes(saved)) {
+          state.globalScopeEngine = saved;
+        } else if (!state.availableEngines.includes(state.globalScopeEngine)) {
+          state.globalScopeEngine = state.availableEngines[0];
+        }
         sel.value = state.globalScopeEngine;
       }
       // If only one engine, disable the selector
@@ -523,6 +582,32 @@ function initResizeHandles() {
       handle.addEventListener("pointerup", onUp);
     });
   });
+
+  // Collapse / expand toggle buttons for right-side panels
+  document.querySelectorAll(".panel-toggle[data-toggle]").forEach(btn => {
+    const targetId = btn.dataset.toggle;
+    const collapseKey = `chatview-panel-collapsed-${targetId}`;
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    const sync = () => {
+      const collapsed = target.classList.contains("panel-collapsed");
+      btn.textContent = collapsed ? "\u2039" : "\u203a";
+    };
+    // Restore saved collapsed state
+    if (localStorage.getItem(collapseKey) === "1") {
+      target.classList.add("panel-collapsed");
+    }
+    sync();
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const collapsed = target.classList.toggle("panel-collapsed");
+      localStorage.setItem(collapseKey, collapsed ? "1" : "0");
+      sync();
+    });
+    // Prevent the resize drag from starting when pressing the toggle
+    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+  });
 }
 
 // ── Init ───────────────────────────────────────────────────────
@@ -530,6 +615,22 @@ async function init() {
   initThemeToggle();
   bindEvents();
   bindWelcomeCards();
+  // Re-render JS-generated UI shell text when locale changes
+  window.addEventListener("localechange", () => {
+    applyLang(document);
+    updateWelcomeStats(state.allSessions, state.allProjects || []);
+    const presetContainer = $("#ai-chat-presets");
+    if (presetContainer && presetContainer.dataset.populated) populateGlobalAiPresets();
+    // Re-render the active conversation so JS-generated content text (turn headers,
+    // fold buttons, labels) reflects the new locale.
+    if (state.currentView === "conversation" && state.currentMessages && state.currentMessages.length) {
+      renderMessages(state.currentMessages);
+    }
+    // Re-render search results if they are currently displayed.
+    if (state.lastSearchResults && state.lastSearchResults.length) {
+      renderSearchResults();
+    }
+  });
   // Show loading state immediately
   dom.sessionList.innerHTML = '<li class="loading-placeholder"><div class="skeleton-line" style="width:70%"></div><div class="skeleton-line short"></div></li>'.repeat(8);
   dom.searchStats.textContent = "Loading\u2026";
@@ -540,6 +641,7 @@ async function init() {
     api("/api/sessions"),
   ]);
   state.allSessions = sessions;
+  state.allProjects = projects;
   renderProjects(projects);
   renderSessions(sessions);
   dom.searchStats.textContent = `${sessions.length} sessions`;

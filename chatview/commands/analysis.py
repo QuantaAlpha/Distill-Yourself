@@ -86,15 +86,18 @@ def _get_messages_db(args, role="user", limit=99999) -> list:
         return []
     sids = [s["id"] for s in sessions]
     conn = _db.get_conn()
-    placeholders = ",".join("?" * len(sids))
-    rows = conn.execute(f"""
+    # 会话数可能超过 SQLite 宿主参数上限，按 id 分批查询。每批的 ORDER BY/LIMIT 只对
+    # 单批生效，因此合并后再做全局排序（ts 降序）并截断到 limit。
+    rows = _db.query_in_chunks(conn, """
         SELECT m.text, m.ts, m.role, m.idx, s.project_name, s.source, s.id AS session_id,
                s.title
         FROM messages m JOIN sessions s ON m.session_id = s.id
         WHERE m.session_id IN ({placeholders}) AND m.role = ?
         ORDER BY m.ts DESC LIMIT ?
-    """, sids + [role, limit]).fetchall()
-    return [dict(r) for r in rows]
+    """, sids, extra_params=(role, limit))
+    result = [dict(r) for r in rows]
+    result.sort(key=lambda r: r.get("ts") or "", reverse=True)
+    return result[:limit]
 
 
 # ---------------------------------------------------------------------------

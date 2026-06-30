@@ -14,7 +14,63 @@ import {
   appendChatMsg, createAssistantTurn, sendChatStream,
   _appendContinueButton,
 } from './chat.js';
-import { t, getLang } from './lang.js';
+import { t, getLang, registerI18n } from './lang.js';
+
+// ── i18n dictionary ──────────────────────────────────────────────
+registerI18n({
+  zh: {
+    'scope.source': '来源',
+    'scope.date': '日期',
+    'scope.engine': '引擎',
+    'scope.timeout': '超时',
+    'scope.all': '全部',
+    'scope.allProjects': '全部项目 ({n})',
+    'scope.today': '今天',
+    'scope.week': '本周',
+    'scope.month': '本月',
+    'scope.30d': '30 天',
+    'scope.3mo': '3 个月',
+    'scope.5min': '5 分钟',
+    'scope.10min': '10 分钟',
+    'scope.15min': '15 分钟',
+    'scope.20min': '20 分钟',
+    'scope.30min': '30 分钟',
+    'scope.sessions': '个会话',
+    'scope.projects': '个项目',
+    'scope.msgs': '条消息',
+    'quotaWarning': '存储空间不足 — 聊天历史和缓存可能无法持久化。请考虑清理旧的会话。',
+    'global.newChat': '新分析',
+    'global.send': '发送',
+    'global.stop': '■ 停止',
+    'global.emptyResponse': '（空响应）',
+  },
+  en: {
+    'scope.source': 'Source',
+    'scope.date': 'Date',
+    'scope.engine': 'Engine',
+    'scope.timeout': 'Timeout',
+    'scope.all': 'All',
+    'scope.allProjects': 'All Projects ({n})',
+    'scope.today': 'Today',
+    'scope.week': 'Week',
+    'scope.month': 'Month',
+    'scope.30d': '30d',
+    'scope.3mo': '3mo',
+    'scope.5min': '5 min',
+    'scope.10min': '10 min',
+    'scope.15min': '15 min',
+    'scope.20min': '20 min',
+    'scope.30min': '30 min',
+    'scope.sessions': 'sessions',
+    'scope.projects': 'projects',
+    'scope.msgs': 'msgs',
+    'quotaWarning': 'Storage quota exceeded — chat history and cache may not persist. Consider clearing old chat sessions.',
+    'global.newChat': 'New Analysis',
+    'global.send': 'Send',
+    'global.stop': 'Stop',
+    'global.emptyResponse': '(empty response)',
+  },
+});
 
 // ── Presets ──────────────────────────────────────────────────────
 
@@ -76,7 +132,7 @@ export function renderAiScopeBar() {
   // Source label + tabs
   const srcLabel = document.createElement("span");
   srcLabel.className = "scope-label";
-  srcLabel.textContent = "Source";
+  srcLabel.textContent = t("scope.source");
   bar.appendChild(srcLabel);
 
   const srcTabs = document.createElement("div");
@@ -84,7 +140,7 @@ export function renderAiScopeBar() {
   const claudeCount = state.allSessions.filter(s => (s.source || "claude") === "claude").length;
   const codexCount = state.allSessions.filter(s => s.source === "codex").length;
   [
-    { key: "all", label: "All", count: state.allSessions.length },
+    { key: "all", label: t("scope.all"), count: state.allSessions.length },
     { key: "claude", label: "Claude", count: claudeCount },
     { key: "codex", label: "Codex", count: codexCount },
   ].forEach(s => {
@@ -103,17 +159,17 @@ export function renderAiScopeBar() {
   // Date label + tabs
   const dateLabel = document.createElement("span");
   dateLabel.className = "scope-label";
-  dateLabel.textContent = "Date";
+  dateLabel.textContent = t("scope.date");
   bar.appendChild(dateLabel);
 
   const dateTabs = document.createElement("div");
   dateTabs.className = "scope-tabs";
   [
-    { key: "1d", label: "Today" },
-    { key: "7d", label: "Week" },
-    { key: "30d", label: "30d" },
-    { key: "90d", label: "3mo" },
-    { key: "all", label: "All" },
+    { key: "1d", label: t("scope.today") },
+    { key: "7d", label: t("scope.week") },
+    { key: "30d", label: t("scope.30d") },
+    { key: "90d", label: t("scope.3mo") },
+    { key: "all", label: t("scope.all") },
   ].forEach(d => {
     const btn = document.createElement("button");
     btn.className = `scope-tab${d.key === state.globalScopeDate ? " active" : ""}`;
@@ -135,7 +191,7 @@ export function renderAiScopeBar() {
   filtered.forEach(s => { const p = s.project || "unknown"; projCounts[p] = (projCounts[p] || 0) + 1; });
   const allOpt = document.createElement("option");
   allOpt.value = "";
-  allOpt.textContent = `All Projects (${filtered.length})`;
+  allOpt.textContent = t("scope.allProjects", { n: filtered.length });
   projSelect.appendChild(allOpt);
   Object.entries(projCounts).sort((a, b) => b[1] - a[1]).forEach(([name, count]) => {
     const opt = document.createElement("option");
@@ -157,7 +213,7 @@ export function renderAiScopeBar() {
   // Engine dropdown
   const engineLabel = document.createElement("span");
   engineLabel.className = "scope-label";
-  engineLabel.textContent = "Engine";
+  engineLabel.textContent = t("scope.engine");
   bar.appendChild(engineLabel);
 
   const engineSelect = document.createElement("select");
@@ -172,6 +228,8 @@ export function renderAiScopeBar() {
   engineSelect.value = state.globalScopeEngine;
   engineSelect.onchange = () => {
     state.globalScopeEngine = engineSelect.value;
+    // 持久化引擎选择，刷新后保持
+    localStorage.setItem("chatview-engine", state.globalScopeEngine);
     // Sync back to header selector
     const headerEngine = $("#global-engine-select");
     if (headerEngine) headerEngine.value = state.globalScopeEngine;
@@ -182,17 +240,17 @@ export function renderAiScopeBar() {
   // Timeout selector
   const timeoutLabel = document.createElement("span");
   timeoutLabel.className = "scope-label";
-  timeoutLabel.textContent = "Timeout";
+  timeoutLabel.textContent = t("scope.timeout");
   bar.appendChild(timeoutLabel);
 
   const timeoutSelect = document.createElement("select");
   timeoutSelect.id = "ai-scope-timeout";
   [
-    { key: 300, label: "5 min" },
-    { key: 600, label: "10 min" },
-    { key: 900, label: "15 min" },
-    { key: 1200, label: "20 min" },
-    { key: 1800, label: "30 min" },
+    { key: 300, label: t("scope.5min") },
+    { key: 600, label: t("scope.10min") },
+    { key: 900, label: t("scope.15min") },
+    { key: 1200, label: t("scope.20min") },
+    { key: 1800, label: t("scope.30min") },
   ].forEach(t => {
     const opt = document.createElement("option");
     opt.value = t.key;
@@ -213,7 +271,7 @@ export function renderAiScopeBar() {
   const msgs = scopeFiltered.reduce((sum, s) => sum + (s.userMessageCount || 0), 0);
   const statsSpan = document.createElement("span");
   statsSpan.className = "scope-stats";
-  statsSpan.innerHTML = `<strong>${scopeFiltered.length}</strong> sessions · <strong>${projects.size}</strong> projects · <strong>${msgs}</strong> msgs`;
+  statsSpan.innerHTML = `<strong>${scopeFiltered.length}</strong> ${t("scope.sessions")} · <strong>${projects.size}</strong> ${t("scope.projects")} · <strong>${msgs}</strong> ${t("scope.msgs")}`;
   bar.appendChild(statsSpan);
 }
 
@@ -270,6 +328,7 @@ export function submitGlobalAi(prompt) {
     date: state.globalScopeDate,
     source: state.globalScopeSource,
     engine: state.globalScopeEngine,
+    lang: getLang(),
   };
 
   // Add user message
@@ -301,12 +360,12 @@ export function submitGlobalAi(prompt) {
       state.globalAiLoading = false;
       state.globalAiHandle = null;
       _setGlobalAiButton(false);
-      const reply = fullText || "(empty response)";
+      const reply = fullText || t("global.emptyResponse");
       assistantTurn.finalize(reply);
       saveGlobalChatMessage("assistant", reply);
       // Update title
       const chat2 = state.globalChatHistory.find(c => c.id === state.currentGlobalChatId);
-      if (chat2 && chat2.title === "New Analysis") {
+      if (chat2 && chat2.title === t("global.newChat")) {
         chat2.title = text.substring(0, 40) + (text.length > 40 ? "…" : "");
         renderGlobalChatSidebar();
       }
@@ -371,8 +430,8 @@ export function submitGlobalAi(prompt) {
 export function _setGlobalAiButton(loading) {
   const btn = $("#ai-chat-send");
   if (!btn) return;
-  if (loading) { btn.textContent = "■ Stop"; btn.classList.add("btn-stop"); }
-  else { btn.textContent = "Send"; btn.classList.remove("btn-stop"); }
+  if (loading) { btn.textContent = t("global.stop"); btn.classList.add("btn-stop"); }
+  else { btn.textContent = t("global.send"); btn.classList.remove("btn-stop"); }
 }
 
 export function _stopGlobalAi() {
@@ -386,7 +445,7 @@ export function _stopGlobalAi() {
 
 export function initNewGlobalChat() {
   state.currentGlobalChatId = "gchat-" + Date.now();
-  state.globalChatHistory.unshift({id: state.currentGlobalChatId, title: "New Analysis", messages: []});
+  state.globalChatHistory.unshift({id: state.currentGlobalChatId, title: t("global.newChat"), messages: []});
   renderGlobalChatSidebar();
 }
 
@@ -440,7 +499,7 @@ export function _showQuotaWarning() {
   _quotaWarningShown = true;
   const toast = document.createElement("div");
   toast.style.cssText = "position:fixed;bottom:20px;right:20px;background:#e65100;color:#fff;padding:12px 20px;border-radius:8px;z-index:9999;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.3);max-width:320px";
-  toast.textContent = "Storage quota exceeded — chat history and cache may not persist. Consider clearing old chat sessions.";
+  toast.textContent = t("quotaWarning");
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 8000);
 }
@@ -474,3 +533,31 @@ export function loadChatFromStorage() {
     }
   } catch (e) { /* corrupt data — ignore */ }
 }
+
+// ── Re-render on locale change ──────────────────────────────────
+let _evolvePageLocaleBound = false;
+function _bindEvolvePageLocale() {
+  if (_evolvePageLocaleBound) return;
+  _evolvePageLocaleBound = true;
+  window.addEventListener('localechange', () => {
+    // Re-render scope bar if AI page is visible
+    const scopeBar = $("#ai-scope-bar");
+    if (scopeBar && scopeBar.offsetParent !== null) {
+      renderAiScopeBar();
+    }
+    // Re-render presets
+    const presetContainer = $("#ai-chat-presets");
+    if (presetContainer) {
+      presetContainer.removeAttribute("data-populated");
+      populateGlobalAiPresets();
+    }
+    // Re-render chat sidebar
+    renderGlobalChatSidebar();
+    // Update send button state
+    const btn = $("#ai-chat-send");
+    if (btn && !state.globalAiLoading) {
+      btn.textContent = t("global.send");
+    }
+  });
+}
+_bindEvolvePageLocale();

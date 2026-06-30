@@ -5,8 +5,11 @@ evolve sync dispatch, and twin sync to CLAUDE.md.
 """
 
 import json
+import os
+import signal
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -16,6 +19,13 @@ from chatview.handlers.base import (
 from chatview.ai_engine import (
     _run_ai_engine_stream, _select_cognitive_avatar, _normalize_ai_engine,
 )
+
+# ---------------------------------------------------------------------------
+# Active analysis state (for /api/twin/cancel)
+# ---------------------------------------------------------------------------
+_active_analyze_proc = None
+_active_analyze_run_id = None
+_analyze_lock = threading.Lock()
 
 
 def _handle_evolve_sync(handler):
@@ -85,10 +95,32 @@ def _handle_evolve_sync(handler):
     _json_response(handler, result)
 
 
-def _run_twin_ai_stage(handler, prompt: str, stage_label: str) -> bool:
-    """Stream a Twin AI stage and stop on either exception or SSE error event."""
-    stream = _run_ai_engine_stream(prompt, allow_write=True, timeout=600)
+def _run_twin_ai_stage(handler, prompt: str, stage_label: str, proc_ref=None,
+                       engine: str = "auto") -> bool:
+    """Stream a Twin AI stage and stop on either exception or SSE error event.
+
+    Args:
+        proc_ref: Optional mutable list that receives the subprocess.Popen
+            object once the AI engine process is started.
+        engine: The AI engine to use ("auto" | "codex" | "claude").
+    """
+    stream = _run_ai_engine_stream(prompt, allow_write=True, timeout=600,
+                                   engine_override=engine, proc_ref=proc_ref)
     try:
+        # Prime the generator so the proc is created, then register it globally
+        # (the generator creates the proc before its first yield)
+        try:
+            first_evt = next(stream)
+        except StopIteration:
+            return True
+        if proc_ref is not None and proc_ref[0] is not None:
+            with _analyze_lock:
+                global _active_analyze_proc
+                _active_analyze_proc = proc_ref[0]
+        _sse_event(handler, first_evt)
+        if first_evt.get("type") == "error":
+            return False
+
         for evt in stream:
             _sse_event(handler, evt)
             if evt.get("type") == "error":
@@ -104,116 +136,153 @@ def _run_twin_ai_stage(handler, prompt: str, stage_label: str) -> bool:
 
 
 def _handle_twin_analyze(handler):
-    """POST /api/twin/analyze — run 4-stage cognitive handbook extraction via AI."""
+    """POST /api/twin/analyze — run 5-stage cognitive handbook extraction via AI."""
+    global _active_analyze_proc, _active_analyze_run_id
     from chatview import db as _db
     from chatview.handlers.base import _read_post_body
     import json as _json
 
-    # Read lang from POST body if provided
+    # Read lang + engine from POST body if provided
     raw = _read_post_body(handler)
     lang = "zh"
+    engine = "auto"
     if raw:
         try:
             body = _json.loads(raw)
             lang = body.get("lang", "zh")
+            engine = body.get("engine", "auto")
         except Exception:
             pass
+    try:
+        engine = _normalize_ai_engine(engine)
+    except ValueError:
+        engine = "auto"
     en = lang == "en"
 
     cli_path = str(Path(__file__).resolve().parent.parent.parent / "analyze.py")
     run_id = "run_" + uuid.uuid4().hex[:12]
 
-    _start_sse(handler)
-    _sse_event(handler, {"type": "text", "content": f"Twin run_id: {run_id}\n"})
+    # Register active run for cancellation (thread-safe)
+    proc_ref: list = [None]
+    with _analyze_lock:
+        _active_analyze_run_id = run_id
+        _active_analyze_proc = None
 
-    # Stage 1: Evidence event extraction
-    stage1_msg = "Stage 1/5: Extracting decision events (Evidence Events)...\n" if en else "Stage 1/5: 从对话历史中提取决策事件 (Evidence Events)...\n"
-    _sse_event(handler, {"type": "text", "content": stage1_msg})
-
-    stage1_prompt = _build_twin_stage1_prompt(handler, cli_path, run_id)
     try:
-        if not _run_twin_ai_stage(handler, stage1_prompt, "Stage 1"):
+        _start_sse(handler)
+        _sse_event(handler, {"type": "text", "content": f"Twin run_id: {run_id}\n"})
+
+        # Stage 1: Evidence event extraction
+        stage1_msg = "Stage 1/5: Extracting decision events (Evidence Events)...\n" if en else "Stage 1/5: 从对话历史中提取决策事件 (Evidence Events)...\n"
+        _sse_event(handler, {"type": "text", "content": stage1_msg})
+
+        stage1_prompt = _build_twin_stage1_prompt(handler, cli_path, run_id, lang)
+        proc_ref[0] = None
+        try:
+            if not _run_twin_ai_stage(handler, stage1_prompt, "Stage 1", proc_ref=proc_ref, engine=engine):
+                return
+        except BrokenPipeError:
             return
-    except BrokenPipeError:
-        return
+        finally:
+            with _analyze_lock:
+                _active_analyze_proc = None
 
-    # Stage 2: Judgment card distillation
-    stage2_msg = "\n\nStage 2/5: Distilling judgment cards...\n" if en else "\n\nStage 2/5: 从事件中蒸馏判断卡 (Judgment Cards)...\n"
-    _sse_event(handler, {"type": "text", "content": stage2_msg})
+        # Stage 2: Judgment card distillation
+        stage2_msg = "\n\nStage 2/5: Distilling judgment cards...\n" if en else "\n\nStage 2/5: 从事件中蒸馏判断卡 (Judgment Cards)...\n"
+        _sse_event(handler, {"type": "text", "content": stage2_msg})
 
-    stage2_prompt = _build_twin_stage2_prompt(handler, cli_path, run_id)
-    try:
-        if not _run_twin_ai_stage(handler, stage2_prompt, "Stage 2"):
+        stage2_prompt = _build_twin_stage2_prompt(handler, cli_path, run_id, lang)
+        proc_ref[0] = None
+        with _analyze_lock:
+            _active_analyze_proc = None
+        try:
+            if not _run_twin_ai_stage(handler, stage2_prompt, "Stage 2", proc_ref=proc_ref, engine=engine):
+                return
+        except BrokenPipeError:
             return
-    except BrokenPipeError:
-        return
+        finally:
+            with _analyze_lock:
+                _active_analyze_proc = None
 
-    # Stage 3: Cognitive trait inference
-    stage3_msg = "\n\nStage 3/5: Inferring cognitive traits...\n" if en else "\n\nStage 3/5: 从判断卡归纳认知特质 (Cognitive Traits)...\n"
-    _sse_event(handler, {"type": "text", "content": stage3_msg})
+        # Stage 3: Cognitive trait inference
+        stage3_msg = "\n\nStage 3/5: Inferring cognitive traits...\n" if en else "\n\nStage 3/5: 从判断卡归纳认知特质 (Cognitive Traits)...\n"
+        _sse_event(handler, {"type": "text", "content": stage3_msg})
 
-    stage3_prompt = _build_twin_stage3_prompt(handler, cli_path, run_id)
-    try:
-        if not _run_twin_ai_stage(handler, stage3_prompt, "Stage 3"):
+        stage3_prompt = _build_twin_stage3_prompt(handler, cli_path, run_id, lang)
+        proc_ref[0] = None
+        with _analyze_lock:
+            _active_analyze_proc = None
+        try:
+            if not _run_twin_ai_stage(handler, stage3_prompt, "Stage 3", proc_ref=proc_ref, engine=engine):
+                return
+        except BrokenPipeError:
             return
-    except BrokenPipeError:
-        return
+        finally:
+            with _analyze_lock:
+                _active_analyze_proc = None
 
-    # Stage 4: Compile Runtime Pack (pure Python, no AI)
-    stage4_msg = "\n\nStage 4/5: Compiling Runtime Pack...\n" if en else "\n\nStage 4/5: 编译 Runtime Pack (twin-compile)...\n"
-    _sse_event(handler, {"type": "text", "content": stage4_msg})
-    try:
-        r = subprocess.run(
-            [sys.executable, cli_path, "twin-compile", "--run-id", run_id],
-            capture_output=True, text=True, timeout=30,
-        )
-        _sse_event(handler, {"type": "text", "content": r.stdout or "(no output)"})
-        if r.returncode != 0:
-            msg = (r.stderr or r.stdout or "unknown error")[:500]
-            _sse_event(handler, {"type": "error", "message": f"Stage 4 failed: {msg}"})
+        # Stage 4: Compile Runtime Pack (pure Python, no AI)
+        stage4_msg = "\n\nStage 4/5: Compiling Runtime Pack...\n" if en else "\n\nStage 4/5: 编译 Runtime Pack (twin-compile)...\n"
+        _sse_event(handler, {"type": "text", "content": stage4_msg})
+        try:
+            r = subprocess.run(
+                [sys.executable, cli_path, "twin-compile", "--run-id", run_id, "--lang", lang],
+                capture_output=True, text=True, timeout=30,
+            )
+            _sse_event(handler, {"type": "text", "content": r.stdout or "(no output)"})
+            if r.returncode != 0:
+                msg = (r.stderr or r.stdout or "unknown error")[:500]
+                _sse_event(handler, {"type": "error", "message": f"Stage 4 failed: {msg}"})
+                return
+        except Exception as e:
+            _sse_event(handler, {"type": "error", "message": f"Stage 4 failed: {e}"})
             return
-    except Exception as e:
-        _sse_event(handler, {"type": "error", "message": f"Stage 4 failed: {e}"})
-        return
 
-    # Stage 5: AI-based cognitive avatar selection
-    stage5_msg = "\n\nStage 5/5: Matching cognitive model avatar...\n" if en else "\n\nStage 5/5: 匹配认知模型头像...\n"
-    _sse_event(handler, {"type": "text", "content": stage5_msg})
-    try:
-        avatar = _select_cognitive_avatar(force=True, run_id=run_id)
-        if avatar:
-            match_prefix = "Match result" if en else "匹配结果"
-            _sse_event(handler, {"type": "text", "content": f"{match_prefix}: {avatar.get('model_name','')} ({avatar.get('persona_id','')})"})
-        else:
-            no_match_msg = "Failed to match cognitive model (can retry later)" if en else "未能匹配认知模型（可稍后重试）"
-            _sse_event(handler, {"type": "text", "content": no_match_msg})
-    except Exception as e:
-        _sse_event(handler, {"type": "text", "content": f"头像匹配跳过: {e}"})
+        # Stage 5: AI-based cognitive avatar selection
+        stage5_msg = "\n\nStage 5/5: Matching cognitive model avatar...\n" if en else "\n\nStage 5/5: 匹配认知模型头像...\n"
+        _sse_event(handler, {"type": "text", "content": stage5_msg})
+        try:
+            avatar = _select_cognitive_avatar(force=True, run_id=run_id, lang=lang)
+            if avatar:
+                match_prefix = "Match result" if en else "匹配结果"
+                _sse_event(handler, {"type": "text", "content": f"{match_prefix}: {avatar.get('model_name','')} ({avatar.get('persona_id','')})"})
+            else:
+                no_match_msg = "Failed to match cognitive model (can retry later)" if en else "未能匹配认知模型（可稍后重试）"
+                _sse_event(handler, {"type": "text", "content": no_match_msg})
+        except Exception as e:
+            _sse_event(handler, {"type": "text", "content": f"头像匹配跳过: {e}"})
 
-    # Summary
-    _db.init_db()
-    stats = _db.get_twin_stats()
-    summary_parts = []
-    for t in ["evidence_events", "judgment_cards", "cognitive_traits"]:
-        count = stats.get(t, {}).get("count", 0)
-        if count > 0:
-            label = t.replace("_", " ")
-            summary_parts.append(f"{label}: {count}")
+        # Summary
+        _db.init_db()
+        stats = _db.get_twin_stats()
+        summary_parts = []
+        for t in ["evidence_events", "judgment_cards", "cognitive_traits"]:
+            count = stats.get(t, {}).get("count", 0)
+            if count > 0:
+                label = t.replace("_", " ")
+                summary_parts.append(f"{label}: {count}")
 
-    no_data_msg = "No data" if en else "暂无数据"
-    summary = ", ".join(summary_parts) if summary_parts else no_data_msg
-    complete_msg = "Analysis complete" if en else "分析完成"
-    try:
-        _sse_event(handler, {"type": "text", "content": f"\n\n✅ {complete_msg} — {summary}"})
-        _sse_event(handler, {"type": "done", "content": summary})
-    except BrokenPipeError:
-        pass
+        no_data_msg = "No data" if en else "暂无数据"
+        summary = ", ".join(summary_parts) if summary_parts else no_data_msg
+        complete_msg = "Analysis complete" if en else "分析完成"
+        try:
+            _sse_event(handler, {"type": "text", "content": f"\n\n✅ {complete_msg} — {summary}"})
+            _sse_event(handler, {"type": "done", "content": summary})
+        except BrokenPipeError:
+            pass
+    finally:
+        # Always clear active analysis state
+        with _analyze_lock:
+            _active_analyze_proc = None
+            _active_analyze_run_id = None
 
 
-def _build_twin_stage1_prompt(handler, cli_path: str, run_id: str) -> str:
+def _build_twin_stage1_prompt(handler, cli_path: str, run_id: str, lang: str = "zh") -> str:
     """Build prompt for Stage 1: Evidence event extraction from conversation history."""
     from chatview.handlers.evolve import _collect_profile_digest
     digest = _collect_profile_digest(handler, "all", "all", "", cli_path)
+
+    lang_instruction = "All text in English" if lang == "en" else "All text in Chinese"
 
     return f"""# Background
 
@@ -300,11 +369,11 @@ Quality requirements:
 - Balance: include BOTH correction episodes AND acceptance episodes (positive signals)
 - IMPORTANT: Always check existing events first. If a similar event exists, use twin-edit to enrich it rather than creating a duplicate with twin-add.
 - IMPORTANT: For this run, use only `twin-batch` with run_id `{run_id}` for writes.
-- All text in Chinese
+- {lang_instruction}
 """
 
 
-def _build_twin_stage2_prompt(handler, cli_path: str, run_id: str) -> str:
+def _build_twin_stage2_prompt(handler, cli_path: str, run_id: str, lang: str = "zh") -> str:
     """Build prompt for Stage 2: Judgment card distillation from evidence events."""
     from chatview import db as _db
     _db.init_db()
@@ -343,6 +412,12 @@ def _build_twin_stage2_prompt(handler, cli_path: str, run_id: str) -> str:
         existing_cards_str = "\n".join(lines)
     else:
         existing_cards_str = "  (empty — no existing cards)"
+
+    lang_instruction = "All text in English" if lang == "en" else "All text in Chinese"
+    applies_when_example = "Trigger scenario (1-2 sentences)" if lang == "en" else "触发场景（1-2句）"
+    judgment_example = "User's reasoning logic (natural language paragraph, 2-4 sentences)" if lang == "en" else "用户的推理逻辑（自然语言段落，2-4句）"
+    agent_action_example = "What the AI should do (1-2 sentences)" if lang == "en" else "AI 应该怎么做（1-2句）"
+    exceptions_example = "Exception conditions" if lang == "en" else "例外条件"
 
     return f"""# Background
 
@@ -400,10 +475,10 @@ Analyze the events above and distill judgment cards. This is INCREMENTAL — you
 # Add a new card:
 python3 {cli_path} twin-add cards <<'EOF'
 {{
-  "applies_when": "触发场景（1-2句）",
-  "judgment": "用户的推理逻辑（自然语言段落，2-4句）",
-  "agent_action": "AI 应该怎么做（1-2句）",
-  "exceptions": "例外条件",
+  "applies_when": "{applies_when_example}",
+  "judgment": "{judgment_example}",
+  "agent_action": "{agent_action_example}",
+  "exceptions": "{exceptions_example}",
   "tags": "[\\"tag1\\", \\"tag2\\"]",
   "confidence": 0.7,
   "status": "hypothesis",
@@ -439,12 +514,12 @@ EOF
 - **agent_action is executable**: Write it as a concrete instruction the AI can follow, not an abstract principle.
 - **Tags for retrieval**: Use consistent tag vocabulary (scope, style, communication, design, review, testing, etc.)
 - **Status rules**: first appearance → "hypothesis"; supported by 2+ events from different contexts → "emerging"; 3+ events across projects → "confirmed"
-- **All text in Chinese**
+- **{lang_instruction}**
 - **Dedup carefully**: Two events about "不要改无关文件" and "只改必要代码" should merge into one card, not create two. Use `twin-edit` to merge, not `twin-add` to duplicate.
 """
 
 
-def _build_twin_stage3_prompt(handler, cli_path: str, run_id: str) -> str:
+def _build_twin_stage3_prompt(handler, cli_path: str, run_id: str, lang: str = "zh") -> str:
     """Build prompt for Stage 3: Cognitive trait inference from judgment cards."""
     from chatview import db as _db
     _db.init_db()
@@ -463,6 +538,28 @@ def _build_twin_stage3_prompt(handler, cli_path: str, run_id: str) -> str:
         existing_str = "\n".join(lines)
     else:
         existing_str = "  (empty — no existing traits)"
+
+    lang_instruction = "All text in English" if lang == "en" else "All text in Chinese"
+    if lang == "en":
+        categories_block = """Categories:
+- **Values**: What the user protects/sacrifices (e.g., minimalism, least-impact principle)
+- **Decision Style**: How the user makes judgments (e.g., evidence-first, risk-averse, cautious)
+- **Collaboration Mode**: How the user works with AI (e.g., high-control preference, dominant, proposal-first)
+- **Capability Boundaries**: Domain expertise levels (e.g., backend expert / learning frontend)
+- **Thinking Mode**: Cognitive habits (e.g., systematic thinking, divergent-convergent)"""
+        trait_name_example = "Trait Name"
+        trait_categories = "Values|Decision Style|Collaboration Mode|Capability Boundaries|Thinking Mode"
+        trait_desc_example = "Natural language description (2-4 sentences)"
+    else:
+        categories_block = """Categories:
+- **价值取向**: What the user protects/sacrifices (e.g., 极简主义, 最小影响原则)
+- **决策风格**: How the user makes judgments (e.g., 证据先行, 风险厌恶, 谨慎型)
+- **协作模式**: How the user works with AI (e.g., 高控制偏好, 主导型, 方案先行)
+- **能力边界**: Domain expertise levels (e.g., 后端专家/前端学习中)
+- **思维模式**: Cognitive habits (e.g., 系统性思维, 发散-收敛型)"""
+        trait_name_example = "特质名称"
+        trait_categories = "价值取向|决策风格|协作模式|能力边界|思维模式"
+        trait_desc_example = "自然语言描述（2-4句）"
 
     return f"""# Background
 
@@ -503,12 +600,7 @@ All writes/links in this stage MUST use `twin-batch` with top-level `"run_id": "
 
 Analyze the judgment cards above and infer cognitive traits. This is INCREMENTAL — update existing traits or add new ones.
 
-Categories:
-- **价值取向**: What the user protects/sacrifices (e.g., 极简主义, 最小影响原则)
-- **决策风格**: How the user makes judgments (e.g., 证据先行, 风险厌恶, 谨慎型)
-- **协作模式**: How the user works with AI (e.g., 高控制偏好, 主导型, 方案先行)
-- **能力边界**: Domain expertise levels (e.g., 后端专家/前端学习中)
-- **思维模式**: Cognitive habits (e.g., 系统性思维, 发散-收敛型)
+{categories_block}
 
 **Workflow:**
 
@@ -523,9 +615,9 @@ Categories:
 # Add a new trait:
 python3 {cli_path} twin-add traits <<'EOF'
 {{
-  "name": "特质名称",
-  "category": "价值取向|决策风格|协作模式|能力边界|思维模式",
-  "description": "自然语言描述（2-4句）",
+  "name": "{trait_name_example}",
+  "category": "{trait_categories}",
+  "description": "{trait_desc_example}",
   "strength": 0.7,
   "supporting_card_ids": "[\\"jc_xxx\\", \\"jc_yyy\\"]",
   "status": "emerging",
@@ -548,13 +640,197 @@ EOF
 - **supporting_card_ids must reference real card IDs** from the input data above
 - **Dedup carefully**: If a similar trait exists, use twin-edit to enrich it, not twin-add to duplicate
 - **Status follows card evidence**: all hypothesis cards → hypothesis; emerging/confirmed cards → emerging/confirmed
-- **All text in Chinese**
+- **{lang_instruction}**
 """
+
+
+def _handle_twin_resume(handler):
+    """POST /api/twin/resume — return info about the most recent twin analysis run.
+
+    Queries evidence_events, judgment_cards, and cognitive_traits tables for
+    the latest run_id and returns stats. Returns {ok: false, run: null} if
+    no run data exists.
+    """
+    from chatview import db as _db
+    _db.init_db()
+
+    tables = ["evidence_events", "judgment_cards", "cognitive_traits"]
+    latest_run_id = None
+    latest_created = ""
+
+    try:
+        conn = _db.get_conn()
+        for table in tables:
+            try:
+                row = conn.execute(
+                    f"SELECT run_id, MAX(created_at) as latest FROM {table} "
+                    f"WHERE run_id IS NOT NULL AND run_id != ''"
+                ).fetchone()
+                if row and row["latest"] and row["latest"] > latest_created:
+                    latest_created = row["latest"]
+                    latest_run_id = row["run_id"]
+            except Exception:
+                continue
+    except Exception:
+        _json_response(handler, {"ok": False, "run": None})
+        return
+
+    if not latest_run_id:
+        _json_response(handler, {"ok": False, "run": None})
+        return
+
+    # Count items for this run
+    stats = {}
+    stat_keys = {
+        "evidence_events": "events",
+        "judgment_cards": "cards",
+        "cognitive_traits": "traits",
+    }
+    try:
+        conn = _db.get_conn()
+        for table, key in stat_keys.items():
+            try:
+                count = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE run_id=?",
+                    (latest_run_id,),
+                ).fetchone()[0]
+                stats[key] = count
+            except Exception:
+                stats[key] = 0
+    except Exception:
+        stats = {"events": 0, "cards": 0, "traits": 0}
+
+    # Infer status from data completeness
+    has_events = stats.get("events", 0) > 0
+    has_cards = stats.get("cards", 0) > 0
+    has_traits = stats.get("traits", 0) > 0
+    if has_traits and has_cards:
+        status = "completed"
+    elif has_events or has_cards:
+        status = "partial"
+    else:
+        status = "empty"
+
+    _json_response(handler, {
+        "ok": True,
+        "run": {
+            "run_id": latest_run_id,
+            "status": status,
+            "stats": stats,
+        },
+    })
+
+
+def _handle_twin_cancel(handler):
+    """POST /api/twin/cancel — cancel a running twin analysis.
+
+    Reads optional run_id from POST body. If provided and doesn't match the
+    active run, returns an error. Terminates the active subprocess gracefully
+    (SIGTERM then SIGKILL if needed) and clears module state.
+    """
+    global _active_analyze_proc, _active_analyze_run_id
+    from chatview.handlers.base import _read_post_body
+    import json as _json
+
+    # Read run_id from body if provided
+    raw = _read_post_body(handler)
+    requested_run_id = None
+    if raw:
+        try:
+            body = _json.loads(raw)
+            requested_run_id = body.get("run_id")
+        except Exception:
+            pass
+
+    with _analyze_lock:
+        proc = _active_analyze_proc
+        active_run_id = _active_analyze_run_id
+
+        # Check if there's an active process
+        if proc is None or active_run_id is None:
+            _json_response(handler, {"ok": False, "error": "No active analysis"})
+            return
+
+        # Validate run_id if provided
+        if requested_run_id and requested_run_id != active_run_id:
+            _json_response(handler, {"ok": False, "error": "Run ID mismatch"})
+            return
+
+    # Terminate the process (outside the lock to avoid holding it during waits)
+    try:
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+        else:
+            try:
+                proc.terminate()
+            except (ProcessLookupError, OSError):
+                pass
+
+        # Wait briefly for graceful shutdown
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            # Force kill if still alive
+            if os.name == "posix":
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+            else:
+                try:
+                    proc.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+    except Exception:
+        pass
+
+    # Clear state
+    with _analyze_lock:
+        _active_analyze_proc = None
+        run_to_clean = _active_analyze_run_id
+        _active_analyze_run_id = None
+
+    # Clean up partial data from the cancelled run
+    if run_to_clean:
+        try:
+            from chatview import db as _db
+            _db.init_db()
+            conn = _db.get_conn()
+            # Delete in reverse order of dependencies (traits -> cards -> events)
+            for table in ["cognitive_traits", "judgment_cards", "evidence_events"]:
+                try:
+                    conn.execute(f"DELETE FROM {table} WHERE run_id=?", (run_to_clean,))
+                except Exception:
+                    pass
+            conn.commit()
+        except Exception:
+            pass  # Best-effort cleanup
+
+    _json_response(handler, {"ok": True, "cancelled": True})
 
 
 def _handle_twin_sync(handler):
     """POST /api/twin/sync — compile runtime pack from cards+traits into CLAUDE.md."""
     from chatview import db as _db
+    from chatview.handlers.base import _read_post_body
+    import json as _json
+
+    # Read lang from POST body if provided
+    raw = _read_post_body(handler)
+    lang = "zh"
+    if raw:
+        try:
+            body = _json.loads(raw)
+            lang = body.get("lang", "zh")
+        except Exception:
+            pass
 
     CLAUDE_MD_PATH = Path.home() / ".claude" / "CLAUDE.md"
     CM_MARKER_START = "<!-- cognitive-handbook:start -->"
@@ -578,10 +854,19 @@ def _handle_twin_sync(handler):
         return
 
     # Build CLAUDE.md section — render as natural language
-    lines = [CM_MARKER_START, "## Cognitive Handbook (Auto-sync)", ""]
+    if lang == "en":
+        lines = [CM_MARKER_START, "## Cognitive Handbook (Auto-sync)", ""]
+        traits_header = "### About This User"
+        cards_header = "### Situational Judgments"
+        exception_label = "Exception: "
+    else:
+        lines = [CM_MARKER_START, "## Cognitive Handbook (Auto-sync)", ""]
+        traits_header = "### 关于这位用户"
+        cards_header = "### 场景判断"
+        exception_label = "例外："
 
     if traits:
-        lines.append("### 关于这位用户")
+        lines.append(traits_header)
         lines.append("")
         for t in traits:
             name = t.get("name") or ""
@@ -590,7 +875,7 @@ def _handle_twin_sync(handler):
             lines.append("")
 
     if cards:
-        lines.append("### 场景判断")
+        lines.append(cards_header)
         lines.append("")
         for c in cards:
             when = c.get("applies_when") or ""
@@ -601,7 +886,7 @@ def _handle_twin_sync(handler):
             if action:
                 lines.append(f"→ {action}")
             if exceptions:
-                lines.append(f"例外：{exceptions}")
+                lines.append(f"{exception_label}{exceptions}")
             lines.append("")
 
     lines.append(CM_MARKER_END)

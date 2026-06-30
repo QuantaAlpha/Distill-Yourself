@@ -2,13 +2,9 @@
 
 import json
 import os
-import re
 
 from chatview import index as _idx
-
-# Constants needed for content parsing
-MAX_TOOL_RESULT_LEN = 3000
-MAX_THINKING_LEN = 800
+from chatview.utils.constants import MAX_THINKING_LEN
 
 
 def load_session(session_id: str):

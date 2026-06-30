@@ -8,6 +8,19 @@
 import { state } from './state.js';
 import { dom } from './dom.js';
 import { esc, escRegex, formatDate } from './utils.js';
+import { t, registerI18n } from './lang.js';
+
+// ── i18n dictionary ──────────────────────────────────────────────
+registerI18n({
+  zh: {
+    'search.loading': '搜索中…',
+    'search.failed': '搜索失败：{msg}',
+  },
+  en: {
+    'search.loading': 'Searching…',
+    'search.failed': 'Search failed: {msg}',
+  },
+});
 
 // ── Search ─────────────────────────────────────────────────────
 export async function doSearch(query) {
@@ -25,7 +38,7 @@ export async function doSearch(query) {
 
   const { showView } = await import('./app.js');
   showView("search");
-  dom.searchResultsList.innerHTML = '<li style="padding:20px;color:var(--text-muted)">Searching…</li>';
+  dom.searchResultsList.innerHTML = `<li style="padding:20px;color:var(--text-muted)">${t('search.loading')}</li>`;
 
   let results;
   try {
@@ -34,7 +47,7 @@ export async function doSearch(query) {
     results = await resp.json();
   } catch (err) {
     if (err.name === "AbortError") return; // superseded by newer search
-    dom.searchResultsList.innerHTML = `<li style="padding:20px;color:#e57373">Search failed: ${esc(err.message)}</li>`;
+    dom.searchResultsList.innerHTML = `<li style="padding:20px;color:#e57373">${esc(t('search.failed', { msg: err.message }))}</li>`;
     return;
   }
 
@@ -46,10 +59,10 @@ export async function doSearch(query) {
 export function renderSearchResults() {
   const results = state.lastSearchResults;
   const query = state.lastSearchQuery;
-  dom.searchResultCount.textContent = `${results.length} results`;
+  dom.searchResultCount.textContent = t("search.count", { n: results.length });
 
   if (results.length === 0) {
-    dom.searchResultsList.innerHTML = '<li style="padding:20px;color:var(--text-muted)">No results found.</li>';
+    dom.searchResultsList.innerHTML = `<li style="padding:20px;color:var(--text-muted)">${esc(t("search.noResults"))}</li>`;
     return;
   }
 

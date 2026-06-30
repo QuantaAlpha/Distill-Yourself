@@ -43,7 +43,9 @@ def _handle_chat_stream(handler):
     # Global analysis needs more time (sub-agents, CLI exploration)
     chat_timeout = int(data.get("timeout", 900))
     chat_timeout = max(60, min(chat_timeout, 1800))  # clamp 1min-30min
-    stream = _run_ai_engine_stream(full_prompt, allow_write=False, timeout=chat_timeout)
+    engine = (scope or {}).get("engine", "auto")
+    stream = _run_ai_engine_stream(full_prompt, allow_write=False, timeout=chat_timeout,
+                                   engine_override=engine)
     try:
         for evt in stream:
             _sse_event(handler,evt)
@@ -84,7 +86,9 @@ def _handle_chat_legacy(handler):
     try:
         legacy_timeout = int(data.get("timeout", 900))
         legacy_timeout = max(60, min(legacy_timeout, 1800))
-        stdout, stderr, _ = _run_ai_engine(full_prompt, allow_write=False, timeout=legacy_timeout)
+        engine = (scope or {}).get("engine", "auto")
+        stdout, stderr, _ = _run_ai_engine(full_prompt, allow_write=False, timeout=legacy_timeout,
+                                           engine_override=engine)
         output = stdout.strip()
         if not output and stderr:
             stderr = stderr.strip()

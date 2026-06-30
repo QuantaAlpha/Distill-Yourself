@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Server core (ChatViewerHandler, main, PORT, etc.)
 # ---------------------------------------------------------------------------
 from chatview.server import *  # noqa: F401,F403
-from chatview.server import main, ChatViewerHandler, PORT, STATIC_DIR
+from chatview.server import main, ChatViewerHandler, PORT, STATIC_DIR  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Index state & functions (used by analyze.py, tests)
@@ -66,8 +66,8 @@ from chatview.search import (  # noqa: F401
 # ---------------------------------------------------------------------------
 from chatview.ai_engine import (  # noqa: F401
     _select_cognitive_avatar,
-    _normalize_error,
 )
+from chatview.utils.text import normalize_error as _normalize_error  # noqa: F401
 
 if __name__ == "__main__":
     main()

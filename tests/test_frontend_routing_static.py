@@ -6,8 +6,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def read_app_js():
-    with open(os.path.join(ROOT, "static", "app.js"), encoding="utf-8") as f:
-        return f.read()
+    # The live frontend is modular (static/js/*.js). Concatenate the routing-
+    # relevant modules so assertions cover the code actually served.
+    parts = []
+    for rel in ("js/app.js", "js/state.js"):
+        with open(os.path.join(ROOT, "static", rel), encoding="utf-8") as f:
+            parts.append(f.read())
+    return "\n".join(parts)
 
 
 def read_index_html():
@@ -49,7 +54,7 @@ class TestFrontendRoutingStatic(unittest.TestCase):
         script = read_app_js()
 
         self.assertIn('currentView === "search"', script)
-        self.assertIn("doSearch(searchInput.value.trim())", script)
+        self.assertIn("doSearch(dom.searchInput.value.trim())", script)
 
     def test_welcome_cards_include_three_primary_entrypoints_and_six_insights(self):
         html = read_index_html()

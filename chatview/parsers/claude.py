@@ -8,28 +8,12 @@ import os
 import re
 from pathlib import Path
 
+from chatview.utils.constants import MAX_TOOL_RESULT_LEN
+from chatview.utils.text import normalize_error as _normalize_error
+
 
 # ---------------------------------------------------------------------------
 # Constants (mirrored from server.py config)
-# ---------------------------------------------------------------------------
-MAX_TOOL_RESULT_LEN = 3000
-MAX_THINKING_LEN = 800
-
-
-def _normalize_error(msg: str) -> str:
-    """Normalize error message for grouping: strip paths, numbers, hashes."""
-    s = msg.strip()
-    # Remove file paths
-    s = re.sub(r'(/[^\s:]+)', '<path>', s)
-    # Remove line numbers
-    s = re.sub(r'line \d+', 'line N', s, flags=re.IGNORECASE)
-    # Remove hex addresses
-    s = re.sub(r'0x[0-9a-f]+', '0xN', s, flags=re.IGNORECASE)
-    return s[:150]
-
-
-# ---------------------------------------------------------------------------
-# Project name decoding
 # ---------------------------------------------------------------------------
 def pretty_project_name(dirname: str) -> str:
     """Convert encoded dir name like '-Users-foo-Desktop-proj-bar' to readable name."""
@@ -247,9 +231,17 @@ def _extract_text(content) -> str:
     return ""
 
 
+_SYSTEM_TAG_RE = re.compile(
+    r"<\/?(?:system-reminder|ide_\w+|command-\w+|tool_use|tool_result|thinking|"
+    r"function_calls?|function_result|session_meta|session_info|"
+    r"assistant_context|user_context|tool|bash|read|edit|write|grep|search)[^>]*>",
+    re.IGNORECASE,
+)
+
+
 def _strip_tags(text: str) -> str:
-    """Remove XML-like tags from Claude Code internal format."""
-    cleaned = re.sub(r"<[^>]+>", "", text).strip()
+    """Remove known Claude Code system tags from text."""
+    cleaned = _SYSTEM_TAG_RE.sub("", text).strip()
     # Remove leading system noise lines
     lines = cleaned.split("\n")
     filtered = []

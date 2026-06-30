@@ -2,29 +2,22 @@
 
 import json
 import os
-import re
 import signal
 import subprocess
 import threading
 import time
 from pathlib import Path
 
+
 # ---------------------------------------------------------------------------
-# AI Engine detection and execution (Codex → claude -p fallback)
+# AI Engine detection and execution
+#
+# Auto-detection prefers Claude Code, then Codex (see _detect_ai_engine).
+# When the engine is auto-selected (engine_override="auto") and Codex ends up
+# being used, a Codex failure transparently falls back to Claude. An explicitly
+# requested engine ("codex"/"claude") is never silently swapped.
 # ---------------------------------------------------------------------------
 _ai_engine_cache = None  # "codex" | "claude" | ""
-
-
-def _normalize_error(msg: str) -> str:
-    """Normalize error message for grouping: strip paths, numbers, hashes."""
-    s = msg.strip()
-    # Remove file paths
-    s = re.sub(r'(/[^\s:]+)', '<path>', s)
-    # Remove line numbers
-    s = re.sub(r'line \d+', 'line N', s, flags=re.IGNORECASE)
-    # Remove hex addresses
-    s = re.sub(r'0x[0-9a-f]+', '0xN', s, flags=re.IGNORECASE)
-    return s[:150]
 
 
 def _normalize_ai_engine(engine: str) -> str:
@@ -108,7 +101,8 @@ def _detect_ai_engine():
 def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto"):
     """Execute prompt via detected AI engine. Returns (stdout, stderr, returncode).
     Raises FileNotFoundError if no engine available.
-    Auto-falls back from codex to claude on codex errors."""
+    When auto-selected, falls back from Codex to Claude on Codex errors;
+    an explicitly requested engine is not swapped."""
     engine_override = _normalize_ai_engine(engine_override)
     engine = engine_override if engine_override != "auto" else _detect_ai_engine()
     if engine == "codex":
@@ -119,7 +113,7 @@ def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto
             timeout=timeout,
         )
         # Fallback: if codex failed and engine was auto-detected, try claude
-        if rc != 0 and engine_override in ("auto", "", None):
+        if rc != 0 and engine_override == "auto":
             print(f"Codex failed (rc={rc}), falling back to claude")
             engine = "claude"
         else:
@@ -136,7 +130,8 @@ def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto
     )
 
 
-def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_override="auto"):
+def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_override="auto",
+                          proc_ref=None):
     """Execute prompt via detected AI engine, yielding SSE events as JSONL lines arrive.
 
     Yields dicts: {"type": "tool", "name": ..., "status": ...}
@@ -144,7 +139,13 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
                   {"type": "done", "content": ...}
                   {"type": "error", "message": ...}
 
-    Auto-falls back from codex to claude on codex errors (e.g. usage limits).
+    Auto-falls back from codex to claude on codex errors (e.g. usage limits)
+    only when the engine was auto-selected.
+
+    Args:
+        proc_ref: Optional mutable list (e.g. [None]) that receives the
+            subprocess.Popen object once it is created. Used by callers that
+            need to terminate the process from another thread.
     """
     engine_override = _normalize_ai_engine(engine_override)
     engine = engine_override if engine_override != "auto" else _detect_ai_engine()
@@ -154,8 +155,8 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
 
     # For codex with auto-detection: quick health check before committing.
     # Codex retries internally (5x WS + 5x HTTP) which can take 30-60s.
-    # Instead, run a fast test with a tiny prompt + 8s timeout.
-    if engine == "codex" and engine_override in ("auto", "", None):
+    # Instead, run a fast test with a tiny prompt + 5s timeout.
+    if engine == "codex" and engine_override == "auto":
         try:
             test = subprocess.run(
                 ["codex", "--sandbox", "read-only", "--ask-for-approval", "never",
@@ -176,17 +177,22 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
                 raise RuntimeError("codex health check failed")
         except (subprocess.TimeoutExpired, RuntimeError, FileNotFoundError, OSError):
             yield {"type": "text", "content": "Codex unavailable, falling back to Claude...\n"}
-            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout)
+            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout, proc_ref)
             return
         # Codex passed health check — use it
-        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout)
+        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout, proc_ref)
         return
 
-    yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout)
+    yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref)
 
 
-def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
-    """Core streaming loop for a single engine. Yields event dicts."""
+def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None):
+    """Core streaming loop for a single engine. Yields event dicts.
+
+    Args:
+        proc_ref: Optional mutable list. If provided, proc_ref[0] is set to
+            the subprocess.Popen object immediately after it is created.
+    """
     if engine == "codex":
         sandbox = "workspace-write" if allow_write else "read-only"
         cmd = ["codex", "--sandbox", sandbox, "--ask-for-approval", "never",
@@ -206,7 +212,6 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
         )
         # Write prompt in a thread to avoid blocking on large prompts
         # (macOS pipe buffer is ~64KB, prompt can be 100KB+)
-        import threading
         def _feed_stdin():
             try:
                 proc.stdin.write(prompt)
@@ -214,6 +219,9 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
             except (BrokenPipeError, OSError):
                 pass
         threading.Thread(target=_feed_stdin, daemon=True).start()
+
+    if proc_ref is not None:
+        proc_ref[0] = proc
 
     accumulated_text = ""
     stderr_tail = []
@@ -276,11 +284,16 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout):
     yield {"type": "done", "content": accumulated_text}
 
 
-def _select_cognitive_avatar(force=False, run_id=""):
+def _select_cognitive_avatar(force=False, run_id="", lang="zh", cache_only=False):
     """Select cognitive avatar via AI. Returns selection dict or None.
 
     Checks evolve_cache for existing selection; if stale or missing, calls AI
     with traits + stripped cognitive_models.json to pick the best match.
+
+    Args:
+        cache_only: When True, never invoke the AI. Return a cached selection
+            if present, otherwise None. Used by latency-sensitive GET handlers
+            that must not block on a multi-minute AI call in the request thread.
     """
     from chatview import db as _db
     _db.init_db()
@@ -309,6 +322,10 @@ def _select_cognitive_avatar(force=False, run_id=""):
             )
             if not traits_max_updated or cached["updated_at"] >= traits_max_updated:
                 return cached["data"]
+
+    # Cache-only callers must never trigger the (slow) AI selection below.
+    if cache_only:
+        return None
 
     # Load cognitive models JSON (stripped for prompt)
     models_path = Path(__file__).resolve().parent.parent / "static" / "assets" / "cognitive-avatars" / "v2" / "cognitive_models.json"
@@ -341,7 +358,34 @@ def _select_cognitive_avatar(force=False, run_id=""):
 
     models_json = json.dumps(compact_models, ensure_ascii=False)
 
-    prompt = f"""你是一个认知模型匹配专家。根据用户的认知特质，从 48 个认知模型中选出最匹配的。
+    if lang == "en":
+        prompt = f"""You are a cognitive model matching expert. Based on the user's cognitive traits,
+select the best match from 48 cognitive models.
+
+## User Cognitive Traits
+
+{traits_json}
+
+## Available Cognitive Models (48)
+
+{models_json}
+
+## Task
+
+Select the TOP 3 models that best match the user's cognitive traits. Consider:
+- Alignment between classification axes and trait categories
+- Semantic similarity between signals and user behavior descriptions
+- Match degree between thinking_mode and user's thinking patterns
+
+Also generate a **personalized type name** (persona_title) for the top-ranked model.
+Do not copy the model name verbatim — instead, create a more fitting label based on the
+user's trait combination (4-8 words, e.g. "Minimalist Architect", "Evidence-Driven Pragmatist").
+
+## Output Format (JSON only, no other text)
+
+{{"persona_title": "personalized type name", "selections": [{{"model_id": "cm_XXX", "confidence": 0.9, "rationale": "one-sentence rationale"}}, {{"model_id": "cm_XXX", "confidence": 0.7, "rationale": "one-sentence rationale"}}, {{"model_id": "cm_XXX", "confidence": 0.5, "rationale": "one-sentence rationale"}}]}}"""
+    else:
+        prompt = f"""你是一个认知模型匹配专家。根据用户的认知特质，从 48 个认知模型中选出最匹配的。
 
 ## 用户认知特质
 

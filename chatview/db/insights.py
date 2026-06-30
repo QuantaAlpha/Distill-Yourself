@@ -186,3 +186,34 @@ def query_snippets(limit=150):
         LIMIT ?
     """, (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_session_tool_usage(session_id: str) -> dict:
+    """Return tool usage counts for a single session: {tool_name: count}."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT tool_name, SUM(count) as total FROM insight_tool_usage "
+        "WHERE session_id=? GROUP BY tool_name",
+        (session_id,),
+    ).fetchall()
+    return {r["tool_name"]: r["total"] for r in rows}
+
+
+def get_session_file_refs(session_id: str) -> dict:
+    """Return file reference counts for a single session: {file_path: count}."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT file_path, count FROM insight_file_refs WHERE session_id=?",
+        (session_id,),
+    ).fetchall()
+    return {r["file_path"]: r["count"] for r in rows}
+
+
+def get_sessions_for_file(file_path: str) -> list:
+    """Return list of session_ids that reference a given file path."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT session_id FROM insight_file_refs WHERE file_path=?",
+        (file_path,),
+    ).fetchall()
+    return [r["session_id"] for r in rows]

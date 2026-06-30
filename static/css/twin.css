@@ -44,7 +44,7 @@
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
 #twin-persona-avatar::after {
-  content: "选择";
+  content: var(--twin-select-label, "选择");
   position: absolute;
   right: 6px;
   bottom: 6px;
@@ -295,7 +295,7 @@
   border-radius: 1px;
 }
 .twin-pipeline-header {
-  display: flex; align-items: center; gap: 8px; padding: 10px 16px; margin-bottom: 20px; margin-left: -40px;
+  display: flex; align-items: center; gap: 8px; padding: 10px 16px; margin-bottom: 20px;
   background: var(--bg-primary); border: 1px solid var(--border-light); border-radius: var(--radius);
   font-size: 13px; color: var(--text-muted); flex-wrap: wrap;
 }

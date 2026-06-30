@@ -15,13 +15,162 @@
   let evolveScopeDate = "7d";
   let evolveScopeProject = "";
   let evolveScopeEngine = "auto";
+  let evolveScopeLang = "zh";
 
   // ── DOM refs ──
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
+  // ── i18n (shared via app.js) ──
+  let _i18nRegistered = false;
+  function _registerEvolveI18n() {
+    if (_i18nRegistered || !window.registerI18n) return;
+    _i18nRegistered = true;
+    window.registerI18n({
+      zh: {
+        "evolve.status.never": "尚未分析",
+        "evolve.status.aiRunning": "AI 执行中…",
+        "evolve.status.aiRunningSteps": "AI 执行中… ({n} steps)",
+        "evolve.status.aiStarting": "AI 启动中…",
+        "evolve.status.aiGenerating": "AI 分析生成中…",
+        "evolve.status.stopped": "已停止",
+        "evolve.status.analyzing": "分析中…",
+        "evolve.error.analyzeFailed": "分析失败：{error}",
+        "evolve.error.retryHint": "点击 🔄 Refresh 重试",
+        "evolve.empty.refreshHint": "点击 🔄 Refresh 开始分析最近的对话",
+        "evolve.empty.initial": "点击刷新，开始分析最近的对话",
+        "evolve.empty.profile": "暂无用户画像数据",
+        "evolve.empty.rules": "暂无规则建议",
+        "evolve.empty.signals": "暂无纠正记录",
+        "evolve.empty.patterns": "暂无重复模式",
+        "evolve.profile.radarTitle": "能力雷达",
+        "evolve.field.frequency": "频次:",
+        "evolve.rules.copyTitle": "复制规则",
+        "evolve.sync.title": "同步到 Claude Code",
+        "evolve.sync.replace": "替换",
+        "evolve.sync.append": "追加",
+        "evolve.sync.mdSummary": "{action} User Profile 段落 ({categories} 分类, {radar_dims} 雷达维度, ~{lines} 行)",
+        "evolve.sync.cancel": "取消",
+        "evolve.sync.confirm": "确认同步",
+        "evolve.sync.syncing": "同步中...",
+        "evolve.sync.done": "✓ 同步完成 — ",
+        "evolve.chat.inputPlaceholder": "输入跨会话分析需求…",
+        // Tab labels
+        "evolve.tab.profile": "画像",
+        "evolve.tab.memory": "记忆",
+        "evolve.tab.rules": "规则",
+        "evolve.tab.signals": "信号",
+        "evolve.tab.patterns": "模式",
+        // Overview bar
+        "evolve.overview.lastScan": "上次扫描：{time}",
+        // Time ago
+        "evolve.time.justNow": "刚刚",
+        "evolve.time.mAgo": "{n} 分钟前",
+        "evolve.time.hAgo": "{n} 小时前",
+        "evolve.time.dAgo": "{n} 天前",
+        // Rules
+        "evolve.rules.copyAll": "全部复制",
+        "evolve.rules.filterAll": "全部",
+        "evolve.rules.why": "为什么",
+        "evolve.rules.evidence": "证据",
+        "evolve.rules.sessionLink": "→ 会话",
+        // Tool group
+        "evolve.tools.groupHeader": "⚡ {n} 个工具",
+        // Force graph type labels (Chinese already present — these map when lang=zh)
+        "evolve.graph.type.preference": "偏好",
+        "evolve.graph.type.workflow": "工作流",
+        "evolve.graph.type.tooling": "工具",
+        "evolve.graph.type.design": "设计",
+        "evolve.graph.type.communication": "沟通",
+        // Storage quota
+        "evolve.quotaWarning": "存储空间不足 — Evolve 缓存可能无法持久化。",
+        // Updated label
+        "evolve.updated": "更新于 {time}",
+        // Bubble chart types
+        "evolve.bubble.error": "错误",
+        "evolve.bubble.efficiency": "效率",
+        "evolve.bubble.knowledge_gap": "知识缺口",
+        "evolve.bubble.workflow": "工作流",
+        // Session link
+        "evolve.sessionLink": "→ 会话",
+      },
+      en: {
+        "evolve.status.never": "Not analyzed yet",
+        "evolve.status.aiRunning": "AI running…",
+        "evolve.status.aiRunningSteps": "AI running… ({n} steps)",
+        "evolve.status.aiStarting": "AI starting…",
+        "evolve.status.aiGenerating": "AI generating analysis…",
+        "evolve.status.stopped": "Stopped",
+        "evolve.status.analyzing": "Analyzing…",
+        "evolve.error.analyzeFailed": "Analysis failed: {error}",
+        "evolve.error.retryHint": "Click 🔄 Refresh to retry",
+        "evolve.empty.refreshHint": "Click 🔄 Refresh to start analyzing recent conversations",
+        "evolve.empty.initial": "Click Refresh to start analyzing recent conversations",
+        "evolve.empty.profile": "No user profile data yet",
+        "evolve.empty.rules": "No rule suggestions yet",
+        "evolve.empty.signals": "No correction records yet",
+        "evolve.empty.patterns": "No recurring patterns yet",
+        "evolve.profile.radarTitle": "Ability Radar",
+        "evolve.field.frequency": "Frequency:",
+        "evolve.rules.copyTitle": "Copy rule",
+        "evolve.sync.title": "Sync to Claude Code",
+        "evolve.sync.replace": "Replace",
+        "evolve.sync.append": "Append",
+        "evolve.sync.mdSummary": "{action} User Profile section ({categories} categories, {radar_dims} radar dims, ~{lines} lines)",
+        "evolve.sync.cancel": "Cancel",
+        "evolve.sync.confirm": "Confirm sync",
+        "evolve.sync.syncing": "Syncing...",
+        "evolve.sync.done": "✓ Sync complete — ",
+        "evolve.chat.inputPlaceholder": "Enter a cross-session analysis request…",
+        // Tab labels
+        "evolve.tab.profile": "Profile",
+        "evolve.tab.memory": "Memory",
+        "evolve.tab.rules": "Rules",
+        "evolve.tab.signals": "Signals",
+        "evolve.tab.patterns": "Patterns",
+        // Overview bar
+        "evolve.overview.lastScan": "Last scan: {time}",
+        // Time ago
+        "evolve.time.justNow": "just now",
+        "evolve.time.mAgo": "{n}m ago",
+        "evolve.time.hAgo": "{n}h ago",
+        "evolve.time.dAgo": "{n}d ago",
+        // Rules
+        "evolve.rules.copyAll": "Copy All",
+        "evolve.rules.filterAll": "All",
+        "evolve.rules.why": "Why",
+        "evolve.rules.evidence": "Evidence",
+        "evolve.rules.sessionLink": "→ session",
+        // Tool group
+        "evolve.tools.groupHeader": "⚡ {n} tools",
+        // Force graph type labels
+        "evolve.graph.type.preference": "Preference",
+        "evolve.graph.type.workflow": "Workflow",
+        "evolve.graph.type.tooling": "Tooling",
+        "evolve.graph.type.design": "Design",
+        "evolve.graph.type.communication": "Communication",
+        // Storage quota
+        "evolve.quotaWarning": "Storage quota exceeded — Evolve cache may not persist.",
+        // Updated label
+        "evolve.updated": "Updated {time}",
+        // Bubble chart types
+        "evolve.bubble.error": "Error",
+        "evolve.bubble.efficiency": "Efficiency",
+        "evolve.bubble.knowledge_gap": "Knowledge Gap",
+        "evolve.bubble.workflow": "Workflow",
+        // Session link
+        "evolve.sessionLink": "→ session",
+      },
+    });
+  }
+
+  function _tt(key, vars) {
+    return window.t ? window.t(key, vars) : key;
+  }
+
   // ── Init (called from app.js when AI page opens) ──
   window.initEvolveView = function () {
+    _registerEvolveI18n();
     loadEvolveCache();
     // Scope filters are now rendered by initAiPage() in app.js
     // Read scope from shared global state
@@ -30,6 +179,7 @@
     if (scope.date) evolveScopeDate = scope.date;
     if (scope.project !== undefined) evolveScopeProject = scope.project;
     if (scope.engine) evolveScopeEngine = scope.engine;
+    if (scope.lang) evolveScopeLang = scope.lang;
     // Clear initial HTML — per-tab panels will be created on demand
     const body = $("#evolve-tab-body");
     if (body) body.innerHTML = "";
@@ -72,10 +222,10 @@
     // Update header to show this tab's status
     const updatedEl = $("#evolve-tab-updated");
     if (evolveLoadingTabs[tab]) {
-      if (updatedEl) { updatedEl.textContent = "AI 执行中…"; updatedEl.classList.add("loading"); }
+      if (updatedEl) { updatedEl.textContent = _tt("evolve.status.aiRunning"); updatedEl.classList.add("loading"); }
     } else {
       const cached = getCachedTab(tab);
-      if (updatedEl) { updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : "尚未分析"; updatedEl.classList.remove("loading"); }
+      if (updatedEl) { updatedEl.textContent = cached ? _tt("evolve.updated", { time: timeAgo(cached.updatedAt) }) : _tt("evolve.status.never"); updatedEl.classList.remove("loading"); }
     }
     updateEvolveOverviewBar();
     updateSyncButtonState();
@@ -106,12 +256,12 @@
       if (activeSimulation) { activeSimulation.stop(); activeSimulation = null; }
       panel.innerHTML = "";
       if (cached.data._error) {
-        panel.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${(window.esc || String)(cached.data._error)}</p><p>点击 🔄 Refresh 重试</p></div>`;
+        panel.innerHTML = `<div class="evolve-empty-state"><p>${_tt("evolve.error.analyzeFailed", { error: (window.esc || String)(cached.data._error) })}</p><p>${_tt("evolve.error.retryHint")}</p></div>`;
         return;
       }
       renderTabVisualization(tab, cached.data, panel);
     } else if (!evolveLoadingTabs[tab]) {
-      panel.innerHTML = '<div class="evolve-empty-state"><p>点击 🔄 Refresh 开始分析最近的对话</p></div>';
+      panel.innerHTML = `<div class="evolve-empty-state"><p>${_tt("evolve.empty.refreshHint")}</p></div>`;
     }
   }
 
@@ -132,7 +282,7 @@
           window._evolveQuotaWarned = true;
           const t = document.createElement("div");
           t.style.cssText = "position:fixed;bottom:20px;right:20px;background:#e65100;color:#fff;padding:12px 20px;border-radius:8px;z-index:9999;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.3);max-width:320px";
-          t.textContent = "Storage quota exceeded — Evolve cache may not persist.";
+          t.textContent = _tt("evolve.quotaWarning");
           document.body.appendChild(t);
           setTimeout(() => t.remove(), 8000);
         }
@@ -180,6 +330,7 @@
         date: scope.date || "7d",
         project: scope.project || "",
         engine: scope.engine || "auto",
+        lang: scope.lang || "zh",
       };
     }
     return {
@@ -187,6 +338,7 @@
       date: evolveScopeDate,
       project: evolveScopeProject,
       engine: evolveScopeEngine,
+      lang: evolveScopeLang,
     };
   }
 
@@ -196,14 +348,13 @@
     if (!bar) return;
     const tabs = ["profile", "memory", "rules", "signals", "patterns"];
     const icons = { profile: "🧬", memory: "🧠", rules: "📐", signals: "⚡", patterns: "🔄" };
-    const labels = { profile: "Profile", memory: "Memory", rules: "Rules", signals: "Signals", patterns: "Patterns" };
     bar.innerHTML = "";
     tabs.forEach(tab => {
       const cached = getCachedTab(tab);
       const count = cached ? getTabItemCount(tab, cached.data) : 0;
       const div = document.createElement("div");
       div.className = `evolve-stat-card${tab === evolveActiveTab ? " active" : ""}`;
-      div.innerHTML = `<span class="evolve-stat-icon">${icons[tab]}</span><span class="evolve-stat-count">${count}</span><span class="evolve-stat-label">${labels[tab]}</span>`;
+      div.innerHTML = `<span class="evolve-stat-icon">${icons[tab]}</span><span class="evolve-stat-count">${count}</span><span class="evolve-stat-label">${_tt("evolve.tab." + tab)}</span>`;
       div.onclick = () => switchEvolveTab(tab);
       bar.appendChild(div);
     });
@@ -212,7 +363,7 @@
     if (anyUpdated) {
       const span = document.createElement("span");
       span.className = "evolve-last-scan";
-      span.textContent = `Last scan: ${timeAgo(anyUpdated)}`;
+      span.textContent = _tt("evolve.overview.lastScan", { time: timeAgo(anyUpdated) });
       bar.appendChild(span);
     }
   }
@@ -231,10 +382,10 @@
 
   function timeAgo(iso) {
     const diff = Date.now() - new Date(iso).getTime();
-    if (diff < 60000) return "just now";
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return `${Math.floor(diff / 86400000)}d ago`;
+    if (diff < 60000) return _tt("evolve.time.justNow");
+    if (diff < 3600000) return _tt("evolve.time.mAgo", { n: Math.floor(diff / 60000) });
+    if (diff < 86400000) return _tt("evolve.time.hAgo", { n: Math.floor(diff / 3600000) });
+    return _tt("evolve.time.dAgo", { n: Math.floor(diff / 86400000) });
   }
 
   // ── Tab content rendering (legacy compat — routes to per-tab panel) ──
@@ -244,7 +395,7 @@
     // Update header
     const updatedEl = $("#evolve-tab-updated");
     const cached = getCachedTab(tab);
-    if (updatedEl) updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : "尚未分析";
+    if (updatedEl) updatedEl.textContent = cached ? _tt("evolve.updated", { time: timeAgo(cached.updatedAt) }) : _tt("evolve.status.never");
   }
 
   function renderTabVisualization(tab, data, container) {
@@ -332,9 +483,9 @@
     // Ensure tab panel exists and set up streaming container inside it
     const panel = _ensureTabPanel(tab);
     if (panel) {
-      panel.innerHTML = `<div class="evolve-stream-progress" id="evolve-stream-${tab}"><div class="evolve-thinking"><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">AI 启动中…</span></div></div>`;
+      panel.innerHTML = `<div class="evolve-stream-progress" id="evolve-stream-${tab}"><div class="evolve-thinking"><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">${esc(_tt("evolve.status.aiStarting"))}</span></div></div>`;
     }
-    if (tab === evolveActiveTab && updatedEl) { updatedEl.textContent = "AI 启动中…"; updatedEl.classList.add("loading"); }
+    if (tab === evolveActiveTab && updatedEl) { updatedEl.textContent = _tt("evolve.status.aiStarting"); updatedEl.classList.add("loading"); }
 
     const streamState = { blockText: "", textBlock: null, runningCards: [], stepCount: 0, currentToolGroup: null, toolGroupCounts: {}, toolGroupRunning: 0, toolGroupTotal: 0, toolGroupCollapseTimer: null, requestScope, requestCacheKey };
 
@@ -365,7 +516,7 @@
     delete evolveLoadingTabs[tab];
     _setEvolveRefreshButton();
     const updatedEl = $("#evolve-tab-updated");
-    if (updatedEl) { updatedEl.textContent = "已停止"; updatedEl.classList.remove("loading"); }
+    if (updatedEl) { updatedEl.textContent = _tt("evolve.status.stopped"); updatedEl.classList.remove("loading"); }
     const panel = _ensureTabPanel(tab);
     _renderTabPanel(tab, panel);
     updateEvolveOverviewBar();
@@ -376,7 +527,7 @@
     _evolveHideThinking(container);
     const el = document.createElement("div");
     el.className = "evolve-thinking";
-    el.innerHTML = '<span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">AI 分析生成中…</span>';
+    el.innerHTML = `<span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">${(window.esc || String)(_tt("evolve.status.aiGenerating"))}</span>`;
     container.appendChild(el);
   }
   function _evolveHideThinking(container) {
@@ -410,7 +561,7 @@
     const el = group.querySelector(".evolve-tg-summary");
     if (!el) return;
     const parts = Object.entries(state.toolGroupCounts).map(([name, count]) => `${count} ${name}`);
-    el.innerHTML = `<span class="evolve-tg-count">⚡ ${state.toolGroupTotal} tools</span> · ${parts.join(" · ")}`;
+    el.innerHTML = `<span class="evolve-tg-count">${_tt("evolve.tools.groupHeader", { n: state.toolGroupTotal })}</span> · ${parts.join(" · ")}`;
   }
 
   /** Close (collapse) the current tool group */
@@ -499,7 +650,7 @@
             }, 800);
           }
         }
-        if (isActiveTab && updatedEl) { updatedEl.textContent = `AI 执行中… (${state.stepCount} steps)`; updatedEl.classList.add("loading"); }
+        if (isActiveTab && updatedEl) { updatedEl.textContent = _tt("evolve.status.aiRunningSteps", { n: state.stepCount }); updatedEl.classList.add("loading"); }
         if (isActiveTab) _evolveAutoScroll();
         break;
       }
@@ -541,14 +692,14 @@
           const panel = _ensureTabPanel(tab);
           _renderTabPanel(tab, panel);
           updateEvolveOverviewBar();
-          if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
+          if (isActiveTab && updatedEl) { updatedEl.textContent = _tt("evolve.updated", { time: new Date().toLocaleTimeString() }); updatedEl.classList.remove("loading"); }
         }
         break;
       }
       case "done":
         _finalizeToolGroup(state);
         _evolveHideThinking(container);
-        if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
+        if (isActiveTab && updatedEl) { updatedEl.textContent = _tt("evolve.updated", { time: new Date().toLocaleTimeString() }); updatedEl.classList.remove("loading"); }
         break;
       case "error":
         _finalizeToolGroup(state);
@@ -556,7 +707,7 @@
         if (isActiveTab && updatedEl) { updatedEl.textContent = `Error: ${evt.message}`; updatedEl.classList.remove("loading"); }
         // Show error in this tab's panel
         const panel2 = _ensureTabPanel(tab);
-        if (panel2) panel2.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${esc(evt.message)}</p></div>`;
+        if (panel2) panel2.innerHTML = `<div class="evolve-empty-state"><p>${_tt("evolve.error.analyzeFailed", { error: esc(evt.message) })}</p></div>`;
         break;
     }
   }
@@ -570,13 +721,13 @@
 
     if (!isAI && panel) {
       panel.innerHTML = `<div class="evolve-skeleton"><div class="skeleton-bar"></div><div class="skeleton-bar short"></div><div class="skeleton-bar"></div><div class="skeleton-circle"></div></div>`;
-      if (tab === evolveActiveTab && updatedEl) updatedEl.textContent = "分析中…";
+      if (tab === evolveActiveTab && updatedEl) updatedEl.textContent = _tt("evolve.status.analyzing");
     }
 
     _fetchEvolveTab(tab)
       .catch(err => {
         if (err.name === "AbortError") return; // user stopped — preserve partial UI
-        if (panel) panel.innerHTML = `<div class="evolve-empty-state"><p>分析失败：${(window.esc || String)(err.message)}</p></div>`;
+        if (panel) panel.innerHTML = `<div class="evolve-empty-state"><p>${_tt("evolve.error.analyzeFailed", { error: (window.esc || String)(err.message) })}</p></div>`;
       })
       .finally(() => { delete evolveLoadingTabs[tab]; });
   }
@@ -705,7 +856,7 @@
     if (data.radar?.dimensions?.length) {
       const radarSection = document.createElement("div");
       radarSection.className = "profile-radar-section";
-      radarSection.innerHTML = `<div class="profile-section-title">能力雷达</div>`;
+      radarSection.innerHTML = `<div class="profile-section-title">${esc(_tt("evolve.profile.radarTitle"))}</div>`;
       container.appendChild(radarSection);
 
       const radarWrapper = document.createElement("div");
@@ -733,7 +884,7 @@
     }
 
     if (!categories.length && !data.radar?.dimensions?.length) {
-      container.innerHTML = '<div class="evolve-empty-state"><p>暂无用户画像数据</p></div>';
+      container.innerHTML = `<div class="evolve-empty-state"><p>${_tt("evolve.empty.profile")}</p></div>`;
     }
   }
 
@@ -833,9 +984,6 @@
             preference: "var(--accent)", workflow: "var(--bash-accent)",
             tooling: "var(--read-accent)", design: "var(--edit-accent)",
             communication: "var(--grep-accent)",
-            "偏好": "var(--accent)", "工作流": "var(--bash-accent)",
-            "工具": "var(--read-accent)", "设计": "var(--edit-accent)",
-            "沟通": "var(--grep-accent)"
         };
         const node = (data.nodes || []).find(n => n.id === card.id);
         const type = node?.type || "preference";
@@ -907,11 +1055,14 @@
         preference: "#5856d6", workflow: "#16a34a",
         tooling: "#d97706", design: "#ea580c",
         communication: "#2563eb",
-        "偏好": "#5856d6", "工作流": "#16a34a",
-        "工具": "#d97706", "设计": "#ea580c",
-        "沟通": "#2563eb"
     };
-    const typeLabels = { preference: "偏好", workflow: "工作流", tooling: "工具", design: "设计", communication: "沟通" };
+    const typeLabels = {
+        preference: _tt("evolve.graph.type.preference"),
+        workflow: _tt("evolve.graph.type.workflow"),
+        tooling: _tt("evolve.graph.type.tooling"),
+        design: _tt("evolve.graph.type.design"),
+        communication: _tt("evolve.graph.type.communication"),
+    };
     const n = nodes.length;
 
     // ── SVG + zoom layer ──
@@ -1000,7 +1151,7 @@
         // Tooltip
         const cRect = container.getBoundingClientRect();
         const type = d.type || "preference";
-        tooltip.html(`<b>${esc(d.label || d.id)}</b><br><span style="color:${typeColors[type]}">${typeLabels[type] || type}</span> · ${d.confidence || "medium"}<br>频次: ${d.frequency || 1}`)
+        tooltip.html(`<b>${esc(d.label || d.id)}</b><br><span style="color:${typeColors[type]}">${typeLabels[type] || type}</span> · ${d.confidence || "medium"}<br>${esc(_tt("evolve.field.frequency"))} ${d.frequency || 1}`)
           .style("left", (e.clientX - cRect.left + 12) + "px")
           .style("top", (e.clientY - cRect.top - 10) + "px")
           .style("opacity", 1);
@@ -1095,7 +1246,7 @@
     }
     container.innerHTML = "";
     const rules = data.rules || [];
-    if (!rules.length) { container.innerHTML = '<div class="evolve-empty-state"><p>暂无规则建议</p></div>'; return; }
+    if (!rules.length) { container.innerHTML = `<div class="evolve-empty-state"><p>${_tt("evolve.empty.rules")}</p></div>`; return; }
 
     // Top bar: category filter + copy all
     const topBar = document.createElement("div");
@@ -1112,7 +1263,7 @@
     // Copy all button
     const copyAllBtn = document.createElement("button");
     copyAllBtn.className = "rules-copy-all-btn";
-    copyAllBtn.innerHTML = '<span class="rules-copy-icon">📋</span> Copy All';
+    copyAllBtn.innerHTML = `<span class="rules-copy-icon">📋</span> ${_tt("evolve.rules.copyAll")}`;
     copyAllBtn.onclick = () => {
       const filtered = activeFilter === "all" ? rules : rules.filter(r => r.category === activeFilter);
       filtered.sort((a, b) => ({"P0":0,"P1":1,"P2":2}[a.priority]??9) - ({"P0":0,"P1":1,"P2":2}[b.priority]??9));
@@ -1123,7 +1274,7 @@
 
     function renderFilter() {
       filterBar.innerHTML = "";
-      [{ key: "all", label: "All" }, ...categories.map(c => ({ key: c, label: c }))].forEach(f => {
+      [{ key: "all", label: _tt("evolve.rules.filterAll") }, ...categories.map(c => ({ key: c, label: c }))].forEach(f => {
         const btn = document.createElement("button");
         btn.className = `scope-tab${f.key === activeFilter ? " active" : ""}`;
         btn.textContent = f.label;
@@ -1149,7 +1300,7 @@
 
         // Header: priority + category + frequency + copy button
         const evidenceHtml = (rule.evidence || []).map(e =>
-          `<div class="rule-evidence-item"><span class="rule-quote">"${esc(e.quote)}"</span>${e.session ? ` <a class="rule-session-link" href="#${e.session}">→ session</a>` : ""}</div>`
+          `<div class="rule-evidence-item"><span class="rule-quote">"${esc(e.quote)}"</span>${e.session ? ` <a class="rule-session-link" href="#${e.session}">${_tt("evolve.rules.sessionLink")}</a>` : ""}</div>`
         ).join("");
 
         const whyText = rule.why || "";
@@ -1158,11 +1309,11 @@
             <span class="rule-priority-badge">${esc(rule.priority || "P2")}</span>
             <span class="rule-category">${esc(rule.category || "")}</span>
             ${rule.frequency ? `<span class="rule-freq">${rule.frequency}x</span>` : ""}
-            <button class="rule-copy-btn" title="复制规则">📋</button>
+            <button class="rule-copy-btn" title="${esc(_tt("evolve.rules.copyTitle"))}">📋</button>
           </div>
           <div class="rule-text">${esc(rule.rule)}</div>
-          ${whyText ? `<details class="rule-why-details"><summary>Why</summary><div class="rule-why-text">${esc(whyText)}</div></details>` : ""}
-          ${evidenceHtml ? `<details class="rule-evidence"><summary>Evidence (${rule.evidence.length})</summary>${evidenceHtml}</details>` : ""}`;
+          ${whyText ? `<details class="rule-why-details"><summary>${_tt("evolve.rules.why")}</summary><div class="rule-why-text">${esc(whyText)}</div></details>` : ""}
+          ${evidenceHtml ? `<details class="rule-evidence"><summary>${_tt("evolve.rules.evidence")} (${rule.evidence.length})</summary>${evidenceHtml}</details>` : ""}`;
 
         // Bind copy button — only copy rule text
         const copyBtn = card.querySelector(".rule-copy-btn");
@@ -1227,7 +1378,7 @@
             <div class="signal-event-header">
               <span class="signal-type-badge" style="background:${typeColors[ev.type] || "#888"}">${esc(ev.type)}</span>
               <span class="signal-date">${esc(ev.date || "")}</span>
-              ${ev.session ? `<a class="rule-session-link" href="#${ev.session}">→ session</a>` : ""}
+              ${ev.session ? `<a class="rule-session-link" href="#${ev.session}">${_tt("evolve.sessionLink")}</a>` : ""}
             </div>
             <div class="signal-quote">"${esc(ev.userQuote || "")}"</div>
             ${ev.aiIssue ? `<div class="signal-issue">AI issue: ${esc(ev.aiIssue)}</div>` : ""}
@@ -1239,7 +1390,7 @@
     }
 
     if (!data.timeline?.length && !events.length) {
-      container.innerHTML = '<div class="evolve-empty-state"><p>暂无纠正记录</p></div>';
+      container.innerHTML = `<div class="evolve-empty-state"><p>${_tt("evolve.empty.signals")}</p></div>`;
     }
   }
 
@@ -1344,7 +1495,7 @@
     }
 
     if (!bubbles.length && !cards.length) {
-      container.innerHTML = '<div class="evolve-empty-state"><p>暂无重复模式</p></div>';
+      container.innerHTML = `<div class="evolve-empty-state"><p>${_tt("evolve.empty.patterns")}</p></div>`;
     }
   }
 
@@ -1428,7 +1579,7 @@
 
   function renderSyncPanel(panel, preview, initialTargets) {
     const esc = window.esc || String;
-    let html = '<div class="sync-panel-title">同步到 Claude Code</div>';
+    let html = `<div class="sync-panel-title">${esc(_tt("evolve.sync.title"))}</div>`;
 
     // Memory target
     const memData = preview.memory;
@@ -1457,8 +1608,8 @@
         <div class="sync-target-path">~/.claude/CLAUDE.md</div>
         <div class="sync-target-summary">`;
     if (hasMd) {
-      const action = mdData.status === "replace" ? "替换" : "追加";
-      html += `${action} User Profile 段落 (${mdData.categories} 分类, ${mdData.radar_dims} 雷达维度, ~${mdData.lines} 行)`;
+      const action = mdData.status === "replace" ? _tt("evolve.sync.replace") : _tt("evolve.sync.append");
+      html += _tt("evolve.sync.mdSummary", { action, categories: mdData.categories, radar_dims: mdData.radar_dims, lines: mdData.lines });
     } else {
       html += esc(mdData ? mdData.error : "No profile data");
     }
@@ -1467,8 +1618,8 @@
     // Actions
     const canSync = hasMemory || hasMd;
     html += `<div class="sync-actions">
-      <button class="btn-text" id="sync-cancel">取消</button>
-      <button class="btn-text btn-confirm" id="sync-confirm" ${canSync ? '' : 'disabled'}>确认同步</button>
+      <button class="btn-text" id="sync-cancel">${esc(_tt("evolve.sync.cancel"))}</button>
+      <button class="btn-text btn-confirm" id="sync-confirm" ${canSync ? '' : 'disabled'}>${esc(_tt("evolve.sync.confirm"))}</button>
     </div>`;
 
     panel.innerHTML = html;
@@ -1491,7 +1642,7 @@
     if (targets.length === 0) return;
 
     const confirmBtn = panel.querySelector("#sync-confirm");
-    if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = "同步中..."; }
+    if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = _tt("evolve.sync.syncing"); }
 
     fetch("/api/evolve/sync", {
       method: "POST",
@@ -1501,7 +1652,7 @@
       .then(r => r.json())
       .then(data => {
         if (data.ok) {
-          let msg = "✓ 同步完成 — ";
+          let msg = _tt("evolve.sync.done");
           const parts = [];
           if (data.memory) parts.push(`Memory: +${data.memory.created} new, ~${data.memory.updated} updated`);
           if (data.claude_md) parts.push(`CLAUDE.md: ${data.claude_md.status} (${data.claude_md.lines} lines)`);
@@ -1539,5 +1690,34 @@
   window.parseEvolveResponseExternal = function (tab, raw) {
     return parseEvolveResponse(tab, raw);
   };
+
+  // Re-render UI-shell strings on language change without interrupting a running stream.
+  let _localeListenerBound = false;
+  if (!_localeListenerBound) {
+    _localeListenerBound = true;
+    window.addEventListener("localechange", () => {
+      _registerEvolveI18n();
+      if (window.applyI18nDom) window.applyI18nDom(document);
+      // Refresh header status label for the active tab.
+      const updatedEl = $("#evolve-tab-updated");
+      if (updatedEl && evolveLoadingTabs[evolveActiveTab]) {
+        updatedEl.textContent = _tt("evolve.status.aiRunning");
+      } else if (updatedEl) {
+        const cached = getCachedTab(evolveActiveTab);
+        updatedEl.textContent = cached ? _tt("evolve.updated", { time: timeAgo(cached.updatedAt) }) : _tt("evolve.status.never");
+      }
+      // Re-render overview bar (tab labels, last scan)
+      updateEvolveOverviewBar();
+      // If a tab is mid-stream, don't restart it — only the static DOM labels above refresh.
+      if (!evolveStreamAborts[evolveActiveTab]) {
+        const panel = document.querySelector(`.evolve-tab-panel[data-tab="${evolveActiveTab}"]`);
+        if (panel) _renderTabPanel(evolveActiveTab, panel);
+      }
+    });
+  }
+
+  // app.js runs its first applyI18nDom before this module loads, so refresh once after registering.
+  _registerEvolveI18n();
+  if (window.applyI18nDom) window.applyI18nDom(document);
 
 })();

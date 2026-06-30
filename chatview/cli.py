@@ -123,6 +123,7 @@ Examples:
     sub.add_parser("twin-write", help="Write/update/delete cognitive handbook entries from JSON stdin")
     p_tcomp = sub.add_parser("twin-compile", help="Compile Runtime Pack from cards + traits")
     p_tcomp.add_argument("--run-id", default="", help="Compile only artifacts from this Twin analysis run")
+    p_tcomp.add_argument("--lang", default="zh", help="Output language: zh or en (default: zh)")
     sub.add_parser("twin-candidates", help="Validate candidate Twin operations without writing")
 
     # CRUD tools
