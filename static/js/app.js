@@ -145,6 +145,21 @@ function bindWelcomeCards() {
   });
 }
 
+// Render welcome hint with kbd tags and i18n params
+function renderWelcomeHint() {
+  const hint = $("#welcome-hint");
+  if (!hint) return;
+  const keys = ["/", "j", "k", "?"];
+  // 不传位置参数：t() 会把 {0}/{1} 直接替换成字面字符，导致下面 split 占位符失效。
+  // 这里保留原始 {0}~{3} 占位符，再自行 split 注入 <kbd> 标签。
+  const parts = t("welcome.hint").split(/(\{\d+\})/g);
+  hint.innerHTML = parts.map(part => {
+    const m = part.match(/^\{(\d+)\}$/);
+    if (m) return `<kbd>${keys[parseInt(m[1])] || ""}</kbd>`;
+    return esc(part);
+  }).join("");
+}
+
 // ── Event Bindings ─────────────────────────────────────────────
 function bindEvents() {
   // Filter button + popover
@@ -186,6 +201,8 @@ function bindEvents() {
     globalEngineSelect.value = state.globalScopeEngine;
     globalEngineSelect.addEventListener("change", () => {
       state.globalScopeEngine = globalEngineSelect.value;
+      // 持久化引擎选择，刷新后保持
+      localStorage.setItem("chatview-engine", state.globalScopeEngine);
       // Sync with AI page scope bar selector if it exists
       const scopeEngine = $("#ai-scope-engine");
       if (scopeEngine) scopeEngine.value = state.globalScopeEngine;
@@ -215,12 +232,16 @@ function bindEvents() {
         // Re-render welcome stats (pass both sessions and projects)
         const projects = state.allSessions ? [...new Set(state.allSessions.map(s => s.project).filter(Boolean))] : [];
         updateWelcomeStats(state.allSessions, projects);
+        // Re-render welcome hint (kbd tags + params)
+        renderWelcomeHint();
       });
     });
   }
 
   // Apply saved language on load
   applyLang();
+  // Render welcome hint with kbd tags on initial load
+  renderWelcomeHint();
 
   // Global search
   dom.searchInput.addEventListener("input", () => {
@@ -499,9 +520,14 @@ async function detectEngines() {
         opt.textContent = eng.charAt(0).toUpperCase() + eng.slice(1);
         sel.appendChild(opt);
       }
-      // Default to first available (claude preferred)
+      // 优先恢复用户上次保存的引擎选择（若仍可用），否则用第一个（claude 优先）
       if (state.availableEngines.length > 0) {
-        state.globalScopeEngine = state.availableEngines[0];
+        const saved = localStorage.getItem("chatview-engine");
+        if (saved && state.availableEngines.includes(saved)) {
+          state.globalScopeEngine = saved;
+        } else if (!state.availableEngines.includes(state.globalScopeEngine)) {
+          state.globalScopeEngine = state.availableEngines[0];
+        }
         sel.value = state.globalScopeEngine;
       }
       // If only one engine, disable the selector

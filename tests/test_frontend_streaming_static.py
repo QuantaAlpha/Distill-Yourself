@@ -13,15 +13,18 @@ def read_static(path):
 
 class TestFrontendStreamingStatic(unittest.TestCase):
     def test_shared_sse_reader_flushes_tail_buffer(self):
-        script = read_static("app.js")
+        # The shared SSE reader lives in static/js/utils.js; app.js exposes it
+        # on window for the non-module root scripts (evolve.js / twin.js).
+        reader = read_static("js/utils.js")
+        app = read_static("js/app.js")
 
-        self.assertIn("async function readSseStream", script)
-        self.assertIn("flush(true)", script)
-        self.assertIn("buffer += decoder.decode()", script)
-        self.assertIn("window.readSseStream = readSseStream", script)
-        reader_body = script[
-            script.index("async function readSseStream"):
-            script.index("// ── View Switching", script.index("async function readSseStream"))
+        self.assertIn("async function readSseStream", reader)
+        self.assertIn("flush(true)", reader)
+        self.assertIn("buffer += decoder.decode()", reader)
+        self.assertIn("window.readSseStream = readSseStream", app)
+        reader_body = reader[
+            reader.index("async function readSseStream"):
+            reader.index("// ── Textarea auto-resize", reader.index("async function readSseStream"))
         ]
         self.assertNotRegex(reader_body, re.compile(r"if\s*\(\s*done\s*\)\s*return\s*;"))
 

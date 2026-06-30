@@ -216,7 +216,15 @@ const I18N = {
   },
 };
 
-let _lang = localStorage.getItem('chatview-lang') || 'zh';
+// 默认语言：localStorage > 系统语言（navigator.language）> zh
+function _detectDefaultLang() {
+  const saved = localStorage.getItem('chatview-lang');
+  if (saved === 'zh' || saved === 'en') return saved;
+  const sys = (navigator.language || navigator.userLanguage || '').toLowerCase();
+  return sys.startsWith('zh') ? 'zh' : (sys ? 'en' : 'zh');
+}
+
+let _lang = _detectDefaultLang();
 
 /**
  * Translate a key, with optional positional args: t('key', arg0, arg1)
@@ -276,5 +284,6 @@ export function registerI18n(extra) {
 
 // ── Expose for non-module scripts (twin.js / evolve.js) ──────────
 window.t = t;
+window.getLang = getLang;
 window.registerI18n = registerI18n;
 window.applyI18nDom = applyLang;

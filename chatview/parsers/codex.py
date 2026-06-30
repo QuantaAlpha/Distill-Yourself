@@ -9,11 +9,7 @@ import re
 from pathlib import Path
 
 from chatview.parsers.claude import _truncate_tool_output, _strip_tags
-
-
-# ---------------------------------------------------------------------------
-# Constants (mirrored from server.py config)
-# ---------------------------------------------------------------------------
+from chatview.utils.text import normalize_error as _normalize_error
 CODEX_DIR = Path.home() / ".codex"
 CODEX_SESSIONS_DIR = CODEX_DIR / "sessions"
 CODEX_ARCHIVED_DIR = CODEX_DIR / "archived_sessions"
@@ -72,18 +68,6 @@ def _apply_patch_summary(patch_text: str) -> str:
         if m:
             return m.group(1).strip()
     return ""
-
-
-def _normalize_error(msg: str) -> str:
-    """Normalize error message for grouping: strip paths, numbers, hashes."""
-    s = msg.strip()
-    # Remove file paths
-    s = re.sub(r'(/[^\s:]+)', '<path>', s)
-    # Remove line numbers
-    s = re.sub(r'line \d+', 'line N', s, flags=re.IGNORECASE)
-    # Remove hex addresses
-    s = re.sub(r'0x[0-9a-f]+', '0xN', s, flags=re.IGNORECASE)
-    return s[:150]
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +179,24 @@ def extract_codex_metadata(filepath: str):
                         if day:
                             key = (day, tool_name)
                             _tool_daily[key] = _tool_daily.get(key, 0) + 1
-                        args_str = payload.get("arguments", "{}")
-                        try:
-                            args = json.loads(args_str) if isinstance(args_str, str) else {}
-                        except json.JSONDecodeError:
-                            args = {}
-                        fp = args.get("file_path") or args.get("path") or ""
+                        fp = ""
+                        if p_type == "function_call":
+                            args_str = payload.get("arguments", "{}")
+                            try:
+                                args = json.loads(args_str) if isinstance(args_str, str) else {}
+                            except json.JSONDecodeError:
+                                args = {}
+                            fp = args.get("file_path") or args.get("path") or ""
+                        else: # custom_tool_call
+                            input_str = payload.get("input", "")
+                            if raw_name == "apply_patch":
+                                fp = _apply_patch_summary(input_str)
+                            else:
+                                try:
+                                    args = json.loads(input_str) if isinstance(input_str, str) else {}
+                                    fp = args.get("file_path") or args.get("path") or ""
+                                except json.JSONDecodeError:
+                                    fp = ""
                         if fp and not fp.startswith("/tmp"):
                             _file_refs[fp] = _file_refs.get(fp, 0) + 1
                         msg_index += 1
@@ -346,8 +342,8 @@ def load_codex_session(session_id: str, index: dict, index_lock):
                     # Truncate large values
                     inp_display = {}
                     for k, v in inp.items():
-                        if isinstance(v, str) and len(v) > 2000:
-                            inp_display[k] = v[:2000] + "…[truncated]"
+                        if isinstance(v, str) and len(v) > 500:
+                            inp_display[k] = v[:500] + "…[truncated]"
                         else:
                             inp_display[k] = v
                     messages.append({

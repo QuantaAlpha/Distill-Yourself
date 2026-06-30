@@ -13,7 +13,19 @@ import {
   appendChatMsg, createAssistantTurn, sendChatStream,
   _appendContinueButton,
 } from './chat.js';
-import { t, getLang } from './lang.js';
+import { t, registerI18n, getLang } from './lang.js';
+
+// ── i18n dictionary ──────────────────────────────────────────────
+registerI18n({
+  zh: {
+    'sessionAi.stop': '■ 停止',
+    'sessionAi.send': '发送',
+  },
+  en: {
+    'sessionAi.stop': '■ Stop',
+    'sessionAi.send': 'Send',
+  },
+});
 
 // Forward-import saveChatToStorage lazily to avoid circular deps with evolve-page.js
 // (both session-ai and evolve-page use saveChatToStorage, which lives in evolve-page).
@@ -83,7 +95,7 @@ export function submitSessionAi(prompt) {
   _setSessionAiButton(true);
   const assistantTurn = state.currentSessionId === targetSessionId
     ? createAssistantTurn(container) : null;
-  const handle = sendChatStream(text, "session", targetSessionId, { lang: getLang() }, cache.messages.slice(0, -1));
+  const handle = sendChatStream(text, "session", targetSessionId, { lang: getLang(), engine: state.globalScopeEngine }, cache.messages.slice(0, -1));
   state.sessionAiHandle = handle;
   handle
     .onText(chunk => {
@@ -142,8 +154,8 @@ export function submitSessionAi(prompt) {
 export function _setSessionAiButton(loading) {
   const btn = $("#session-ai-send");
   if (!btn) return;
-  if (loading) { btn.textContent = "■ Stop"; btn.classList.add("btn-stop"); }
-  else { btn.textContent = "Send"; btn.classList.remove("btn-stop"); }
+  if (loading) { btn.textContent = t('sessionAi.stop'); btn.classList.add("btn-stop"); }
+  else { btn.textContent = t('sessionAi.send'); btn.classList.remove("btn-stop"); }
 }
 
 export function _stopSessionAi() {
@@ -153,3 +165,8 @@ export function _stopSessionAi() {
   state.sessionAiLoading = false;
   _setSessionAiButton(false);
 }
+
+// ── Re-render button on locale change ────────────────────────────
+window.addEventListener('localechange', () => {
+  _setSessionAiButton(state.sessionAiLoading);
+});

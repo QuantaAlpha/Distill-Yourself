@@ -8,7 +8,35 @@
 import { state } from './state.js';
 import { $, dom } from './dom.js';
 import { esc, formatDate } from './utils.js';
-import { t } from './lang.js';
+import { t, registerI18n } from './lang.js';
+
+// ── i18n dictionary ──────────────────────────────────────────────
+registerI18n({
+  zh: {
+    'sessions.allProjects': '全部项目',
+    'sessions.source.all': '全部',
+    'sessions.source.claude': 'Claude',
+    'sessions.source.codex': 'Codex',
+    'sessions.date.all': '全部',
+    'sessions.date.week': '本周',
+    'sessions.date.month': '本月',
+    'sessions.date.3months': '3 个月',
+    'sessions.loadMore': '+ {n} 更多会话',
+    'sessions.msgs': '条消息',
+  },
+  en: {
+    'sessions.allProjects': 'All Projects',
+    'sessions.source.all': 'All',
+    'sessions.source.claude': 'Claude',
+    'sessions.source.codex': 'Codex',
+    'sessions.date.all': 'All',
+    'sessions.date.week': 'This Week',
+    'sessions.date.month': 'This Month',
+    'sessions.date.3months': '3 Months',
+    'sessions.loadMore': '+ {n} more sessions',
+    'sessions.msgs': 'msgs',
+  },
+});
 
 // ── Late-bound references to functions in other modules ──────────
 // These are set by the main module via registerSessionDeps() to avoid
@@ -54,7 +82,7 @@ export function renderProjects(projects) {
   // "All Projects" option
   const allItem = document.createElement("div");
   allItem.className = "proj-item proj-all";
-  allItem.textContent = "All Projects";
+  allItem.textContent = t("sessions.allProjects");
   allItem.addEventListener("click", () => selectProject(null));
   dom.projectDropdown.appendChild(allItem);
 
@@ -97,7 +125,7 @@ export function selectProject(name) {
 
 export function updateProjectTrigger() {
   const textEl = document.getElementById("project-trigger-text");
-  if (textEl) textEl.textContent = state.currentProject || "All Projects";
+  if (textEl) textEl.textContent = state.currentProject || t("sessions.allProjects");
 }
 
 // ── Session Filtering ────────────────────────────────────────────
@@ -112,9 +140,9 @@ export function updateFilterChips() {
   const clearBtn = $("#filter-clear");
   if (!container) return;
   const chips = [];
-  if (state.currentSourceFilter !== "all") chips.push(state.currentSourceFilter.charAt(0).toUpperCase() + state.currentSourceFilter.slice(1));
+  if (state.currentSourceFilter !== "all") chips.push(t("sessions.source." + state.currentSourceFilter.charAt(0).toUpperCase() + state.currentSourceFilter.slice(1)) || state.currentSourceFilter.charAt(0).toUpperCase() + state.currentSourceFilter.slice(1));
   if (state.currentDateFilter !== "all") {
-    const labels = { "week": "This Week", "month": "This Month", "3months": "3 Months" };
+    const labels = { "week": t("sessions.date.week"), "month": t("sessions.date.month"), "3months": t("sessions.date.3months") };
     chips.push(labels[state.currentDateFilter] || state.currentDateFilter);
   }
   if (state.currentProject) chips.push(state.currentProject.split("/").pop());
@@ -145,7 +173,7 @@ export function renderSessions(sessions) {
     if (s.id === state.currentSessionId) li.classList.add("active");
     const dateStr = s.date ? formatDate(s.date) : "";
     const srcBadge = s.source === "codex" ? '<span class="src-badge codex">Codex</span>' : '';
-    const msgCount = s.userMessageCount ? `<span class="msg-count">${s.userMessageCount} msgs</span>` : '';
+    const msgCount = s.userMessageCount ? `<span class="msg-count">${s.userMessageCount} ${t("sessions.msgs")}</span>` : '';
     li.innerHTML = `
       <div class="session-title">${esc(s.title)}</div>
       <div class="session-meta">
@@ -165,7 +193,7 @@ export function renderSessions(sessions) {
   if (filtered.length > RENDER_BATCH) {
     const sentinel = document.createElement("li");
     sentinel.className = "load-more-sentinel";
-    sentinel.textContent = `+ ${filtered.length - RENDER_BATCH} more sessions`;
+    sentinel.textContent = t("sessions.loadMore", { n: filtered.length - RENDER_BATCH });
     sentinel.style.cssText = "text-align:center;color:var(--text-muted);font-size:12px;padding:12px;cursor:pointer";
     dom.sessionList.appendChild(sentinel);
 
@@ -175,7 +203,7 @@ export function renderSessions(sessions) {
       nextBatch.forEach(s => dom.sessionList.appendChild(renderItem(s)));
       renderedCount += nextBatch.length;
       if (renderedCount < filtered.length) {
-        sentinel.textContent = `+ ${filtered.length - renderedCount} more sessions`;
+        sentinel.textContent = t("sessions.loadMore", { n: filtered.length - renderedCount });
         dom.sessionList.appendChild(sentinel);
       }
     };
@@ -205,9 +233,9 @@ export function renderSourceFilters() {
   if (!container) return;
   container.innerHTML = '';
   const filters = [
-    { key: 'all', label: 'All' },
-    { key: 'claude', label: 'Claude' },
-    { key: 'codex', label: 'Codex' },
+    { key: 'all', label: t("sessions.source.all") },
+    { key: 'claude', label: t("sessions.source.claude") },
+    { key: 'codex', label: t("sessions.source.codex") },
   ];
   filters.forEach(f => {
     const btn = document.createElement('button');
@@ -231,10 +259,10 @@ export function renderDateFilters() {
   if (!df) return;
   df.innerHTML = '';
   const filters = [
-    { key: 'all', label: 'All' },
-    { key: 'week', label: 'This Week' },
-    { key: 'month', label: 'This Month' },
-    { key: '3months', label: '3 Months' },
+    { key: 'all', label: t('sessions.date.all') },
+    { key: 'week', label: t('sessions.date.week') },
+    { key: 'month', label: t('sessions.date.month') },
+    { key: '3months', label: t('sessions.date.3months') },
   ];
   filters.forEach(f => {
     const btn = document.createElement('button');

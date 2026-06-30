@@ -218,11 +218,14 @@
     const selectedAvatarPath = manualOption ? manualOption.image : null;
 
     if (sel && sel.persona_id) {
-      titleEl.textContent = sel.persona_title || sel.model_name || _tt("twin.persona.model");
+      const displayTitle = sel.persona_title || sel.model_name || _tt("twin.persona.model");
+      titleEl.textContent = displayTitle;
       subtitleEl.textContent = sel.rationale || "";
       if (imgEl) {
         imgEl.src = selectedAvatarPath || personaAvatarPath(sel.persona_id);
-        imgEl.alt = manualOption ? `${manualOption.personaName} ${manualOption.styleName}` : (sel.persona_title || sel.model_name || "");
+        const styleLabel = manualOption ? _styleName(manualOption.avatarId) : "";
+        const personaLabel = manualOption ? _personaName(manualOption.personaId) : displayTitle;
+        imgEl.alt = manualOption ? `${personaLabel} ${styleLabel}` : displayTitle;
       }
       cachedAvatarSelection = sel;
       renderPersonaOptions(sel, manualOption ? manualOption.avatarId : "");
@@ -231,11 +234,18 @@
 
     titleEl.textContent = _tt("twin.persona.model");
     subtitleEl.textContent = traits && traits.length ? _tt("twin.persona.matching") : _tt("twin.trait.waiting");
-    if (imgEl) { imgEl.src = selectedAvatarPath || defaultAvatar; imgEl.alt = manualOption ? `${manualOption.personaName} ${manualOption.styleName}` : ""; }
+    if (imgEl) {
+      imgEl.src = selectedAvatarPath || defaultAvatar;
+      if (manualOption) {
+        imgEl.alt = `${_personaName(manualOption.personaId)} ${_styleName(manualOption.avatarId)}`;
+      } else {
+        imgEl.alt = "";
+      }
+    }
     renderPersonaOptions(sel, manualOption ? manualOption.avatarId : "");
 
     if (traits && traits.length) {
-      fetch("/api/twin/avatar-selection")
+      fetch(`/api/twin/avatar-selection?lang=${encodeURIComponent(_getLang())}`)
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (data && data.persona_id) {
@@ -273,15 +283,16 @@
         </div>
         <div class="twin-persona-option-grid">
           ${groupAvatarOptions().map(group => `<section class="twin-persona-group" data-persona-id="${esc(group.personaId)}">
-            <div class="twin-persona-group-title">${esc(group.personaName)}</div>
+            <div class="twin-persona-group-title">${esc(_personaName(group.personaId))}</div>
             <div class="twin-persona-style-options">
               ${group.options.map(option => {
                 const active = option.avatarId === activeAvatarId ? " active" : "";
                 const styleLabel = _styleName(option.avatarId);
+                const personaLabel = _personaName(option.personaId);
                 const aiMatched = option.avatarId === aiAvatarId ? `<span class="twin-persona-badge">${esc(_tt("twin.persona.badgeAi"))}</span>` : "";
                 const selected = option.avatarId === manualAvatarId ? `<span class="twin-persona-badge selected">${esc(_tt("twin.persona.badgeSelected"))}</span>` : "";
                 return `<button type="button" class="twin-persona-option${active}" data-avatar-id="${esc(option.avatarId)}">
-                  <img src="${esc(option.image)}" alt="${esc(option.personaName)} ${esc(styleLabel)}">
+                  <img src="${esc(option.image)}" alt="${esc(personaLabel)} ${esc(styleLabel)}">
                   <span class="twin-persona-option-persona">${esc(styleLabel)}</span>
                   ${selected || aiMatched}
                 </button>`;
@@ -353,13 +364,157 @@
     return d.innerHTML;
   };
 
-  // ── i18n (UI shell only; persona/avatar/AI data never translated) ──
+  // ── i18n (UI shell + persona/cognitive model names) ──
   let _i18nRegistered = false;
   function _registerTwinI18n() {
     if (_i18nRegistered || !window.registerI18n) return;
     _i18nRegistered = true;
+    const zhModel = {
+      "twin.model.cm_001": "问题定界者",
+      "twin.model.cm_002": "本质追问者",
+      "twin.model.cm_003": "隐含前提拆解者",
+      "twin.model.cm_004": "语境敏感者",
+      "twin.model.cm_005": "边界敏感者",
+      "twin.model.cm_006": "问题重构者",
+      "twin.model.cm_007": "因果追踪者",
+      "twin.model.cm_008": "第一性原理者",
+      "twin.model.cm_009": "结构推演者",
+      "twin.model.cm_010": "模式归纳者",
+      "twin.model.cm_011": "类比迁移者",
+      "twin.model.cm_012": "约束反推者",
+      "twin.model.cm_013": "稳妥决策者",
+      "twin.model.cm_014": "风险收敛者",
+      "twin.model.cm_015": "证据锚定者",
+      "twin.model.cm_016": "最小代价选择者",
+      "twin.model.cm_017": "长期权衡者",
+      "twin.model.cm_018": "可逆试错者",
+      "twin.model.cm_019": "复杂度克制者",
+      "twin.model.cm_020": "本质极简者",
+      "twin.model.cm_021": "冗余厌恶者",
+      "twin.model.cm_022": "秩序建立者",
+      "twin.model.cm_023": "结构收束者",
+      "twin.model.cm_024": "依赖敏感者",
+      "twin.model.cm_025": "可控性优先者",
+      "twin.model.cm_026": "验证闭环者",
+      "twin.model.cm_027": "异常预判者",
+      "twin.model.cm_028": "失控厌恶者",
+      "twin.model.cm_029": "后果敏感者",
+      "twin.model.cm_030": "失败预演者",
+      "twin.model.cm_031": "小步推进者",
+      "twin.model.cm_032": "稳态执行者",
+      "twin.model.cm_033": "闭环完成者",
+      "twin.model.cm_034": "路径校准者",
+      "twin.model.cm_035": "目标反推者",
+      "twin.model.cm_036": "实用落地者",
+      "twin.model.cm_037": "噪声过滤者",
+      "twin.model.cm_038": "信息压缩者",
+      "twin.model.cm_039": "信号捕捉者",
+      "twin.model.cm_040": "细节校准者",
+      "twin.model.cm_041": "重点提炼者",
+      "twin.model.cm_042": "脉络梳理者",
+      "twin.model.cm_043": "实质锚定者",
+      "twin.model.cm_044": "克制表达者",
+      "twin.model.cm_045": "清晰度维护者",
+      "twin.model.cm_046": "语言密度追求者",
+      "twin.model.cm_047": "结构表达者",
+      "twin.model.cm_048": "质感表达者",
+    };
+    const enModel = {
+      "twin.model.cm_001": "Problem Framer",
+      "twin.model.cm_002": "First-Principle Inquirer",
+      "twin.model.cm_003": "Hidden-Assumption Deconstructor",
+      "twin.model.cm_004": "Context-Sensitive Thinker",
+      "twin.model.cm_005": "Boundary Sentinel",
+      "twin.model.cm_006": "Problem Reframer",
+      "twin.model.cm_007": "Causality Tracker",
+      "twin.model.cm_008": "First-Principles Reasoner",
+      "twin.model.cm_009": "Structural Deductionist",
+      "twin.model.cm_010": "Pattern Synthesizer",
+      "twin.model.cm_011": "Analogical Transferrer",
+      "twin.model.cm_012": "Constraint-Driven Reasoner",
+      "twin.model.cm_013": "Prudent Decision-Maker",
+      "twin.model.cm_014": "Risk Mitigator",
+      "twin.model.cm_015": "Evidence Anchorer",
+      "twin.model.cm_016": "Minimal-Cost Chooser",
+      "twin.model.cm_017": "Long-Horizon Tradeoff Analyst",
+      "twin.model.cm_018": "Reversible Experimenter",
+      "twin.model.cm_019": "Complexity Restrainer",
+      "twin.model.cm_020": "Essential Minimalist",
+      "twin.model.cm_021": "Redundancy Eliminator",
+      "twin.model.cm_022": "Order Architect",
+      "twin.model.cm_023": "Structure Consolidator",
+      "twin.model.cm_024": "Dependency Sensitizer",
+      "twin.model.cm_025": "Contingency Prioritizer",
+      "twin.model.cm_026": "Verification Closer",
+      "twin.model.cm_027": "Anomaly Anticipator",
+      "twin.model.cm_028": "Chaos Averse Operator",
+      "twin.model.cm_029": "Consequence-Weighted Thinker",
+      "twin.model.cm_030": "Failure Previsualizer",
+      "twin.model.cm_031": "Incremental Pacer",
+      "twin.model.cm_032": "Steady-State Executor",
+      "twin.model.cm_033": "Loop-Close Finisher",
+      "twin.model.cm_034": "Path Calibrator",
+      "twin.model.cm_035": "Goal-Backed Planner",
+      "twin.model.cm_036": "Pragmatic Implementer",
+      "twin.model.cm_037": "Noise Filter",
+      "twin.model.cm_038": "Information Compressor",
+      "twin.model.cm_039": "Signal Detector",
+      "twin.model.cm_040": "Detail Calibrator",
+      "twin.model.cm_041": "Key Point Distiller",
+      "twin.model.cm_042": "Thread Unweaver",
+      "twin.model.cm_043": "Substance Anchorer",
+      "twin.model.cm_044": "Restrained Expressor",
+      "twin.model.cm_045": "Clarity Guardian",
+      "twin.model.cm_046": "Density Seeker",
+      "twin.model.cm_047": "Structural Communicator",
+      "twin.model.cm_048": "Texture Crafted Expressor",
+    };
+    const zhPersona = {
+      "twin.persona.P01": "深度研究者",
+      "twin.persona.P02": "反馈迭代者",
+      "twin.persona.P03": "系统架构者",
+      "twin.persona.P04": "怀疑型调试者",
+      "twin.persona.P05": "极简决策者",
+      "twin.persona.P06": "混沌创意建造者",
+      "twin.persona.P07": "审美策展者",
+      "twin.persona.P08": "证据分析者",
+      "twin.persona.P09": "人本协调者",
+      "twin.persona.P10": "共识翻译者",
+      "twin.persona.P11": "AI 编排者",
+      "twin.persona.P12": "探索战略者",
+      "twin.persona.P13": "可靠运营者",
+      "twin.persona.P14": "安静工程师",
+      "twin.persona.P15": "反常识重构者",
+      "twin.persona.P16": "语气校准者",
+    };
+    const enPersona = {
+      "twin.persona.P01": "Deep Researcher",
+      "twin.persona.P02": "Feedback Iterator",
+      "twin.persona.P03": "Systems Architect",
+      "twin.persona.P04": "Skeptical Debugger",
+      "twin.persona.P05": "Minimal Decision-Maker",
+      "twin.persona.P06": "Chaotic Creative Maker",
+      "twin.persona.P07": "Taste Curator",
+      "twin.persona.P08": "Evidence Analyst",
+      "twin.persona.P09": "Human-Centered Facilitator",
+      "twin.persona.P10": "Consensus Translator",
+      "twin.persona.P11": "AI Orchestrator",
+      "twin.persona.P12": "Explorer Strategist",
+      "twin.persona.P13": "Reliable Operator",
+      "twin.persona.P14": "Quiet Engineer",
+      "twin.persona.P15": "Contrarian Reframer",
+      "twin.persona.P16": "Tone Calibrator",
+    };
+    const zhStyle = {
+      "twin.style.A": "风格 A",
+      "twin.style.B": "风格 B",
+    };
+    const enStyle = {
+      "twin.style.A": "Style A",
+      "twin.style.B": "Style B",
+    };
     window.registerI18n({
-      zh: {
+      zh: Object.assign({
         "twin.trait.waiting": "等待分析",
         "twin.trait.fallback": "认知特质",
         "twin.persona.model": "认知模型",
@@ -425,6 +580,7 @@
         "twin.persona.waitTitle": "等待认知模型",
         "twin.persona.waitSubtitle": "点击 Analyze 后匹配认知模型",
         "twin.persona.changeAvatar": "更换头像 →",
+        "twin.persona.selectLabel": "选择",
         "twin.node.runtime": "📦 Runtime",
         "twin.stage.events.title": "证据事件",
         "twin.stage.events.cta": "浏览全部 →",
@@ -477,8 +633,8 @@
         "twin.runtime.sectionOverview": "概览",
         "twin.runtime.section": "第 {n} 节",
         "twin.runtime.sourceCounts": "Runtime Pack 来源数量",
-      },
-      en: {
+      }, zhModel, zhPersona, zhStyle),
+      en: Object.assign({
         "twin.trait.waiting": "Awaiting analysis",
         "twin.trait.fallback": "Cognitive trait",
         "twin.persona.model": "Cognitive Model",
@@ -544,6 +700,7 @@
         "twin.persona.waitTitle": "Awaiting cognitive model",
         "twin.persona.waitSubtitle": "Click Analyze to match a cognitive model",
         "twin.persona.changeAvatar": "Change avatar →",
+        "twin.persona.selectLabel": "Select",
         "twin.node.runtime": "📦 Runtime",
         "twin.stage.events.title": "Evidence Events",
         "twin.stage.events.cta": "Browse all →",
@@ -596,7 +753,7 @@
         "twin.runtime.sectionOverview": "Overview",
         "twin.runtime.section": "Section {n}",
         "twin.runtime.sourceCounts": "Runtime Pack source counts",
-      },
+      }, enModel, enPersona, enStyle),
     });
   }
 
@@ -604,8 +761,44 @@
     return window.t ? window.t(key, vars) : key;
   }
 
+  function _getLang() {
+    return (window.getLang && window.getLang()) || "zh";
+  }
+
+  function _getEngine() {
+    // 优先级：全局共享 scope（state.globalScopeEngine）> DOM select > localStorage > auto。
+    // 仅读 DOM select 在 select 尚未填充或被折叠时会丢失用户选择，故先走共享状态。
+    try {
+      if (typeof window.getEvolveScope === "function") {
+        const eng = (window.getEvolveScope() || {}).engine;
+        if (eng) return eng;
+      }
+    } catch (e) { /* ignore */ }
+    const sel = document.getElementById("global-engine-select");
+    if (sel && sel.value) return sel.value;
+    try {
+      const stored = localStorage.getItem("chatview-engine");
+      if (stored) return stored;
+    } catch (e) { /* ignore */ }
+    return "auto";
+  }
+
   function _styleName(avatarId) {
-    return _tt((avatarId || "").endsWith("-B") ? "twin.persona.styleB" : "twin.persona.styleA");
+    return _tt((avatarId || "").endsWith("-B") ? "twin.style.B" : "twin.style.A");
+  }
+
+  function _modelName(modelId) {
+    return _tt("twin.model." + (modelId || ""));
+  }
+
+  function _personaName(personaId) {
+    return _tt("twin.persona." + (personaId || ""));
+  }
+
+  /** Apply twin-specific CSS variables that depend on locale (e.g. ::after content labels). */
+  function _applyTwinCssVars() {
+    const root = document.documentElement;
+    root.style.setProperty("--twin-select-label", `"${_tt("twin.persona.selectLabel")}"`);
   }
 
   // ── Enum localization (DB values are fixed tokens; display only) ──
@@ -638,14 +831,21 @@
   } catch (e) {}
 
   function _withRunId(url) {
-    if (!_activeRunId) return url;
-    const sep = url.includes("?") ? "&" : "?";
-    return url + sep + "run_id=" + encodeURIComponent(_activeRunId);
+    let u = url;
+    if (_activeRunId) {
+      const sep = u.includes("?") ? "&" : "?";
+      u += sep + "run_id=" + encodeURIComponent(_activeRunId);
+    }
+    const lang = _getLang();
+    const sep = u.includes("?") ? "&" : "?";
+    u += sep + "lang=" + encodeURIComponent(lang);
+    return u;
   }
 
   // ── Init ──
   window.initTwinView = function () {
     _registerTwinI18n();
+    _applyTwinCssVars();
     if (!eventsInited) { bindEvents(); eventsInited = true; }
     if (currentView === "analyzing") {
       _showOnlyView("analysis");
@@ -657,7 +857,7 @@
       fetch("/api/twin/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ lang: _getLang() }),
       })
         .then(r => r.json())
         .then((d) => {
@@ -680,6 +880,7 @@
     _localeListenerBound = true;
     window.addEventListener("localechange", () => {
       _registerTwinI18n();
+      _applyTwinCssVars();
       if (window.applyI18nDom) window.applyI18nDom(document);
       if (analysisRunning) {
         // Analysis in progress: only refresh shell labels, don't restart the stream.
@@ -769,7 +970,7 @@
       fetch("/api/twin/cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run_id: _activeRunId }),
+        body: JSON.stringify({ run_id: _activeRunId, lang: _getLang() }),
       }).catch(() => {});
     }
     // Don't null analysisAbort here — let .catch/.finally do cleanup
@@ -1188,7 +1389,7 @@
   // ── Card Detail ──
   function loadCardDetail(cardId) {
     _reloadCurrentView = () => loadCardDetail(cardId);
-    fetch(`/api/twin/card/${cardId}`)
+    fetch(`/api/twin/card/${cardId}?lang=${encodeURIComponent(_getLang())}`)
       .then(r => r.json())
       .then(data => renderCardDetail(data))
       .catch(e => console.error("Failed to load card detail:", e));
@@ -1326,7 +1527,7 @@
   // ── Trait Detail ──
   function loadTraitDetail(traitId) {
     _reloadCurrentView = () => loadTraitDetail(traitId);
-    fetch(`/api/twin/trait/${traitId}`)
+    fetch(`/api/twin/trait/${traitId}?lang=${encodeURIComponent(_getLang())}`)
       .then(r => r.json())
       .then(data => renderTraitDetail(data))
       .catch(e => console.error("Failed to load trait detail:", e));
@@ -1430,7 +1631,12 @@
     const abortCtrl = new AbortController();
     analysisAbort = abortCtrl;
 
-    fetch("/api/twin/analyze", { method: "POST", signal: abortCtrl.signal })
+    fetch("/api/twin/analyze", {
+      method: "POST",
+      signal: abortCtrl.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lang: _getLang(), engine: _getEngine() }),
+    })
       .then((response) => window.readSseStream(response, evt => _handleStreamEvent(evt, streamState)))
       .then(() => _finishAnalysis(streamState, streamState.failed))
       .catch((e) => {
@@ -1864,20 +2070,24 @@
   // ── Sync ──
   function startSync() {
     if (!confirm(_tt("twin.sync.confirm"))) return;
+    const body = _activeRunId ? { run_id: _activeRunId } : {};
+    body.lang = _getLang();
     fetch("/api/twin/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(_activeRunId ? { run_id: _activeRunId } : {}),
+      body: JSON.stringify(body),
     })
       .then((r) => r.json())
       .then((data) => {
         if (data.ok) {
-          alert(_tt("twin.sync.success", { cards: data.cards_synced || 0, traits: data.traits_synced || 0 }));
+          if (window.showToast) window.showToast.success(_tt("twin.sync.success", { cards: data.cards_synced || 0, traits: data.traits_synced || 0 }));
         } else {
-          alert(_tt("twin.sync.failed", { error: data.error || "unknown" }));
+          if (window.showToast) window.showToast.error(_tt("twin.sync.failed", { error: data.error || "unknown" }));
         }
       })
-      .catch((e) => alert(_tt("twin.sync.failed", { error: e })));
+      .catch((e) => {
+        if (window.showToast) window.showToast.error(_tt("twin.sync.failed", { error: e }));
+      });
   }
 
   // ── Navigation helpers ──
@@ -1937,5 +2147,6 @@
   // resolve correctly even before initTwinView runs. app.js runs its first
   // applyI18nDom before this module loads, so refresh once after registering.
   _registerTwinI18n();
+  _applyTwinCssVars();
   if (window.applyI18nDom) window.applyI18nDom(document);
 })();

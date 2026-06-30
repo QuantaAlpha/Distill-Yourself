@@ -36,6 +36,7 @@ _index_lock = threading.Lock()
 # Result cache for heavy endpoints (invalidated on index rebuild)
 _result_cache = {}   # key -> (index_gen, result)
 _index_gen = 0       # bumped on each build_index()
+_cache_lock = threading.Lock()
 _index_refresh_lock = threading.Lock()
 _index_refresh_running = False
 _last_index_stale_check = 0.0
@@ -43,13 +44,31 @@ INDEX_STALE_CHECK_INTERVAL = float(os.environ.get("INDEX_STALE_CHECK_INTERVAL", 
 
 
 def _cached(key, compute_fn):
-    """Return cached result if index hasn't changed, else compute and cache."""
-    gen = _index_gen
-    entry = _result_cache.get(key)
-    if entry and entry[0] == gen:
-        return entry[1]
+    """Return cached result if index hasn't changed, else compute and cache.
+
+    Uses double-checked locking with ``_cache_lock``:
+    1. Fast path: check cache under lock; return hit.
+    2. Release lock before computing (so concurrent misses run in parallel).
+    3. Re-acquire lock and re-check before writing to avoid stale overwrites.
+    """
+    with _cache_lock:
+        gen = _index_gen
+        entry = _result_cache.get(key)
+        if entry and entry[0] == gen:
+            return entry[1]
+    # Compute outside the lock to avoid serializing cache-miss computation
     result = compute_fn()
-    _result_cache[key] = (gen, result)
+    with _cache_lock:
+        # Re-check: another thread may have written while we were computing,
+        # or the index gen may have advanced (in which case our result is stale).
+        if _index_gen != gen:
+            # Index changed during computation — don't write (caller still gets value)
+            return result
+        existing = _result_cache.get(key)
+        if existing and existing[0] == gen:
+            # Another thread already wrote the same generation — use theirs
+            return existing[1]
+        _result_cache[key] = (gen, result)
     return result
 
 

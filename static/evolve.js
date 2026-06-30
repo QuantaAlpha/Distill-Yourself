@@ -15,6 +15,7 @@
   let evolveScopeDate = "7d";
   let evolveScopeProject = "";
   let evolveScopeEngine = "auto";
+  let evolveScopeLang = "zh";
 
   // ── DOM refs ──
   const $ = (sel) => document.querySelector(sel);
@@ -54,6 +55,44 @@
         "evolve.sync.syncing": "同步中...",
         "evolve.sync.done": "✓ 同步完成 — ",
         "evolve.chat.inputPlaceholder": "输入跨会话分析需求…",
+        // Tab labels
+        "evolve.tab.profile": "画像",
+        "evolve.tab.memory": "记忆",
+        "evolve.tab.rules": "规则",
+        "evolve.tab.signals": "信号",
+        "evolve.tab.patterns": "模式",
+        // Overview bar
+        "evolve.overview.lastScan": "上次扫描：{time}",
+        // Time ago
+        "evolve.time.justNow": "刚刚",
+        "evolve.time.mAgo": "{n} 分钟前",
+        "evolve.time.hAgo": "{n} 小时前",
+        "evolve.time.dAgo": "{n} 天前",
+        // Rules
+        "evolve.rules.copyAll": "全部复制",
+        "evolve.rules.filterAll": "全部",
+        "evolve.rules.why": "为什么",
+        "evolve.rules.evidence": "证据",
+        "evolve.rules.sessionLink": "→ 会话",
+        // Tool group
+        "evolve.tools.groupHeader": "⚡ {n} 个工具",
+        // Force graph type labels (Chinese already present — these map when lang=zh)
+        "evolve.graph.type.preference": "偏好",
+        "evolve.graph.type.workflow": "工作流",
+        "evolve.graph.type.tooling": "工具",
+        "evolve.graph.type.design": "设计",
+        "evolve.graph.type.communication": "沟通",
+        // Storage quota
+        "evolve.quotaWarning": "存储空间不足 — Evolve 缓存可能无法持久化。",
+        // Updated label
+        "evolve.updated": "更新于 {time}",
+        // Bubble chart types
+        "evolve.bubble.error": "错误",
+        "evolve.bubble.efficiency": "效率",
+        "evolve.bubble.knowledge_gap": "知识缺口",
+        "evolve.bubble.workflow": "工作流",
+        // Session link
+        "evolve.sessionLink": "→ 会话",
       },
       en: {
         "evolve.status.never": "Not analyzed yet",
@@ -83,6 +122,44 @@
         "evolve.sync.syncing": "Syncing...",
         "evolve.sync.done": "✓ Sync complete — ",
         "evolve.chat.inputPlaceholder": "Enter a cross-session analysis request…",
+        // Tab labels
+        "evolve.tab.profile": "Profile",
+        "evolve.tab.memory": "Memory",
+        "evolve.tab.rules": "Rules",
+        "evolve.tab.signals": "Signals",
+        "evolve.tab.patterns": "Patterns",
+        // Overview bar
+        "evolve.overview.lastScan": "Last scan: {time}",
+        // Time ago
+        "evolve.time.justNow": "just now",
+        "evolve.time.mAgo": "{n}m ago",
+        "evolve.time.hAgo": "{n}h ago",
+        "evolve.time.dAgo": "{n}d ago",
+        // Rules
+        "evolve.rules.copyAll": "Copy All",
+        "evolve.rules.filterAll": "All",
+        "evolve.rules.why": "Why",
+        "evolve.rules.evidence": "Evidence",
+        "evolve.rules.sessionLink": "→ session",
+        // Tool group
+        "evolve.tools.groupHeader": "⚡ {n} tools",
+        // Force graph type labels
+        "evolve.graph.type.preference": "Preference",
+        "evolve.graph.type.workflow": "Workflow",
+        "evolve.graph.type.tooling": "Tooling",
+        "evolve.graph.type.design": "Design",
+        "evolve.graph.type.communication": "Communication",
+        // Storage quota
+        "evolve.quotaWarning": "Storage quota exceeded — Evolve cache may not persist.",
+        // Updated label
+        "evolve.updated": "Updated {time}",
+        // Bubble chart types
+        "evolve.bubble.error": "Error",
+        "evolve.bubble.efficiency": "Efficiency",
+        "evolve.bubble.knowledge_gap": "Knowledge Gap",
+        "evolve.bubble.workflow": "Workflow",
+        // Session link
+        "evolve.sessionLink": "→ session",
       },
     });
   }
@@ -102,6 +179,7 @@
     if (scope.date) evolveScopeDate = scope.date;
     if (scope.project !== undefined) evolveScopeProject = scope.project;
     if (scope.engine) evolveScopeEngine = scope.engine;
+    if (scope.lang) evolveScopeLang = scope.lang;
     // Clear initial HTML — per-tab panels will be created on demand
     const body = $("#evolve-tab-body");
     if (body) body.innerHTML = "";
@@ -147,7 +225,7 @@
       if (updatedEl) { updatedEl.textContent = _tt("evolve.status.aiRunning"); updatedEl.classList.add("loading"); }
     } else {
       const cached = getCachedTab(tab);
-      if (updatedEl) { updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : _tt("evolve.status.never"); updatedEl.classList.remove("loading"); }
+      if (updatedEl) { updatedEl.textContent = cached ? _tt("evolve.updated", { time: timeAgo(cached.updatedAt) }) : _tt("evolve.status.never"); updatedEl.classList.remove("loading"); }
     }
     updateEvolveOverviewBar();
     updateSyncButtonState();
@@ -204,7 +282,7 @@
           window._evolveQuotaWarned = true;
           const t = document.createElement("div");
           t.style.cssText = "position:fixed;bottom:20px;right:20px;background:#e65100;color:#fff;padding:12px 20px;border-radius:8px;z-index:9999;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.3);max-width:320px";
-          t.textContent = "Storage quota exceeded — Evolve cache may not persist.";
+          t.textContent = _tt("evolve.quotaWarning");
           document.body.appendChild(t);
           setTimeout(() => t.remove(), 8000);
         }
@@ -252,6 +330,7 @@
         date: scope.date || "7d",
         project: scope.project || "",
         engine: scope.engine || "auto",
+        lang: scope.lang || "zh",
       };
     }
     return {
@@ -259,6 +338,7 @@
       date: evolveScopeDate,
       project: evolveScopeProject,
       engine: evolveScopeEngine,
+      lang: evolveScopeLang,
     };
   }
 
@@ -268,14 +348,13 @@
     if (!bar) return;
     const tabs = ["profile", "memory", "rules", "signals", "patterns"];
     const icons = { profile: "🧬", memory: "🧠", rules: "📐", signals: "⚡", patterns: "🔄" };
-    const labels = { profile: "Profile", memory: "Memory", rules: "Rules", signals: "Signals", patterns: "Patterns" };
     bar.innerHTML = "";
     tabs.forEach(tab => {
       const cached = getCachedTab(tab);
       const count = cached ? getTabItemCount(tab, cached.data) : 0;
       const div = document.createElement("div");
       div.className = `evolve-stat-card${tab === evolveActiveTab ? " active" : ""}`;
-      div.innerHTML = `<span class="evolve-stat-icon">${icons[tab]}</span><span class="evolve-stat-count">${count}</span><span class="evolve-stat-label">${labels[tab]}</span>`;
+      div.innerHTML = `<span class="evolve-stat-icon">${icons[tab]}</span><span class="evolve-stat-count">${count}</span><span class="evolve-stat-label">${_tt("evolve.tab." + tab)}</span>`;
       div.onclick = () => switchEvolveTab(tab);
       bar.appendChild(div);
     });
@@ -284,7 +363,7 @@
     if (anyUpdated) {
       const span = document.createElement("span");
       span.className = "evolve-last-scan";
-      span.textContent = `Last scan: ${timeAgo(anyUpdated)}`;
+      span.textContent = _tt("evolve.overview.lastScan", { time: timeAgo(anyUpdated) });
       bar.appendChild(span);
     }
   }
@@ -303,10 +382,10 @@
 
   function timeAgo(iso) {
     const diff = Date.now() - new Date(iso).getTime();
-    if (diff < 60000) return "just now";
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return `${Math.floor(diff / 86400000)}d ago`;
+    if (diff < 60000) return _tt("evolve.time.justNow");
+    if (diff < 3600000) return _tt("evolve.time.mAgo", { n: Math.floor(diff / 60000) });
+    if (diff < 86400000) return _tt("evolve.time.hAgo", { n: Math.floor(diff / 3600000) });
+    return _tt("evolve.time.dAgo", { n: Math.floor(diff / 86400000) });
   }
 
   // ── Tab content rendering (legacy compat — routes to per-tab panel) ──
@@ -316,7 +395,7 @@
     // Update header
     const updatedEl = $("#evolve-tab-updated");
     const cached = getCachedTab(tab);
-    if (updatedEl) updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : _tt("evolve.status.never");
+    if (updatedEl) updatedEl.textContent = cached ? _tt("evolve.updated", { time: timeAgo(cached.updatedAt) }) : _tt("evolve.status.never");
   }
 
   function renderTabVisualization(tab, data, container) {
@@ -482,7 +561,7 @@
     const el = group.querySelector(".evolve-tg-summary");
     if (!el) return;
     const parts = Object.entries(state.toolGroupCounts).map(([name, count]) => `${count} ${name}`);
-    el.innerHTML = `<span class="evolve-tg-count">⚡ ${state.toolGroupTotal} tools</span> · ${parts.join(" · ")}`;
+    el.innerHTML = `<span class="evolve-tg-count">${_tt("evolve.tools.groupHeader", { n: state.toolGroupTotal })}</span> · ${parts.join(" · ")}`;
   }
 
   /** Close (collapse) the current tool group */
@@ -613,14 +692,14 @@
           const panel = _ensureTabPanel(tab);
           _renderTabPanel(tab, panel);
           updateEvolveOverviewBar();
-          if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
+          if (isActiveTab && updatedEl) { updatedEl.textContent = _tt("evolve.updated", { time: new Date().toLocaleTimeString() }); updatedEl.classList.remove("loading"); }
         }
         break;
       }
       case "done":
         _finalizeToolGroup(state);
         _evolveHideThinking(container);
-        if (isActiveTab && updatedEl) { updatedEl.textContent = `Updated ${new Date().toLocaleTimeString()}`; updatedEl.classList.remove("loading"); }
+        if (isActiveTab && updatedEl) { updatedEl.textContent = _tt("evolve.updated", { time: new Date().toLocaleTimeString() }); updatedEl.classList.remove("loading"); }
         break;
       case "error":
         _finalizeToolGroup(state);
@@ -905,9 +984,6 @@
             preference: "var(--accent)", workflow: "var(--bash-accent)",
             tooling: "var(--read-accent)", design: "var(--edit-accent)",
             communication: "var(--grep-accent)",
-            "偏好": "var(--accent)", "工作流": "var(--bash-accent)",
-            "工具": "var(--read-accent)", "设计": "var(--edit-accent)",
-            "沟通": "var(--grep-accent)"
         };
         const node = (data.nodes || []).find(n => n.id === card.id);
         const type = node?.type || "preference";
@@ -979,11 +1055,14 @@
         preference: "#5856d6", workflow: "#16a34a",
         tooling: "#d97706", design: "#ea580c",
         communication: "#2563eb",
-        "偏好": "#5856d6", "工作流": "#16a34a",
-        "工具": "#d97706", "设计": "#ea580c",
-        "沟通": "#2563eb"
     };
-    const typeLabels = { preference: "偏好", workflow: "工作流", tooling: "工具", design: "设计", communication: "沟通" };
+    const typeLabels = {
+        preference: _tt("evolve.graph.type.preference"),
+        workflow: _tt("evolve.graph.type.workflow"),
+        tooling: _tt("evolve.graph.type.tooling"),
+        design: _tt("evolve.graph.type.design"),
+        communication: _tt("evolve.graph.type.communication"),
+    };
     const n = nodes.length;
 
     // ── SVG + zoom layer ──
@@ -1184,7 +1263,7 @@
     // Copy all button
     const copyAllBtn = document.createElement("button");
     copyAllBtn.className = "rules-copy-all-btn";
-    copyAllBtn.innerHTML = '<span class="rules-copy-icon">📋</span> Copy All';
+    copyAllBtn.innerHTML = `<span class="rules-copy-icon">📋</span> ${_tt("evolve.rules.copyAll")}`;
     copyAllBtn.onclick = () => {
       const filtered = activeFilter === "all" ? rules : rules.filter(r => r.category === activeFilter);
       filtered.sort((a, b) => ({"P0":0,"P1":1,"P2":2}[a.priority]??9) - ({"P0":0,"P1":1,"P2":2}[b.priority]??9));
@@ -1195,7 +1274,7 @@
 
     function renderFilter() {
       filterBar.innerHTML = "";
-      [{ key: "all", label: "All" }, ...categories.map(c => ({ key: c, label: c }))].forEach(f => {
+      [{ key: "all", label: _tt("evolve.rules.filterAll") }, ...categories.map(c => ({ key: c, label: c }))].forEach(f => {
         const btn = document.createElement("button");
         btn.className = `scope-tab${f.key === activeFilter ? " active" : ""}`;
         btn.textContent = f.label;
@@ -1221,7 +1300,7 @@
 
         // Header: priority + category + frequency + copy button
         const evidenceHtml = (rule.evidence || []).map(e =>
-          `<div class="rule-evidence-item"><span class="rule-quote">"${esc(e.quote)}"</span>${e.session ? ` <a class="rule-session-link" href="#${e.session}">→ session</a>` : ""}</div>`
+          `<div class="rule-evidence-item"><span class="rule-quote">"${esc(e.quote)}"</span>${e.session ? ` <a class="rule-session-link" href="#${e.session}">${_tt("evolve.rules.sessionLink")}</a>` : ""}</div>`
         ).join("");
 
         const whyText = rule.why || "";
@@ -1233,8 +1312,8 @@
             <button class="rule-copy-btn" title="${esc(_tt("evolve.rules.copyTitle"))}">📋</button>
           </div>
           <div class="rule-text">${esc(rule.rule)}</div>
-          ${whyText ? `<details class="rule-why-details"><summary>Why</summary><div class="rule-why-text">${esc(whyText)}</div></details>` : ""}
-          ${evidenceHtml ? `<details class="rule-evidence"><summary>Evidence (${rule.evidence.length})</summary>${evidenceHtml}</details>` : ""}`;
+          ${whyText ? `<details class="rule-why-details"><summary>${_tt("evolve.rules.why")}</summary><div class="rule-why-text">${esc(whyText)}</div></details>` : ""}
+          ${evidenceHtml ? `<details class="rule-evidence"><summary>${_tt("evolve.rules.evidence")} (${rule.evidence.length})</summary>${evidenceHtml}</details>` : ""}`;
 
         // Bind copy button — only copy rule text
         const copyBtn = card.querySelector(".rule-copy-btn");
@@ -1299,7 +1378,7 @@
             <div class="signal-event-header">
               <span class="signal-type-badge" style="background:${typeColors[ev.type] || "#888"}">${esc(ev.type)}</span>
               <span class="signal-date">${esc(ev.date || "")}</span>
-              ${ev.session ? `<a class="rule-session-link" href="#${ev.session}">→ session</a>` : ""}
+              ${ev.session ? `<a class="rule-session-link" href="#${ev.session}">${_tt("evolve.sessionLink")}</a>` : ""}
             </div>
             <div class="signal-quote">"${esc(ev.userQuote || "")}"</div>
             ${ev.aiIssue ? `<div class="signal-issue">AI issue: ${esc(ev.aiIssue)}</div>` : ""}
@@ -1625,8 +1704,10 @@
         updatedEl.textContent = _tt("evolve.status.aiRunning");
       } else if (updatedEl) {
         const cached = getCachedTab(evolveActiveTab);
-        updatedEl.textContent = cached ? `Updated: ${timeAgo(cached.updatedAt)}` : _tt("evolve.status.never");
+        updatedEl.textContent = cached ? _tt("evolve.updated", { time: timeAgo(cached.updatedAt) }) : _tt("evolve.status.never");
       }
+      // Re-render overview bar (tab labels, last scan)
+      updateEvolveOverviewBar();
       // If a tab is mid-stream, don't restart it — only the static DOM labels above refresh.
       if (!evolveStreamAborts[evolveActiveTab]) {
         const panel = document.querySelector(`.evolve-tab-panel[data-tab="${evolveActiveTab}"]`);

@@ -8,11 +8,12 @@ as the first arg.
 import json
 import os
 from datetime import datetime
+from typing import Optional
 from pathlib import Path
 
 from chatview import index as _idx
 from chatview.parsers import _extract_user_text
-from chatview.parsers.codex import _CODEX_TOOL_NAMES
+from chatview.parsers.codex import _CODEX_TOOL_NAMES, _apply_patch_summary
 
 
 # ---- projects / sessions / timeline / stats --------------------------------
@@ -155,12 +156,43 @@ def _get_analytics(handler) -> dict:
 
 def _get_session_summary(handler, session_id: str) -> dict:
     """F11: Request vs Reality — first user request vs files actually changed."""
+    from chatview import db as _db
+
     with _idx._index_lock:
         sessions = _idx._index.get("sessions", {})
     meta = sessions.get(session_id)
     if not meta:
         return {"request": "", "files": [], "tools": {}}
 
+    # --- DB-first path: use pre-aggregated insight tables when available ---
+    try:
+        first_user_msg = ""
+        user_msgs = _db.get_session_messages(session_id, role="user")
+        if user_msgs:
+            first_user_msg = user_msgs[0].get("text", "")[:500]
+
+        tool_counts = _db.get_session_tool_usage(session_id)
+        file_refs = _db.get_session_file_refs(session_id)
+
+        if first_user_msg and (tool_counts or file_refs):
+            # Build files list from file_refs (no read/edit/write breakdown in DB,
+            # so use total count as reads; still respects the API contract shape).
+            home = str(Path.home())
+            files_touched = {}
+            for fp, count in file_refs.items():
+                if fp.startswith("/tmp"):
+                    continue
+                short = fp.replace(home, "~") if fp.startswith(home) else fp
+                files_touched[short] = {"reads": count, "edits": 0, "writes": 0}
+            file_list = sorted(
+                [{"path": fp, **counts} for fp, counts in files_touched.items()],
+                key=lambda x: -(x["edits"] + x["writes"]),
+            )[:30]
+            return {"request": first_user_msg, "files": file_list, "tools": tool_counts}
+    except Exception:
+        pass
+
+    # --- Fallback: read the JSONL from disk (original behavior) ---
     filepath = meta.get("filePath", "")
     source = meta.get("source", "claude")
     if not filepath or not os.path.exists(filepath):
@@ -244,15 +276,50 @@ def _get_snippets(handler) -> dict:
 
 
 def _get_file_evolution(handler, file_path: str) -> dict:
-    """F13: Cross-session edit timeline for a specific file."""
+    """F13: Cross-session edit timeline for a specific file.
+
+    Optimized path: uses the ``insight_file_refs`` DB table to identify only
+    sessions that reference the target file, then reads just those session
+    files from disk.  This replaces the previous O(N) full scan of all
+    session JSONL files with an O(K) scan where K is the number of sessions
+    that actually touch the file (typically K << N).
+
+    Falls back to the original full-scan approach when the insight tables
+    are empty or unavailable.
+    """
     if not file_path:
         return {"file": "", "events": []}
 
-    with _idx._index_lock:
-        sessions = dict(_idx._index.get("sessions", {}))
-
     basename = os.path.basename(file_path)
     events = []
+
+    # --- DB-first path: find only sessions that reference this file ---
+    db_sessions = _db_file_evolution_sessions(file_path)
+    if db_sessions is not None and db_sessions:
+        for meta in db_sessions:
+            sid = meta["id"]
+            filepath = meta.get("file_path", "")
+            source = meta.get("source", "claude")
+            if not filepath or not os.path.exists(filepath):
+                continue
+            session_events = _parse_file_edits_from_session_file(
+                filepath, source, basename,
+            )
+            for ev in session_events:
+                events.append({
+                    "sessionId": sid,
+                    "sessionTitle": meta.get("title", ""),
+                    "project": meta.get("project_name", ""),
+                    "date": meta.get("date", ""),
+                    "tool": ev["tool"],
+                    "context": ev["context"],
+                })
+        events.sort(key=lambda e: e.get("date", ""))
+        return {"file": file_path, "basename": basename, "events": events[:50]}
+
+    # --- Fallback: full scan of all sessions (original behavior) ---
+    with _idx._index_lock:
+        sessions = dict(_idx._index.get("sessions", {}))
 
     for sid, meta in sessions.items():
         filepath = meta.get("filePath", "")
@@ -260,41 +327,129 @@ def _get_file_evolution(handler, file_path: str) -> dict:
         if not filepath or not os.path.exists(filepath):
             continue
 
-        try:
-            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-                prev_user_msg = ""
-                for line in f:
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    msg_type = obj.get("type")
-                    if source == "claude":
-                        if msg_type == "user" and not obj.get("toolUseResult"):
-                            content = obj.get("message", {}).get("content", [])
-                            prev_user_msg = _extract_user_text(content)[:200]
-                        elif msg_type == "assistant":
-                            content = obj.get("message", {}).get("content", [])
-                            if isinstance(content, list):
-                                for block in content:
-                                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                                        name = block.get("name", "")
-                                        inp = block.get("input", {})
-                                        fp = inp.get("file_path") or inp.get("path") or ""
-                                        if fp and os.path.basename(fp) == basename and name in ("Edit", "Write"):
-                                            events.append({
-                                                "sessionId": sid,
-                                                "sessionTitle": meta.get("title", ""),
-                                                "project": meta.get("projectName", ""),
-                                                "date": meta.get("date", ""),
-                                                "tool": name,
-                                                "context": prev_user_msg,
-                                            })
-        except Exception:
-            continue
+        session_events = _parse_file_edits_from_session_file(filepath, source, basename)
+        for ev in session_events:
+            events.append({
+                "sessionId": sid,
+                "sessionTitle": meta.get("title", ""),
+                "project": meta.get("projectName", ""),
+                "date": meta.get("date", ""),
+                "tool": ev["tool"],
+                "context": ev["context"],
+            })
 
     events.sort(key=lambda e: e.get("date", ""))
     return {"file": file_path, "basename": basename, "events": events[:50]}
+
+
+def _db_file_evolution_sessions(file_path: str) -> Optional[list]:
+    """Return session metadata rows for sessions referencing *file_path*.
+
+    Returns ``None`` when the insight tables have no data for this file
+    (signalling the caller should fall back to the disk-based scan).
+    """
+    try:
+        from chatview import db as _db
+        conn = _db.get_conn()
+        # Use basename matching for consistency with the disk scan.
+        # We match both full path equality and basename equality because
+        # insight_file_refs stores full paths but the UI may pass either.
+        basename = os.path.basename(file_path)
+        rows = conn.execute("""
+            SELECT DISTINCT s.id, s.title, s.date, s.file_path, s.source,
+                            s.project_name
+            FROM insight_file_refs fr
+            JOIN sessions s ON s.id = fr.session_id
+            WHERE fr.file_path = ? OR fr.file_path LIKE ?
+            ORDER BY s.date ASC
+        """, (file_path, f"%/{basename}")).fetchall()
+        result = [dict(r) for r in rows]
+        return result if result else None
+    except Exception:
+        return None
+
+
+def _parse_file_edits_from_session_file(
+    filepath: str, source: str, basename: str,
+) -> list:
+    """Parse a single session JSONL file and return Edit/Write events for *basename*.
+
+    Returns a list of ``{"tool": str, "context": str}`` dicts in file order.
+    """
+    events = []
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            prev_user_msg = ""
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg_type = obj.get("type")
+                if source == "claude":
+                    if msg_type == "user" and not obj.get("toolUseResult"):
+                        content = obj.get("message", {}).get("content", [])
+                        prev_user_msg = _extract_user_text(content)[:200]
+                    elif msg_type == "assistant":
+                        content = obj.get("message", {}).get("content", [])
+                        if isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "tool_use":
+                                    name = block.get("name", "")
+                                    inp = block.get("input", {})
+                                    fp = inp.get("file_path") or inp.get("path") or ""
+                                    if fp and os.path.basename(fp) == basename and name in ("Edit", "Write"):
+                                        events.append({
+                                            "tool": name,
+                                            "context": prev_user_msg,
+                                        })
+                elif source == "codex":
+                    payload = obj.get("payload", {})
+                    if msg_type == "event_msg" and payload.get("type") == "user_message":
+                        prev_user_msg = payload.get("message", "")[:200]
+                    elif msg_type == "response_item":
+                        p_type = payload.get("type")
+                        if p_type in ("function_call", "custom_tool_call"):
+                            raw_name = payload.get("name", "")
+                            name = ""
+                            fp = ""
+                            if p_type == "function_call":
+                                args_str = payload.get("arguments", "{}")
+                                try:
+                                    args = json.loads(args_str) if isinstance(args_str, str) else {}
+                                    fp = args.get("file_path") or args.get("path") or ""
+                                except json.JSONDecodeError:
+                                    pass
+                                if raw_name == "edit":
+                                    name = "Edit"
+                                elif raw_name == "write":
+                                    name = "Write"
+                                elif raw_name == "read":
+                                    name = "Read"
+                            else: # custom_tool_call
+                                if raw_name == "apply_patch":
+                                    name = "Edit"
+                                    input_str = payload.get("input", "")
+                                    fp = _apply_patch_summary(input_str)
+                                else:
+                                    input_str = payload.get("input", "")
+                                    try:
+                                        args = json.loads(input_str) if isinstance(input_str, str) else {}
+                                        fp = args.get("file_path") or args.get("path") or ""
+                                    except json.JSONDecodeError:
+                                        pass
+                                    if raw_name == "read_file":
+                                        name = "Read"
+                                    elif raw_name == "write_file":
+                                        name = "Write"
+                            if fp and os.path.basename(fp) == basename and name in ("Edit", "Write"):
+                                events.append({
+                                    "tool": name,
+                                    "context": prev_user_msg,
+                                })
+    except Exception:
+        pass
+    return events
 
 
 def _get_project_health(handler) -> dict:

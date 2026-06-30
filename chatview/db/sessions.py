@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
 
-from .core import get_conn
+from .core import get_conn, query_in_chunks
 
 
 # ---------------------------------------------------------------------------
@@ -48,8 +48,11 @@ def upsert_session(meta: dict, user_texts: list, assistant_snippets: list):
         "SELECT id FROM messages WHERE session_id=?", (sid,)
     ).fetchall()]
     if old_ids:
-        placeholders = ",".join("?" * len(old_ids))
-        conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({placeholders})", old_ids)
+        # 单个会话的消息数也可能超过 SQLite 宿主参数上限，分批删 FTS 行。
+        for i in range(0, len(old_ids), 900):
+            chunk = old_ids[i:i + 900]
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({placeholders})", chunk)
         conn.execute("DELETE FROM messages WHERE session_id=?", (sid,))
 
     # Insert new messages (user + assistant)
@@ -96,18 +99,24 @@ def prune_stale_sessions(valid_file_paths) -> int:
     if not stale_ids:
         return 0
 
-    placeholders = ",".join("?" * len(stale_ids))
-    msg_ids = [r["id"] for r in conn.execute(
-        f"SELECT id FROM messages WHERE session_id IN ({placeholders})",
-        stale_ids,
-    ).fetchall()]
-    if msg_ids:
-        msg_placeholders = ",".join("?" * len(msg_ids))
-        conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({msg_placeholders})", msg_ids)
+    # 分批规避 SQLite 宿主参数上限：先批量取出待删消息的 rowid 删 FTS，再分批删各表。
+    msg_ids = [r["id"] for r in query_in_chunks(
+        conn, "SELECT id FROM messages WHERE session_id IN ({placeholders})", stale_ids
+    )]
+    for i in range(0, len(msg_ids), 900):
+        chunk = msg_ids[i:i + 900]
+        ph = ",".join("?" * len(chunk))
+        conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({ph})", chunk)
 
     for table in ("messages", "insight_tool_usage", "insight_file_refs", "insight_errors", "insight_snippets"):
-        conn.execute(f"DELETE FROM {table} WHERE session_id IN ({placeholders})", stale_ids)
-    conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", stale_ids)
+        for i in range(0, len(stale_ids), 900):
+            chunk = stale_ids[i:i + 900]
+            ph = ",".join("?" * len(chunk))
+            conn.execute(f"DELETE FROM {table} WHERE session_id IN ({ph})", chunk)
+    for i in range(0, len(stale_ids), 900):
+        chunk = stale_ids[i:i + 900]
+        ph = ",".join("?" * len(chunk))
+        conn.execute(f"DELETE FROM sessions WHERE id IN ({ph})", chunk)
     conn.commit()
     return len(stale_ids)
 
@@ -150,16 +159,19 @@ def get_user_queries(session_ids=None, limit=200) -> list:
     if session_ids is not None:
         if not session_ids:
             return []
-        placeholders = ",".join("?" * len(session_ids))
-        sql = f"""
+        # 会话数可能超过 SQLite 宿主参数上限，按 id 分批查询；批内 ORDER BY/LIMIT 仅对
+        # 单批生效，合并后再做全局 ts 降序并截断到 limit。
+        rows = query_in_chunks(conn, """
             SELECT m.text, m.ts, s.project_name, s.source, s.id AS session_id, s.title
             FROM messages m
             JOIN sessions s ON m.session_id = s.id
             WHERE m.role='user' AND m.session_id IN ({placeholders})
             ORDER BY m.ts DESC
             LIMIT ?
-        """
-        rows = conn.execute(sql, list(session_ids) + [limit]).fetchall()
+        """, list(session_ids), extra_params=(limit,))
+        result = [dict(r) for r in rows]
+        result.sort(key=lambda r: r.get("ts") or "", reverse=True)
+        return result[:limit]
     else:
         sql = """
             SELECT m.text, m.ts, s.project_name, s.source, s.id AS session_id, s.title
@@ -170,7 +182,7 @@ def get_user_queries(session_ids=None, limit=200) -> list:
             LIMIT ?
         """
         rows = conn.execute(sql, [limit]).fetchall()
-    return [dict(r) for r in rows]
+        return [dict(r) for r in rows]
 
 
 def _sanitize_fts_query(query: str) -> str:

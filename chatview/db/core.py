@@ -25,8 +25,31 @@ def get_conn() -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         _local.conn = conn
     return conn
+
+
+# SQLite 限制单条语句的宿主参数个数（旧版默认 999，新版 32766）。会话数很多时
+# 直接 IN(?,?,...) 会触发 "too many SQL variables"，因此统一按保守的 900 分批。
+_IN_CHUNK_SIZE = 900
+
+
+def query_in_chunks(conn, sql_template, ids, extra_params=(), chunk_size=_IN_CHUNK_SIZE):
+    """对 `IN ({placeholders})` 形式的 SELECT 按 id 分批执行并拼接结果。
+
+    sql_template 必须且仅含一个 `{placeholders}` 占位槽。ids 会被切成多批（避免
+    超过 SQLite 宿主参数上限），每批的行拼接返回。SQL 里的 ORDER BY / LIMIT 只对
+    单批生效；需要全局排序或截断的调用方必须自行对合并结果再排序 / 截断。
+    """
+    rows = []
+    extra = list(extra_params)
+    for i in range(0, len(ids), chunk_size):
+        chunk = list(ids[i:i + chunk_size])
+        placeholders = ",".join("?" * len(chunk))
+        sql = sql_template.format(placeholders=placeholders)
+        rows.extend(conn.execute(sql, chunk + extra).fetchall())
+    return rows
 
 
 # ---------------------------------------------------------------------------

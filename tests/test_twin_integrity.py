@@ -169,7 +169,7 @@ class TwinIntegrityTestCase(unittest.TestCase):
 
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            analyze.cmd_twin_compile(SimpleNamespace(run_id="run_a"))
+            analyze.cmd_twin_compile(SimpleNamespace(run_id="run_a", lang="zh"))
         text = out.getvalue()
 
         self.assertIn("A scenario", text)

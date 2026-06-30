@@ -44,7 +44,7 @@
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
 #twin-persona-avatar::after {
-  content: "选择";
+  content: var(--twin-select-label, "选择");
   position: absolute;
   right: 6px;
   bottom: 6px;

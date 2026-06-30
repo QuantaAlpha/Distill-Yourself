@@ -66,8 +66,8 @@ from chatview.search import (  # noqa: F401
 # ---------------------------------------------------------------------------
 from chatview.ai_engine import (  # noqa: F401
     _select_cognitive_avatar,
-    _normalize_error,
 )
+from chatview.utils.text import normalize_error as _normalize_error  # noqa: F401
 
 if __name__ == "__main__":
     main()

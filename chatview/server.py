@@ -27,6 +27,7 @@ from chatview.handlers.evolve import (
 from chatview.handlers.chat import _handle_chat_stream, _handle_chat_legacy
 from chatview.handlers.twin import (
     _handle_evolve_sync, _handle_twin_analyze, _handle_twin_sync,
+    _handle_twin_resume, _handle_twin_cancel,
 )
 from chatview.index import (
     INDEX_CACHE,
@@ -43,6 +44,18 @@ import chatview.db as _db
 # ---------------------------------------------------------------------------
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 PORT = int(os.environ.get("PORT", 5757))
+
+
+def _int_param(params, key, default, *, minimum=1, maximum=100000):
+    """Parse a single query-string int with a safe fallback + clamp.
+
+    parse_qs values are lists; an absent/empty/non-numeric value falls back to
+    `default` instead of raising (which would otherwise surface as a 500)."""
+    try:
+        val = int(params.get(key, [str(default)])[0])
+    except (ValueError, TypeError):
+        val = default
+    return max(minimum, min(val, maximum))
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +182,10 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             _json_response(self, overview)
         elif path == "/api/twin/avatar-selection":
             _db.init_db()
-            selection = _select_cognitive_avatar(force=False)
+            lang = params.get("lang", ["zh"])[0]
+            # GET 必须快速返回：只读缓存，绝不在请求线程内触发耗时 AI 选择
+            # （AI 选择由 twin 分析的后台 SSE 流以 force=True 预先计算并写缓存）。
+            selection = _select_cognitive_avatar(force=False, lang=lang, cache_only=True)
             if selection:
                 _json_response(self, selection)
             else:
@@ -177,7 +193,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         elif path == "/api/twin/events":
             signal_type = params.get("signal_type", [None])[0]
             domain = params.get("domain", [None])[0]
-            limit = int(params.get("limit", ["200"])[0])
+            limit = _int_param(params, "limit", 200)
             where_parts, where_params = [], []
             if signal_type:
                 where_parts.append("signal_type=?")
@@ -194,7 +210,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             status = params.get("status", [None])[0]
             tag = params.get("tag", [None])[0]
             sort = params.get("sort", ["confidence"])[0]
-            limit = int(params.get("limit", ["500"])[0])
+            limit = _int_param(params, "limit", 500)
             where_parts, where_params = [], []
             if status:
                 where_parts.append("status=?")
@@ -210,7 +226,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
         elif path == "/api/twin/traits":
             status = params.get("status", [None])[0]
             category = params.get("category", [None])[0]
-            limit = int(params.get("limit", ["500"])[0])
+            limit = _int_param(params, "limit", 500)
             where_parts, where_params = [], []
             if status:
                 where_parts.append("status=?")
@@ -246,19 +262,28 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 cards = [c for c in cards if c]
                 _json_response(self, {"trait": trait, "supporting_cards": cards})
         elif path == "/api/twin/runtime-preview":
+            lang = params.get("lang", ["zh"])[0]
             cards = _db.cm_get_all("judgment_cards",
                                    where="status IN ('confirmed','emerging')",
                                    order="confidence DESC", limit=25)
             traits = _db.cm_get_all("cognitive_traits",
                                     where="status IN ('confirmed','emerging')",
                                     order="strength DESC", limit=15)
+            if lang == "en":
+                traits_header = "## About This User\n"
+                cards_header = "\n## Situational Judgments\n"
+                exception_label = "Exception: "
+            else:
+                traits_header = "## 关于这位用户\n"
+                cards_header = "\n## 场景判断\n"
+                exception_label = "例外："
             lines = []
             if traits:
-                lines.append("## 关于这位用户\n")
+                lines.append(traits_header)
                 for t in traits:
                     lines.append(f"**{t.get('name','')}**。{t.get('description','')}\n")
             if cards:
-                lines.append("\n## 场景判断\n")
+                lines.append(cards_header)
                 for c in cards:
                     when = c.get("applies_when") or ""
                     judgment = c.get("judgment") or ""
@@ -268,7 +293,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                     if action:
                         lines.append(f"→ {action}")
                     if exceptions:
-                        lines.append(f"例外：{exceptions}")
+                        lines.append(f"{exception_label}{exceptions}")
                     lines.append("")
             _json_response(self, {
                 "text": "\n".join(lines),
@@ -312,6 +337,10 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             _handle_evolve_sync(self)
         elif parsed.path == "/api/twin/analyze":
             _handle_twin_analyze(self)
+        elif parsed.path == "/api/twin/resume":
+            _handle_twin_resume(self)
+        elif parsed.path == "/api/twin/cancel":
+            _handle_twin_cancel(self)
         elif parsed.path == "/api/twin/sync":
             _handle_twin_sync(self)
         else:

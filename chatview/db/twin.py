@@ -7,7 +7,7 @@ from typing import Optional
 from .core import get_conn
 
 
-# Table registry: name → columns (excluding id, updated_at which are auto-managed)
+# Table registry: name -> data columns (excluding id, updated_at which are auto-managed)
 _CM_TABLES = {
     "evidence_events": ["run_id", "session_id", "event_index", "card_id", "task_type",
                         "ai_action", "user_reaction", "resolution", "lesson",
@@ -18,6 +18,47 @@ _CM_TABLES = {
     "cognitive_traits": ["run_id", "name", "category", "description", "strength",
                          "supporting_card_ids", "status", "evidence_count"],
 }
+
+# Full column whitelist for ORDER BY / validation (includes id and audit columns)
+_CM_ALL_COLUMNS = {
+    table: {"id"} | set(cols) | (
+        {"updated_at"} if table in ("judgment_cards", "cognitive_traits") else set()
+    )
+    for table, cols in _CM_TABLES.items()
+}
+
+
+def _validate_cm_table(table: str) -> None:
+    if table not in _CM_TABLES:
+        raise ValueError(f"Unknown CM table: {table}")
+
+
+def _validate_order(table: str, order: str) -> None:
+    """Validate ORDER BY clause: column names must be in the table's whitelist.
+
+    Accepts forms like: "col", "col DESC", "col ASC", "col1, col2 DESC".
+    """
+    if not order:
+        return
+    valid_cols = _CM_ALL_COLUMNS[table]
+    for part in order.split(","):
+        part = part.strip()
+        if not part:
+            raise ValueError(f"Empty ORDER BY fragment: {order!r}")
+        tokens = part.split()
+        if len(tokens) == 0 or len(tokens) > 2:
+            raise ValueError(f"Invalid ORDER BY fragment: {part!r}")
+        col = tokens[0]
+        direction = tokens[1].upper() if len(tokens) == 2 else "ASC"
+        if col not in valid_cols:
+            raise ValueError(
+                f"Invalid ORDER BY column {col!r} for table {table!r}. "
+                f"Valid columns: {sorted(valid_cols)}"
+            )
+        if direction not in ("ASC", "DESC"):
+            raise ValueError(
+                f"Invalid ORDER BY direction {direction!r} in {order!r}"
+            )
 
 
 def cm_upsert(table: str, item_id: str, data: dict, commit: bool = True):
@@ -79,6 +120,7 @@ def cm_upsert(table: str, item_id: str, data: dict, commit: bool = True):
 
 def cm_get(table: str, item_id: str) -> Optional[dict]:
     """Get a single row by id."""
+    _validate_cm_table(table)
     conn = get_conn()
     row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (item_id,)).fetchone()
     return dict(row) if row else None
@@ -86,7 +128,19 @@ def cm_get(table: str, item_id: str) -> Optional[dict]:
 
 def cm_get_all(table: str, where: str = "", params: tuple = (), order: str = "",
                limit: int = 500) -> list:
-    """Get all rows from a CM table with optional filters."""
+    """Get all rows from a CM table with optional filters.
+
+    Args:
+        table: CM table name (must be in _CM_TABLES whitelist).
+        where: SQL WHERE clause **without** user-supplied values in the string.
+            Only clause structure (column names, operators) should appear here;
+            user values must be passed via ``params`` as parameterized placeholders.
+        params: Parameter values for the ``where`` clause.
+        order: ORDER BY clause (column names validated against table schema).
+        limit: Maximum number of rows to return.
+    """
+    _validate_cm_table(table)
+    _validate_order(table, order)
     conn = get_conn()
     sql = f"SELECT * FROM {table}"
     if where:
@@ -100,6 +154,7 @@ def cm_get_all(table: str, where: str = "", params: tuple = (), order: str = "",
 
 def cm_delete(table: str, item_id: str, commit: bool = True):
     """Delete a single row by id."""
+    _validate_cm_table(table)
     conn = get_conn()
     conn.execute(f"DELETE FROM {table} WHERE id=?", (item_id,))
     if commit:
@@ -107,7 +162,16 @@ def cm_delete(table: str, item_id: str, commit: bool = True):
 
 
 def cm_count(table: str, where: str = "", params: tuple = ()) -> int:
-    """Count rows in a CM table."""
+    """Count rows in a CM table.
+
+    Args:
+        table: CM table name (must be in _CM_TABLES whitelist).
+        where: SQL WHERE clause **without** user-supplied values in the string.
+            Only clause structure (column names, operators) should appear here;
+            user values must be passed via ``params`` as parameterized placeholders.
+        params: Parameter values for the ``where`` clause.
+    """
+    _validate_cm_table(table)
     conn = get_conn()
     sql = f"SELECT COUNT(*) FROM {table}"
     if where:

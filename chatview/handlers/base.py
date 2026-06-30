@@ -35,6 +35,9 @@ def _serve_file(handler, filepath: Path):
     ct = f"{mime}; charset=utf-8" if mime.startswith("text/") or mime.endswith("javascript") or mime.endswith("json") else mime
     handler.send_header("Content-Type", ct)
     handler.send_header("Content-Length", len(data))
+    # Local dev server: always revalidate so edits to html/js/css are picked
+    # up immediately instead of being served from the browser's stale cache.
+    handler.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
     handler.end_headers()
     handler.wfile.write(data)
 

@@ -38,7 +38,7 @@ export const state = {
   globalScopeSource: "all",
   globalScopeDate: "7d",
   globalScopeProject: "",
-  globalScopeEngine: "claude",
+  globalScopeEngine: localStorage.getItem("chatview-engine") || "claude",
   availableEngines: [],
   chatTimeout: parseInt(localStorage.getItem("chatview-timeout") || "900", 10),
 

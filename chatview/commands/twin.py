@@ -372,6 +372,7 @@ def cmd_twin_compile(args):
     _db.init_db()
 
     run_id = getattr(args, "run_id", "") or ""
+    lang = getattr(args, "lang", "zh") or "zh"
     where = "status IN ('confirmed','emerging')"
     params = ()
     if run_id:
@@ -387,13 +388,26 @@ def cmd_twin_compile(args):
                             order="strength DESC", limit=15)
 
     if not cards and not traits:
-        print("No confirmed/emerging cards or traits to compile.")
+        empty_msg = "No confirmed/emerging cards or traits to compile."
+        print(empty_msg)
         return
+
+    # Section headers
+    if lang == "en":
+        traits_header = "About This User"
+        cards_header = "Situational Judgments"
+        exception_label = "Exception: "
+        pack_title = "Runtime Pack"
+    else:
+        traits_header = "\u5173\u4e8e\u8fd9\u4f4d\u7528\u6237"
+        cards_header = "\u573a\u666f\u5224\u65ad"
+        exception_label = "\u4f8b\u5916\uff1a"
+        pack_title = "Runtime Pack"
 
     # Render traits section
     lines = []
     if traits:
-        lines.append("\u5173\u4e8e\u8fd9\u4f4d\u7528\u6237")
+        lines.append(traits_header)
         for t in traits:
             name = t.get("name") or ""
             desc = t.get("description") or ""
@@ -402,7 +416,7 @@ def cmd_twin_compile(args):
 
     # Render cards section
     if cards:
-        lines.append("\u573a\u666f\u5224\u65ad")
+        lines.append(cards_header)
         for c in cards:
             when = c.get("applies_when") or ""
             judgment = c.get("judgment") or ""
@@ -410,12 +424,12 @@ def cmd_twin_compile(args):
             exceptions = c.get("exceptions") or ""
             entry = f"\u2022 {when}\uff1a{judgment} {action}"
             if exceptions:
-                entry += f" \u4f8b\u5916\uff1a{exceptions}"
+                entry += f" {exception_label}{exceptions}"
             lines.append(entry)
 
     pack = "\n".join(lines)
     scope = f", run_id={run_id}" if run_id else ""
-    print(f"=== Runtime Pack ({len(cards)} cards, {len(traits)} traits{scope}) ===\n")
+    print(f"=== {pack_title} ({len(cards)} cards, {len(traits)} traits{scope}) ===\n")
     print(pack)
 
 

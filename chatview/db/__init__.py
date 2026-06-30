@@ -4,7 +4,7 @@ Usage:
     from chatview.db import get_conn, init_db, upsert_session, ...
 """
 
-from .core import get_conn, init_db, DB_PATH, CACHE_DIR
+from .core import get_conn, init_db, query_in_chunks, DB_PATH, CACHE_DIR
 from .sessions import (
     upsert_session, rebuild_fts, prune_stale_sessions,
     get_filtered_sessions, get_user_queries, search_fts,
@@ -17,6 +17,8 @@ from .insights import (
     bulk_insert_errors, bulk_insert_snippets,
     query_tool_heatmap, query_file_hotspots,
     query_error_patterns, query_snippets,
+    get_session_tool_usage, get_session_file_refs,
+    get_sessions_for_file,
 )
 from .twin import (
     _CM_TABLES,
@@ -27,7 +29,7 @@ from .twin import (
 from .evolve import evolve_upsert, evolve_get, evolve_latest
 
 __all__ = [
-    "get_conn", "init_db", "DB_PATH", "CACHE_DIR",
+    "get_conn", "init_db", "query_in_chunks", "DB_PATH", "CACHE_DIR",
     "upsert_session", "rebuild_fts", "prune_stale_sessions",
     "get_filtered_sessions", "get_user_queries", "search_fts",
     "get_session_meta", "get_session_messages",
@@ -37,6 +39,8 @@ __all__ = [
     "bulk_insert_errors", "bulk_insert_snippets",
     "query_tool_heatmap", "query_file_hotspots",
     "query_error_patterns", "query_snippets",
+    "get_session_tool_usage", "get_session_file_refs",
+    "get_sessions_for_file",
     "_CM_TABLES",
     "cm_upsert", "cm_get", "cm_get_all", "cm_delete", "cm_count",
     "cm_add_card_relation", "cm_get_evidence_for_card",

@@ -6,6 +6,7 @@
  */
 
 import { $ } from './dom.js';
+import { getLang } from './lang.js';
 
 // ── API helper ───────────────────────────────────────────────────
 export async function api(path) {
@@ -80,11 +81,15 @@ export function escRegex(str) {
 }
 
 // ── Date / time / size formatters ────────────────────────────────
+function _localeTag() {
+  return getLang() === 'en' ? 'en-US' : 'zh-CN';
+}
+
 export function formatDate(isoStr) {
   if (!isoStr) return "";
   try {
     const d = new Date(isoStr);
-    return d.toLocaleDateString("zh-CN", { month: "short", day: "numeric", year: "numeric" });
+    return d.toLocaleDateString(_localeTag(), { month: "short", day: "numeric", year: "numeric" });
   } catch { return isoStr; }
 }
 
@@ -92,7 +97,7 @@ export function formatTime(isoStr) {
   if (!isoStr) return "";
   try {
     const d = new Date(isoStr);
-    return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString(_localeTag(), { hour: "2-digit", minute: "2-digit" });
   } catch { return ""; }
 }
 
