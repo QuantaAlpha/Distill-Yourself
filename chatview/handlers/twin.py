@@ -35,7 +35,90 @@ _active_analyze_run_id = None
 # 流水线整体运行中标志：覆盖 Stage4/5 及阶段间隙（这些阶段不注册 subprocess），
 # 避免 /api/twin/progress 在这些时刻误报 running=False。
 _active_analyze_pipeline = False
+_active_analyze_cancel_requested = False
+_cancelled_analyze_run_ids = set()
 _analyze_lock = threading.Lock()
+
+
+def _is_twin_analysis_running_locked() -> bool:
+    """Return whether the active Twin run is still live.
+
+    Caller must hold _analyze_lock.
+    """
+    if _active_analyze_run_id is None:
+        return False
+    proc_alive = False
+    if _active_analyze_proc is not None:
+        if hasattr(_active_analyze_proc, "poll"):
+            try:
+                proc_alive = _active_analyze_proc.poll() is None
+            except Exception:
+                proc_alive = False
+        else:
+            # Some tests use minimal fake process objects. If a proc-like
+            # object is registered without poll(), treat it as active.
+            proc_alive = True
+    return proc_alive or _active_analyze_pipeline
+
+
+def _is_twin_analysis_running() -> bool:
+    with _analyze_lock:
+        return _is_twin_analysis_running_locked()
+
+
+def _is_twin_cancel_requested(run_id: str) -> bool:
+    with _analyze_lock:
+        return run_id in _cancelled_analyze_run_ids or (
+            _active_analyze_run_id == run_id and _active_analyze_cancel_requested
+        )
+
+
+def _kill_twin_process(proc):
+    """Best-effort terminate an active Twin subprocess; safe for None/fakes."""
+    if proc is None:
+        return
+    try:
+        if hasattr(proc, "poll") and proc.poll() is not None:
+            return
+    except Exception:
+        pass
+    try:
+        if os.name == "posix" and getattr(proc, "pid", None) is not None:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+        elif hasattr(proc, "terminate"):
+            try:
+                proc.terminate()
+            except (ProcessLookupError, OSError):
+                pass
+
+        if hasattr(proc, "wait"):
+            try:
+                proc.wait(timeout=2)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+
+        if os.name == "posix" and getattr(proc, "pid", None) is not None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+        elif hasattr(proc, "kill"):
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+
+        if hasattr(proc, "wait"):
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+    except Exception:
+        pass
 
 
 def _handle_evolve_sync(handler):
@@ -174,7 +257,8 @@ def _handle_twin_analyze(handler):
     - Stages already marked "completed" in the checkpoint are skipped
     - Each stage records "running"/"completed" status in twin_checkpoints
     """
-    global _active_analyze_proc, _active_analyze_run_id, _active_analyze_pipeline
+    global _active_analyze_proc, _active_analyze_run_id
+    global _active_analyze_pipeline, _active_analyze_cancel_requested
     from chatview import db as _db
     from chatview.handlers.base import _read_post_body
     import json as _json
@@ -201,6 +285,11 @@ def _handle_twin_analyze(handler):
     en = lang == "en"
 
     cli_path = str(Path(__file__).resolve().parent.parent.parent / "analyze.py")
+
+    with _analyze_lock:
+        if _is_twin_analysis_running_locked():
+            _error(handler, 409, "Twin analysis is already running")
+            return
 
     # ── Checkpoint / resume logic ──
     _db.init_db()
@@ -239,6 +328,8 @@ def _handle_twin_analyze(handler):
         _active_analyze_run_id = run_id
         _active_analyze_proc = None
         _active_analyze_pipeline = True
+        _active_analyze_cancel_requested = False
+        _cancelled_analyze_run_ids.discard(run_id)
 
     def _run_stage(stage_num, msg_en, msg_zh, prompt_fn, is_ai=True):
         """Run a single pipeline stage with checkpointing.
@@ -247,6 +338,9 @@ def _handle_twin_analyze(handler):
         silently so the AI process can complete and persist results to DB.
         """
         global _active_analyze_proc
+        if _is_twin_cancel_requested(run_id):
+            _db.save_checkpoint(run_id, stage_num, "cancelled")
+            return False
         _db.save_checkpoint(run_id, stage_num, "running")
         msg = msg_en if en else msg_zh
         try:
@@ -285,15 +379,24 @@ def _handle_twin_analyze(handler):
                 ok = False
             finally:
                 with _analyze_lock:
-                    _active_analyze_proc = None
+                    if _active_analyze_proc is proc_ref[0]:
+                        _active_analyze_proc = None
             if not ok:
-                _db.save_checkpoint(run_id, stage_num, "failed")
+                status = "cancelled" if _is_twin_cancel_requested(run_id) else "failed"
+                _db.save_checkpoint(run_id, stage_num, status)
                 return False
         else:
             try:
-                prompt_fn()  # subprocess stages use the closure directly
+                ok = prompt_fn()  # subprocess stages use the closure directly
             except BrokenPipeError:
-                pass
+                ok = True
+            if ok is False:
+                status = "cancelled" if _is_twin_cancel_requested(run_id) else "failed"
+                _db.save_checkpoint(run_id, stage_num, status)
+                return False
+        if _is_twin_cancel_requested(run_id):
+            _db.save_checkpoint(run_id, stage_num, "cancelled")
+            return False
         _db.save_checkpoint(run_id, stage_num, "completed")
         return True
 
@@ -346,7 +449,7 @@ def _handle_twin_analyze(handler):
             except BrokenPipeError:
                 pass
             try:
-                r = subprocess.run(
+                proc = subprocess.Popen(
                     [
                         sys.executable,
                         cli_path,
@@ -356,18 +459,36 @@ def _handle_twin_analyze(handler):
                         "--lang",
                         lang,
                     ],
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    timeout=30,
+                    start_new_session=(os.name == "posix"),
                 )
+                with _analyze_lock:
+                    if _active_analyze_run_id == run_id:
+                        _active_analyze_proc = proc
+                try:
+                    stdout, stderr = proc.communicate(timeout=30)
+                except subprocess.TimeoutExpired:
+                    _kill_twin_process(proc)
+                    try:
+                        stdout, stderr = proc.communicate(timeout=2)
+                    except Exception:
+                        stdout, stderr = "", "timeout"
+                finally:
+                    with _analyze_lock:
+                        if _active_analyze_proc is proc:
+                            _active_analyze_proc = None
+                if _is_twin_cancel_requested(run_id):
+                    return False
                 try:
                     _sse_event(
-                        handler, {"type": "text", "content": r.stdout or "(no output)"}
+                        handler, {"type": "text", "content": stdout or "(no output)"}
                     )
                 except BrokenPipeError:
                     pass
-                if r.returncode != 0:
-                    msg = (r.stderr or r.stdout or "unknown error")[:500]
+                if proc.returncode != 0:
+                    msg = (stderr or stdout or "unknown error")[:500]
                     try:
                         _sse_event(
                             handler,
@@ -461,9 +582,12 @@ def _handle_twin_analyze(handler):
     finally:
         # Always clear active analysis state
         with _analyze_lock:
-            _active_analyze_proc = None
-            _active_analyze_run_id = None
-            _active_analyze_pipeline = False
+            if _active_analyze_run_id == run_id:
+                _active_analyze_proc = None
+                _active_analyze_run_id = None
+                _active_analyze_pipeline = False
+                _active_analyze_cancel_requested = False
+            _cancelled_analyze_run_ids.discard(run_id)
 
 
 def _build_twin_stage1_prompt(
@@ -1059,35 +1183,16 @@ def _handle_twin_progress(handler):
     without restarting from stage 1.
     """
     with _analyze_lock:
-        proc = _active_analyze_proc
         active_run_id = _active_analyze_run_id
-        pipeline_active = _active_analyze_pipeline
+        running = _is_twin_analysis_running_locked()
 
-    # 运行判定：
-    # 1) 当前 AI 子进程仍在跑（Stage1-3 主路径）；或
-    # 2) 流水线整体仍在进行中（Stage4/5 纯 Python 阶段、阶段间隙没有注册
-    #    subprocess，但 _active_analyze_pipeline 仍为 True）。
-    # 这样可避免在 Stage4/5 期间因旧进程已退出而误报 running=False。
-    running = False
-    if active_run_id is not None:
-        proc_alive = False
-        if proc is not None:
-            try:
-                proc_alive = proc.poll() is None
-            except Exception:
-                proc_alive = False
-        running = proc_alive or pipeline_active
-
-    run = _latest_twin_run_info()
-    # When a run is live but hasn't written its first rows yet, fall back to the
-    # active run_id so the UI can still attach.
-    if run is None and running and active_run_id:
-        run = {
-            "run_id": active_run_id,
-            "status": "running",
-            "stats": {"events": 0, "cards": 0, "traits": 0},
-            "checkpoints": {},
-        }
+    if running and active_run_id:
+        # Prefer the active run over "latest" persisted data; a new run may not
+        # have written rows yet, while an older completed run still exists.
+        run = _twin_run_info_for(active_run_id)
+        run["status"] = "running"
+    else:
+        run = _latest_twin_run_info()
 
     _json_response(
         handler,
@@ -1102,7 +1207,8 @@ def _handle_twin_cancel(handler):
     active run, returns an error. Terminates the active subprocess gracefully
     (SIGTERM then SIGKILL if needed) and clears module state.
     """
-    global _active_analyze_proc, _active_analyze_run_id, _active_analyze_pipeline
+    global _active_analyze_proc, _active_analyze_run_id
+    global _active_analyze_pipeline, _active_analyze_cancel_requested
     from chatview.handlers.base import _read_post_body
     import json as _json
 
@@ -1121,9 +1227,9 @@ def _handle_twin_cancel(handler):
         active_run_id = _active_analyze_run_id
         pipeline_active = _active_analyze_pipeline
 
-        # Check if there's an active run (a live subprocess OR the pipeline
-        # is still progressing through a non-AI stage).
-        if active_run_id is None or not (proc is not None or pipeline_active):
+        # Check if there's an active run (a live subprocess OR the pipeline is
+        # still progressing through a non-AI stage).
+        if active_run_id is None or not _is_twin_analysis_running_locked():
             _json_response(handler, {"ok": False, "error": "No active analysis"})
             return
 
@@ -1132,48 +1238,26 @@ def _handle_twin_cancel(handler):
             _json_response(handler, {"ok": False, "error": "Run ID mismatch"})
             return
 
-    # Terminate the process (outside the lock to avoid holding it during waits)
-    try:
-        if os.name == "posix":
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except (ProcessLookupError, OSError):
-                pass
-        else:
-            try:
-                proc.terminate()
-            except (ProcessLookupError, OSError):
-                pass
+    # Mark cancellation before killing so the worker thread records cancelled
+    # rather than failed if it observes the terminated process.
+    with _analyze_lock:
+        if _active_analyze_run_id == active_run_id:
+            _active_analyze_cancel_requested = True
+            _cancelled_analyze_run_ids.add(active_run_id)
 
-        # Wait briefly for graceful shutdown
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            # Force kill if still alive
-            if os.name == "posix":
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except (ProcessLookupError, OSError):
-                    pass
-            else:
-                try:
-                    proc.kill()
-                except (ProcessLookupError, OSError):
-                    pass
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
-    except Exception:
-        pass
+    # Terminate the process (outside the lock to avoid holding it during waits).
+    _kill_twin_process(proc)
 
     # Clear active state but PRESERVE completed-stage data so a later resume can
     # continue instead of restarting from stage 1 (wasting time + tokens).
     with _analyze_lock:
-        _active_analyze_proc = None
-        run_to_clean = _active_analyze_run_id
-        _active_analyze_run_id = None
-        _active_analyze_pipeline = False
+        run_to_clean = None
+        if proc is not None or not pipeline_active:
+            _active_analyze_proc = None
+            run_to_clean = _active_analyze_run_id
+            _active_analyze_run_id = None
+            _active_analyze_pipeline = False
+            _active_analyze_cancel_requested = False
 
     # Mark any non-completed checkpoint stages as "cancelled" (keep completed
     # stages + their evidence_events / judgment_cards / cognitive_traits rows).
@@ -1197,6 +1281,16 @@ def _handle_twin_sync(handler):
     from chatview import db as _db
     from chatview.handlers.base import _read_post_body
     import json as _json
+
+    if _is_twin_analysis_running():
+        _json_response(
+            handler,
+            {
+                "ok": False,
+                "error": "Twin analysis is running; sync is disabled until it finishes",
+            },
+        )
+        return
 
     # Read lang from POST body if provided
     raw = _read_post_body(handler)

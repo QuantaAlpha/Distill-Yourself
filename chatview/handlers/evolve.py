@@ -29,6 +29,7 @@ _AI_TABS = set(_EVOLVE_TABS)
 # Active evolve analysis state (for /api/evolve/cancel + /api/evolve/progress)
 # ---------------------------------------------------------------------------
 _active_evolve_runs = {}  # {run_id: {"tab", "source", "date", "project", "engine", "proc"}}
+_cancelled_evolve_run_ids = set()
 _evolve_lock = threading.Lock()
 
 
@@ -191,6 +192,7 @@ def _handle_evolve_stream(
         },
     )
     with _evolve_lock:
+        _cancelled_evolve_run_ids.discard(run_id)
         _active_evolve_runs[run_id] = {
             "tab": tab,
             "source": source or "all",
@@ -220,6 +222,22 @@ def _handle_evolve_stream(
     stream_finished = False
     try:
         for evt in stream:
+            with _evolve_lock:
+                cancelled = run_id in _cancelled_evolve_run_ids
+            if cancelled:
+                _db.evolve_run_update(
+                    run_id,
+                    status="cancelled",
+                    snapshot={
+                        "events": event_tail,
+                        "text": "".join(text_chunks)[-12000:],
+                        "step_count": step_count,
+                        "usage": {"input": usage_input, "output": usage_output},
+                        "cancelled": True,
+                    },
+                    error_message="Cancelled by user",
+                )
+                return
             etype = evt.get("type") if isinstance(evt, dict) else None
             if proc_ref[0] is not None:
                 with _evolve_lock:
@@ -287,12 +305,33 @@ def _handle_evolve_stream(
     finally:
         stream.close()
         with _evolve_lock:
-            if stream_finished and run_id in _active_evolve_runs:
+            if run_id in _cancelled_evolve_run_ids:
+                _active_evolve_runs.pop(run_id, None)
+                _cancelled_evolve_run_ids.discard(run_id)
+            elif stream_finished and run_id in _active_evolve_runs:
                 _active_evolve_runs[run_id]["proc"] = None
             else:
                 _active_evolve_runs.pop(run_id, None)
 
     # AI wrote to SQLite via evolve-write CLI — read it back
+    with _evolve_lock:
+        cancelled = run_id in _cancelled_evolve_run_ids
+    if cancelled:
+        _db.evolve_run_update(
+            run_id,
+            status="cancelled",
+            snapshot={
+                "events": event_tail,
+                "text": "".join(text_chunks)[-12000:],
+                "step_count": step_count,
+                "usage": {"input": usage_input, "output": usage_output},
+                "cancelled": True,
+            },
+            error_message="Cancelled by user",
+        )
+        with _evolve_lock:
+            _active_evolve_runs.pop(run_id, None)
+        return
     try:
         row = _db.evolve_get(tab, source, date, project, engine)
         if row:
@@ -351,6 +390,7 @@ def _handle_evolve_stream(
     finally:
         with _evolve_lock:
             _active_evolve_runs.pop(run_id, None)
+            _cancelled_evolve_run_ids.discard(run_id)
 
 
 def _latest_evolve_run_info(
@@ -494,11 +534,14 @@ def _handle_evolve_cancel(handler, raw_body):
 
     with _evolve_lock:
         active = _active_evolve_runs.get(run["run_id"])
-    if not active or active.get("proc") is None:
+    if not active:
         _json_response(handler, {"ok": False, "error": "No active analysis"})
         return
 
-    _kill_evolve_process(active["proc"])
+    with _evolve_lock:
+        _cancelled_evolve_run_ids.add(run["run_id"])
+    if active.get("proc") is not None:
+        _kill_evolve_process(active["proc"])
     _db.evolve_run_update(
         run["run_id"],
         status="cancelled",

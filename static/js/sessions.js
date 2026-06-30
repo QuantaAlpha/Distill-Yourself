@@ -167,6 +167,11 @@ export function updateFilterChips() {
 
 // ── Render Sessions ──────────────────────────────────────────────
 export function renderSessions(sessions) {
+  const sidebarContent = document.getElementById("sidebar-content");
+  if (sidebarContent && state._sidebarScrollHandler) {
+    sidebarContent.removeEventListener("scroll", state._sidebarScrollHandler);
+    state._sidebarScrollHandler = null;
+  }
   // Apply source filter, then date filter
   const filtered = filterSessionList(sessions);
   dom.sessionList.innerHTML = "";
@@ -276,9 +281,7 @@ export function renderSessions(sessions) {
     };
     sentinel.addEventListener("click", loadMore);
     // Also auto-load when scrolling near bottom (remove previous listener to prevent leaks)
-    const sidebarContent = document.getElementById("sidebar-content");
     if (sidebarContent) {
-      if (state._sidebarScrollHandler) sidebarContent.removeEventListener("scroll", state._sidebarScrollHandler);
       state._sidebarScrollHandler = () => {
         if (sidebarContent.scrollTop + sidebarContent.clientHeight >= sidebarContent.scrollHeight - 100) {
           if (renderedCount < filtered.length) loadMore();

@@ -336,6 +336,7 @@ export function renderAiScopeBar() {
     !Object.prototype.hasOwnProperty.call(projCounts, state.globalScopeProject)
   ) {
     state.globalScopeProject = "";
+    persistAiScopeState();
   }
   projSelect.value = state.globalScopeProject;
   projSelect.onchange = () => {

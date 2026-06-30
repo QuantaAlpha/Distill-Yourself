@@ -74,6 +74,7 @@
         "evolve.empty.refreshHint": "点击 🔄 Refresh 开始分析最近的对话",
         "evolve.empty.initial": "点击刷新，开始分析最近的对话",
         "evolve.empty.profile": "暂无用户画像数据",
+        "evolve.empty.memory": "暂无记忆卡片数据",
         "evolve.empty.rules": "暂无规则建议",
         "evolve.empty.signals": "暂无纠正记录",
         "evolve.empty.patterns": "暂无重复模式",
@@ -158,6 +159,7 @@
         "evolve.empty.initial":
           "Click Refresh to start analyzing recent conversations",
         "evolve.empty.profile": "No user profile data yet",
+        "evolve.empty.memory": "No memory cards yet",
         "evolve.empty.rules": "No rule suggestions yet",
         "evolve.empty.signals": "No correction records yet",
         "evolve.empty.patterns": "No recurring patterns yet",
@@ -314,6 +316,14 @@
     return !current || current === _currentScopeKey(tab, scope);
   }
 
+  function _isTabBusy(tab, scope) {
+    return (
+      !!evolveStreamAborts[tab] ||
+      !!evolveRecoveredRunPollers[tab] ||
+      _isTabLoadingForScope(tab, scope)
+    );
+  }
+
   function _getProgressState(tab) {
     if (!evolveProgressState[tab]) {
       evolveProgressState[tab] = {
@@ -365,7 +375,7 @@
     const requestScope = scope || getEvolveScope();
     const cached = getCachedTab(targetTab, requestScope);
     const state = _getProgressState(targetTab);
-    const isLoading = _isTabLoadingForScope(targetTab, requestScope);
+    const isLoading = _isTabBusy(targetTab, requestScope);
 
     if (isLoading) {
       if (state.usageInput || state.usageOutput) {
@@ -547,23 +557,14 @@
       lang: scope.lang || "zh",
     });
     EVOLVE_TABS.forEach((tab) => {
-      if (_isTabLoadingForScope(tab, scope)) return;
+      if (_isTabBusy(tab, scope)) return;
       const cached = getCachedTab(tab, scope);
       if (cached && cached.data && !cached.data._error) return;
       fetch(`/api/evolve/${tab}?${params}`)
         .then((r) => r.json())
         .then((data) => {
-          if (_isTabLoadingForScope(tab, scope)) return;
-          if (
-            data &&
-            !data._error &&
-            (data.categories?.length ||
-              data.nodes?.length ||
-              data.rules?.length ||
-              data.timeline?.length ||
-              data.events?.length ||
-              data.bubbles?.length)
-          ) {
+          if (_isTabBusy(tab, scope)) return;
+          if (hasRenderableData(tab, data)) {
             const normalized = normalizeEvolveData(tab, data);
             setCachedTab(tab, normalized, scope);
             if (isCurrentScopeKey(tab, scope)) {
@@ -588,10 +589,7 @@
     if (tabRefresh)
       tabRefresh.onclick = () => {
         const activeScope = getEvolveScope();
-        if (
-          evolveStreamAborts[evolveActiveTab] ||
-          _isTabLoadingForScope(evolveActiveTab, activeScope)
-        ) {
+        if (_isTabBusy(evolveActiveTab, activeScope)) {
           _stopEvolveTab(evolveActiveTab);
         } else {
           refreshEvolveTab(evolveActiveTab);
@@ -633,7 +631,16 @@
       t.classList.toggle("active", t.dataset.tab === tab),
     );
     // Show/hide per-tab panels instead of re-rendering
-    _ensureTabPanel(tab);
+    const activePanel = _ensureTabPanel(tab);
+    const scope = getEvolveScope();
+    if (
+      activePanel &&
+      activePanel.dataset.langRendered &&
+      activePanel.dataset.langRendered !== _getLang() &&
+      !_isTabBusy(tab, scope)
+    ) {
+      _renderTabPanel(tab, activePanel);
+    }
     $$(".evolve-tab-panel").forEach((p) => {
       p.style.display = p.dataset.tab === tab ? "" : "none";
     });
@@ -652,7 +659,7 @@
       // Add status indicator
       const status = document.createElement("span");
       status.className = "evolve-tab-status";
-      if (_isTabLoadingForScope(tab, scope)) {
+      if (_isTabBusy(tab, scope)) {
         status.textContent = "⏳";
         status.title = _getLang() === "en" ? "Loading..." : "加载中…";
         status.classList.add("loading");
@@ -697,6 +704,7 @@
   /** Render tab content into its dedicated panel */
   function _renderTabPanel(tab, panel) {
     if (!panel) return;
+    panel.dataset.langRendered = _getLang();
     const scope = getEvolveScope();
     const cached = getCachedTab(tab, scope);
     if (cached && cached.data) {
@@ -721,7 +729,7 @@
         return;
       }
       renderTabVisualization(tab, cached.data, panel);
-    } else if (!_isTabLoadingForScope(tab, scope)) {
+    } else if (!_isTabBusy(tab, scope)) {
       panel.innerHTML = `<div class="evolve-empty-state"><div class="evolve-empty-icon">📊</div><p class="evolve-empty-title">${_tt("evolve.empty.initial")}</p><p class="evolve-empty-hint">${_tt("evolve.empty.refreshHint")}</p><button class="btn btn-primary btn-sm evolve-retry-btn" data-tab="${esc(tab)}">${esc(_tt("evolve.btn.startAnalysis"))}</button></div>`;
       _bindRetryButtons(panel);
     }
@@ -743,6 +751,7 @@
     } catch (e) {
       evolveCache = {};
     }
+    _migrateLegacyLangScopedCache();
   }
 
   function saveEvolveCache() {
@@ -763,7 +772,7 @@
     }
   }
 
-  function getScopeCacheKey(tab, scope) {
+  function getLegacyScopeCacheKey(tab, scope) {
     const s = scope || getEvolveScope();
     return [
       tab,
@@ -775,11 +784,59 @@
     ].join("::");
   }
 
-  function getCachedTab(tab, scope) {
+  function getScopeCacheKey(tab, scope) {
+    const s = scope || getEvolveScope();
+    return [
+      tab,
+      s.source || "all",
+      s.date || "7d",
+      s.project || "",
+      s.engine || "auto",
+    ].join("::");
+  }
+
+  function _migrateLegacyLangScopedCache() {
+    let changed = false;
+    Object.entries(evolveCache).forEach(([key, entry]) => {
+      if (!key || key.split("::").length < 6) return;
+      const tab = key.split("::")[0];
+      const scope = entry && entry.scope ? entry.scope : {};
+      const normalizedKey = getScopeCacheKey(tab, {
+        source: scope.source,
+        date: scope.date,
+        project: scope.project,
+        engine: scope.engine,
+      });
+      const current = evolveCache[normalizedKey];
+      const currentTs = new Date(current?.updatedAt || 0).getTime();
+      const entryTs = new Date(entry?.updatedAt || 0).getTime();
+      if (!current || entryTs >= currentTs) {
+        evolveCache[normalizedKey] = entry;
+      }
+      delete evolveCache[key];
+      changed = true;
+    });
+    if (changed) saveEvolveCache();
+  }
+
+  function getExactCachedTab(tab, scope) {
     const targetScope = scope || getEvolveScope();
     const exactKey = getScopeCacheKey(tab, targetScope);
     if (evolveCache[exactKey]) return evolveCache[exactKey];
+    const legacyKey = getLegacyScopeCacheKey(tab, targetScope);
+    if (evolveCache[legacyKey]) {
+      evolveCache[exactKey] = evolveCache[legacyKey];
+      delete evolveCache[legacyKey];
+      saveEvolveCache();
+      return evolveCache[exactKey];
+    }
+    return null;
+  }
 
+  function getBestCachedTab(tab, scope) {
+    const targetScope = scope || getEvolveScope();
+    const exact = getExactCachedTab(tab, targetScope);
+    if (exact) return exact;
     const prefix = [
       tab,
       targetScope.source || "all",
@@ -793,7 +850,12 @@
         const bTime = new Date(b[1]?.updatedAt || 0).getTime();
         return bTime - aTime;
       });
-    return matches.length ? matches[0][1] : null;
+    if (!matches.length) return null;
+    return Object.assign({ stale: true }, matches[0][1]);
+  }
+
+  function getCachedTab(tab, scope) {
+    return getExactCachedTab(tab, scope);
   }
 
   function setCachedTab(tab, data, scope) {
@@ -886,15 +948,37 @@
           (data.categories?.length || 0) + (data.radar?.dimensions?.length || 0)
         );
       case "memory":
-        return data.nodes?.length || 0;
+        return (data.cards?.length || 0) + (data.nodes?.length || 0);
       case "rules":
         return data.rules?.length || 0;
       case "signals":
         return data.events?.length || 0;
       case "patterns":
-        return data.bubbles?.length || 0;
+        return (data.bubbles?.length || 0) + (data.cards?.length || 0);
       default:
         return 0;
+    }
+  }
+
+  function hasRenderableData(tab, data) {
+    if (!data || data._error) return false;
+    switch (tab) {
+      case "profile":
+        return !!(data.categories?.length || data.radar?.dimensions?.length);
+      case "memory":
+        return !!(
+          data.cards?.length ||
+          data.nodes?.length ||
+          data.links?.length
+        );
+      case "rules":
+        return !!data.rules?.length;
+      case "signals":
+        return !!(data.timeline?.length || data.events?.length);
+      case "patterns":
+        return !!(data.cards?.length || data.bubbles?.length);
+      default:
+        return false;
     }
   }
 
@@ -946,13 +1030,13 @@
       lang: scope.lang || "zh",
     });
     EVOLVE_TABS.forEach((tab) => {
-      if (_isTabLoadingForScope(tab, scope)) return;
+      if (_isTabBusy(tab, scope)) return;
       const cached = getCachedTab(tab, scope);
       if (cached && cached.data && !cached.data._error) return; // already in localStorage
       fetch(`/api/evolve/${tab}?${params}`)
         .then((r) => r.json())
         .then((data) => {
-          if (_isTabLoadingForScope(tab, scope)) return;
+          if (_isTabBusy(tab, scope)) return;
           // "no_cache" just means never analyzed yet — not a failure.
           // Leave the tab in its empty/"Analyze" state instead of showing an error.
           if (data && data._error && data._error !== "no_cache") {
@@ -966,15 +1050,7 @@
             return;
           }
           if (data && data._error === "no_cache") return;
-          if (
-            data &&
-            (data.categories?.length ||
-              data.nodes?.length ||
-              data.rules?.length ||
-              data.timeline?.length ||
-              data.events?.length ||
-              data.bubbles?.length)
-          ) {
+          if (hasRenderableData(tab, data)) {
             const normalized = normalizeEvolveData(tab, data);
             setCachedTab(tab, normalized, scope);
             if (isCurrentScopeKey(tab, scope)) {
@@ -1336,9 +1412,7 @@
     const btn = $("#evolve-tab-refresh");
     if (!btn) return;
     const scope = getEvolveScope();
-    const streaming =
-      !!evolveStreamAborts[evolveActiveTab] ||
-      _isTabLoadingForScope(evolveActiveTab, scope);
+    const streaming = _isTabBusy(evolveActiveTab, scope);
     if (streaming) {
       btn.textContent = _tt("evolve.btn.stop");
       btn.classList.add("btn-stop");
@@ -1348,22 +1422,31 @@
     }
   }
 
-  function _stopEvolveTab(tab) {
+  async function _stopEvolveTab(tab) {
     _stopRecoveredRunPoll(tab);
     const scope = getEvolveScope();
-    fetch("/api/evolve/cancel", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tab,
-        scope: {
-          source: scope.source || "all",
-          date: scope.date || "7d",
-          project: scope.project || "",
-          engine: scope.engine || "auto",
-        },
-      }),
-    }).catch(() => {});
+    let cancelled = false;
+    try {
+      const resp = await fetch("/api/evolve/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tab,
+          scope: {
+            source: scope.source || "all",
+            date: scope.date || "7d",
+            project: scope.project || "",
+            engine: scope.engine || "auto",
+          },
+        }),
+      });
+      const data = await resp.json();
+      cancelled = !!(data && data.ok);
+    } catch (e) {}
+    if (!cancelled && !evolveStreamAborts[tab]) {
+      _syncEvolveChrome(tab, scope);
+      return;
+    }
     if (evolveStreamAborts[tab]) {
       evolveStreamAborts[tab].abort();
       delete evolveStreamAborts[tab];
@@ -1715,7 +1798,7 @@
 
   function refreshEvolveTab(tab) {
     const requestScope = getEvolveScope();
-    if (_isTabLoadingForScope(tab, requestScope)) return; // only block same tab, not others
+    if (_isTabBusy(tab, requestScope)) return; // only block same tab, not others
     delete evolveDetachedTabs[tab];
     _clearCachedTabTransientError(tab, requestScope);
     _markTabLoading(tab, requestScope);
@@ -2043,6 +2126,10 @@
   function renderMemoryTab(data, container) {
     if (data._parseError) {
       container.innerHTML = `<div class="evolve-raw-result">${(window.renderMarkdownSimple || window.esc || String)(data._raw)}</div>`;
+      return;
+    }
+    if (!data.cards?.length && !data.nodes?.length && !data.links?.length) {
+      container.innerHTML = `<div class="evolve-empty-state"><div class="evolve-empty-icon">🧠</div><p class="evolve-empty-title">${_tt("evolve.empty.memory")}</p><p class="evolve-empty-hint">${_tt("evolve.empty.refreshHint")}</p></div>`;
       return;
     }
     container.innerHTML = "";
@@ -2909,12 +2996,16 @@
   // ── Sync to Claude Code ──
   const SYNC_TABS = new Set(["profile", "memory"]);
 
+  function isSyncableCached(tab, scope) {
+    if (!SYNC_TABS.has(tab)) return false;
+    const cached = getExactCachedTab(tab, scope || getEvolveScope());
+    return !!(cached && hasRenderableData(tab, cached.data));
+  }
+
   function updateSyncButtonState() {
     const btn = $("#evolve-tab-sync");
     if (!btn) return;
-    const hasSyncableData =
-      SYNC_TABS.has(evolveActiveTab) && getCachedTab(evolveActiveTab);
-    btn.disabled = !hasSyncableData;
+    btn.disabled = !isSyncableCached(evolveActiveTab);
   }
 
   function toggleSyncPanel() {
@@ -2931,8 +3022,8 @@
       '<div style="padding:8px 0;color:var(--text-muted);font-size:12px">Loading preview...</div>';
 
     const targets = [];
-    if (getCachedTab("memory")) targets.push("memory");
-    if (getCachedTab("profile")) targets.push("claude_md");
+    if (isSyncableCached("memory")) targets.push("memory");
+    if (isSyncableCached("profile")) targets.push("claude_md");
 
     if (targets.length === 0) {
       panel.innerHTML =
@@ -3137,7 +3228,7 @@
       _registerEvolveI18n();
       if (window.applyI18nDom) window.applyI18nDom(document);
       _syncEvolveChrome(evolveActiveTab);
-      if (_isTabLoadingForScope(evolveActiveTab, getEvolveScope())) {
+      if (_isTabBusy(evolveActiveTab, getEvolveScope())) {
         _updateProgressSummary(
           evolveActiveTab,
           _getProgressState(evolveActiveTab),
@@ -3147,7 +3238,7 @@
       // If a tab is mid-stream, don't restart it — only the static DOM labels above refresh.
       if (
         !evolveStreamAborts[evolveActiveTab] &&
-        !_isTabLoadingForScope(evolveActiveTab, getEvolveScope())
+        !_isTabBusy(evolveActiveTab, getEvolveScope())
       ) {
         const panel = document.querySelector(
           `.evolve-tab-panel[data-tab="${evolveActiveTab}"]`,

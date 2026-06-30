@@ -220,6 +220,20 @@
   color: var(--success, #16a34a);
 }
 
+@media (max-width: 760px) {
+  #evolve-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .evolve-tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding-inline: 14px;
+  }
+}
+
 #evolve-tab-content {
   background: var(--bg-surface);
   border: 1px solid var(--border-light);

@@ -155,6 +155,24 @@ class TestFrontendStreamingStatic(unittest.TestCase):
         self.assertIn("_scheduleRecoveredRunPoll(tab, requestScope);", script)
         self.assertIn("setTimeout(poll, 2000)", script)
 
+    def test_evolve_recovered_pollers_keep_chrome_in_running_state(self):
+        script = read_static("evolve.js")
+
+        self.assertIn("function _isTabBusy(", script)
+        self.assertIn("!!evolveRecoveredRunPollers[tab]", script)
+
+        for marker in (
+            "function _updateEvolveHeader",
+            "function _updateTabStatusIndicators",
+            "function _setEvolveRefreshButton",
+        ):
+            body = script[
+                script.index(marker) : script.index(
+                    "function ", script.index(marker) + len(marker)
+                )
+            ]
+            self.assertIn("_isTabBusy(", body, marker)
+
     def test_evolve_init_checks_backend_progress_before_rendering_empty_state(self):
         script = read_static("evolve.js")
         init_body = script[
@@ -323,9 +341,9 @@ class TestFrontendStreamingStatic(unittest.TestCase):
         ]
 
         for body in (interrupted_body, server_cache_body):
-            self.assertIn("if (_isTabLoadingForScope(tab, scope)) return;", body)
+            self.assertIn("if (_isTabBusy(tab, scope)) return;", body)
             self.assertGreaterEqual(
-                body.count("if (_isTabLoadingForScope(tab, scope)) return;"),
+                body.count("if (_isTabBusy(tab, scope)) return;"),
                 2,
             )
 
@@ -377,7 +395,7 @@ class TestFrontendStreamingStatic(unittest.TestCase):
 
         self.assertIn("!evolveStreamAborts[evolveActiveTab]", locale_body)
         self.assertIn(
-            "!_isTabLoadingForScope(evolveActiveTab, getEvolveScope())",
+            "!_isTabBusy(evolveActiveTab, getEvolveScope())",
             locale_body,
         )
 
@@ -390,7 +408,7 @@ class TestFrontendStreamingStatic(unittest.TestCase):
             )
         ]
 
-        self.assertIn("_isTabLoadingForScope(evolveActiveTab, activeScope)", bind_body)
+        self.assertIn("_isTabBusy(evolveActiveTab, activeScope)", bind_body)
         self.assertNotIn("evolveLoadingTabs[evolveActiveTab]", bind_body)
 
     def test_evolve_terminal_events_do_not_require_stream_container(self):

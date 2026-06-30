@@ -903,6 +903,7 @@
   let eventsInited = false;
   let _bgPollTimer = null; // polls /api/twin/progress to re-attach to a background run
   let _statsPollTimer = null; // polls /api/twin/progress during a live SSE stream to refresh stats/stages
+  let _lastRunHistoryRenderAt = 0;
   let _lastProgressRun = null; // last run dict from /api/twin/progress or /resume
   let beforeUnloadBound = false;
 
@@ -963,6 +964,23 @@
   function _clearProgressSnapshot() {
     _lastError = "";
     try { localStorage.removeItem(PROGRESS_SNAPSHOT_KEY); } catch (e) {}
+  }
+
+  async function _refreshAuthoritativeProgressSnapshot(extra) {
+    try {
+      const resp = await fetch("/api/twin/progress");
+      const data = await resp.json();
+      if (data && data.ok && data.run) {
+        _lastProgressRun = Object.assign({}, data.run, extra || {});
+        _activeRunId = _lastProgressRun.run_id || _activeRunId;
+        if (_activeRunId) {
+          try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+        }
+        _saveProgressSnapshot(_lastProgressRun);
+        return _lastProgressRun;
+      }
+    } catch (e) {}
+    return null;
   }
 
   /** Map a run status to an honest breadcrumb label key (never lie with "done"). */
@@ -1223,7 +1241,7 @@
           _lastProgressRun = p.run;
           if (analysisRunning && currentView === "analyzing") {
             _updateProgressSummary(p.run);
-            _renderRunHistory();
+            _renderRunHistoryThrottled();
           }
           _saveProgressSnapshot({ status: "running", error: "" });
         })
@@ -1329,7 +1347,7 @@
     // Never wipe a live, content-rich stream (in-app tab switch keeps the DOM):
     // the rendered tool-call records must persist and keep growing. Instead of
     // returning early (which froze the stats), refresh the summary in place.
-    if (live && _streamHasContent()) { _updateProgressSummary(run); _renderRunHistory(); return; }
+    if (live && _streamHasContent()) { _updateProgressSummary(run); _renderRunHistoryThrottled(); return; }
     const built = _progressSummaryHtml(run, live);
     let inner = '<div class="twin-stream-container" id="twin-stream-output">';
     inner += '<div class="twin-progress-summary">' + built.html + '</div>';
@@ -1346,6 +1364,13 @@
     inner += '</div>';
     progress.innerHTML = inner;
     // History list lives below the stream summary; re-append after the rebuild.
+    _renderRunHistory();
+  }
+
+  function _renderRunHistoryThrottled(force) {
+    const now = Date.now();
+    if (!force && now - _lastRunHistoryRenderAt < 10000) return;
+    _lastRunHistoryRenderAt = now;
     _renderRunHistory();
   }
 
@@ -1510,6 +1535,9 @@
       if (analysisRunning) {
         // Analysis in progress: only refresh shell labels, don't restart the stream.
         _updateAnalyzeButton();
+        if (_lastProgressRun) _updateProgressSummary(_lastProgressRun);
+      } else if (_lastProgressRun && currentView === "analyzing") {
+        _renderRunProgress(_lastProgressRun, false);
       } else if (_reloadCurrentView) {
         // Re-render the active detail/list view in the new locale.
         _reloadCurrentView();
@@ -1636,22 +1664,32 @@
     }
   }
 
-  function _stopAnalysis() {
+  async function _stopAnalysis() {
     if (analysisAbort) analysisAbort.abort();
     _stopBackgroundPoll();
     _stopStatsPoll();
-    if (_activeRunId) {
-      fetch("/api/twin/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run_id: _activeRunId, lang: _getLang() }),
-      }).catch(() => {});
+    const runId = _activeRunId;
+    if (runId) {
+      try {
+        await fetch("/api/twin/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_id: runId, lang: _getLang() }),
+        });
+      } catch (e) {}
+      const run = await _refreshAuthoritativeProgressSnapshot({ error: _lastError });
+      if (run) {
+        hasAnalysisProgress = true;
+        currentView = "analyzing";
+        _showOnlyView("analysis");
+        _renderRunProgress(run, false);
+        _appendBackToOverviewBtn();
+      }
     }
     // Don't null analysisAbort here — let .catch/.finally do cleanup
     // (otherwise the stale-callback guard blocks state reset)
     analysisRunning = false;
     _updateAnalyzeButton();
-    _restoreOverviewAfterStoppedAnalysis();
     const updatedEl = document.getElementById("twin-last-analyzed");
     if (updatedEl) { updatedEl.textContent = _tt("twin.status.stopped"); updatedEl.classList.remove("loading"); }
   }
@@ -2385,15 +2423,20 @@
       });
   }
 
-  function _finishAnalysis(state, failed = false) {
+  async function _finishAnalysis(state, failed = false) {
     analysisRunning = false;
     _stopStatsPoll();
+    const authoritativeRun = await _refreshAuthoritativeProgressSnapshot(
+      failed ? { status: "failed", error: _lastError } : null,
+    );
+    const finalStatus = authoritativeRun && authoritativeRun.status;
+    const incomplete = failed || _isTerminalIncomplete(finalStatus);
     // Fix: hasAnalysisProgress should only be true for partial/incomplete runs.
     // A fully completed run should NOT show "view progress" (no SSE data to view).
-    if (failed) {
+    if (incomplete) {
       hasAnalysisProgress = true;
       // Persist the failure so it survives tab switches / reloads.
-      _saveProgressSnapshot({ status: "failed", error: _lastError });
+      _saveProgressSnapshot({ status: finalStatus || "failed", error: _lastError });
     } else {
       hasAnalysisProgress = false;
       // A clean completion has no recoverable progress; drop the snapshot.

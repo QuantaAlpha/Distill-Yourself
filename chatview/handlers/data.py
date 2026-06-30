@@ -42,6 +42,7 @@ def _get_sessions(handler, project: str) -> list:
                 "userMessageCount": meta.get("userMessageCount", 0),
                 "fileSize": meta.get("fileSize", 0),
                 "source": meta.get("source", "claude"),
+                "starred": int(meta.get("starred") or 0),
             }
         )
     result.sort(key=lambda s: s.get("date", ""), reverse=True)

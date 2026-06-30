@@ -12,6 +12,40 @@ const I18N = {
   zh: {
     // ── Top bar ──
     'search.placeholder': '搜索对话内容…',
+    'search.resultsTitle': '搜索结果',
+    'search.sortTitle': '排序方式',
+    'sidebar.recent': '最近会话',
+    'sidebar.analysisHistory': '分析历史',
+    'sidebar.new': '+ 新建',
+    'ai.analysisTitle': '💬 AI 分析',
+    'ai.send': '发送',
+    'evolve.tab.profile': '🧬 画像',
+    'evolve.tab.memory': '🧠 记忆',
+    'evolve.tab.rules': '📐 规则',
+    'evolve.tab.signals': '⚡ 信号',
+    'evolve.tab.patterns': '🔄 模式',
+    'evolve.tabFull.profile': '🧬 画像',
+    'evolve.tabFull.memory': '🧠 记忆',
+    'evolve.tabFull.rules': '📐 规则',
+    'evolve.tabFull.signals': '⚡ 信号',
+    'evolve.tabFull.patterns': '🔄 模式',
+    'evolve.btn.refresh': '🔄 刷新',
+    'evolve.btn.refreshAll': '🔄 全部',
+    'evolve.btn.sync': '📤 同步',
+    'kbd.title': '快捷键',
+    'kbd.focusSearch': '聚焦搜索',
+    'kbd.closeSearch': '关闭 / 取消搜索焦点',
+    'kbd.home': '首页',
+    'kbd.nextPrevSession': '下一条 / 上一条会话',
+    'kbd.openSelected': '打开选中会话',
+    'kbd.goHome': '返回首页',
+    'kbd.nextPrevMessage': '下一条 / 上一条用户消息',
+    'kbd.toggleOutline': '切换大纲面板',
+    'kbd.showHelp': '显示快捷键帮助',
+    'kbd.press': '按',
+    'kbd.or': '或',
+    'kbd.toClose': '关闭',
+    'kbd.closeHint': '按 ? 或 Esc 关闭',
 
     // ── Welcome page ──
     'welcome.subtitle': '浏览和分析你的 AI 对话历史',
@@ -161,6 +195,40 @@ const I18N = {
   en: {
     // ── Top bar ──
     'search.placeholder': 'Search conversations…',
+    'search.resultsTitle': 'Search Results',
+    'search.sortTitle': 'Sort order',
+    'sidebar.recent': 'Recent',
+    'sidebar.analysisHistory': 'Analysis History',
+    'sidebar.new': '+ New',
+    'ai.analysisTitle': '💬 AI Analysis',
+    'ai.send': 'Send',
+    'evolve.tab.profile': '🧬 Profile',
+    'evolve.tab.memory': '🧠 Memory',
+    'evolve.tab.rules': '📐 Rules',
+    'evolve.tab.signals': '⚡ Signals',
+    'evolve.tab.patterns': '🔄 Patterns',
+    'evolve.tabFull.profile': '🧬 Profile',
+    'evolve.tabFull.memory': '🧠 Memory',
+    'evolve.tabFull.rules': '📐 Rules',
+    'evolve.tabFull.signals': '⚡ Signals',
+    'evolve.tabFull.patterns': '🔄 Patterns',
+    'evolve.btn.refresh': '🔄 Refresh',
+    'evolve.btn.refreshAll': '🔄 All',
+    'evolve.btn.sync': '📤 Sync',
+    'kbd.title': 'Keyboard Shortcuts',
+    'kbd.focusSearch': 'Focus search',
+    'kbd.closeSearch': 'Close / blur search',
+    'kbd.home': 'Home',
+    'kbd.nextPrevSession': 'Next / previous session',
+    'kbd.openSelected': 'Open selected session',
+    'kbd.goHome': 'Go back to Home',
+    'kbd.nextPrevMessage': 'Next / previous user message',
+    'kbd.toggleOutline': 'Toggle outline panel',
+    'kbd.showHelp': 'Show this help',
+    'kbd.press': 'Press',
+    'kbd.or': 'or',
+    'kbd.toClose': 'to close',
+    'kbd.closeHint': 'Press ? or Esc to close',
 
     // ── Welcome page ──
     'welcome.subtitle': 'Browse and analyze your AI conversation history',
@@ -359,10 +427,10 @@ export function applyLang(root) {
   scope.querySelectorAll('[data-i18n]').forEach(el => {
     el.textContent = t(el.dataset.i18n);
   });
-  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+  scope.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
     el.placeholder = t(el.dataset.i18nPlaceholder);
   });
-  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+  scope.querySelectorAll('[data-i18n-title]').forEach(el => {
     el.title = t(el.dataset.i18nTitle);
   });
 }
