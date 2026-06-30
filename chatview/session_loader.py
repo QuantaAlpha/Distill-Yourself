@@ -17,6 +17,7 @@ def load_session(session_id: str):
     # Route Codex sessions to dedicated loader
     if meta.get("source") == "codex":
         from chatview.parsers.codex import load_codex_session as _load_codex
+
         return _load_codex(session_id, _idx._index, _idx._index_lock)
 
     filepath = meta["filePath"]
@@ -29,8 +30,9 @@ def load_session(session_id: str):
     return load_session_from_file(filepath, session_id, title, project, date)
 
 
-def load_session_from_file(filepath: str, session_id: str, title: str = "",
-                           project: str = "", date: str = ""):
+def load_session_from_file(
+    filepath: str, session_id: str, title: str = "", project: str = "", date: str = ""
+):
     """Load and parse a full conversation from a JSONL file path."""
     if not os.path.exists(filepath):
         return None
@@ -115,27 +117,35 @@ def _parse_content(content) -> list:
                         inp_display[k] = v[:500] + "…[truncated]"
                 else:
                     inp_display[k] = v
-            blocks.append({
-                "type": "tool_use",
-                "name": block.get("name", ""),
-                "id": block.get("id", ""),
-                "input": inp_display,
-            })
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "name": block.get("name", ""),
+                    "id": block.get("id", ""),
+                    "input": inp_display,
+                }
+            )
 
         elif btype == "tool_result":
             raw = block.get("content", "")
             raw = _truncate_tool_output(raw)
-            blocks.append({
-                "type": "tool_result",
-                "toolUseId": block.get("tool_use_id", ""),
-                "content": raw,
-            })
+            blocks.append(
+                {
+                    "type": "tool_result",
+                    "toolUseId": block.get("tool_use_id", ""),
+                    "content": raw,
+                }
+            )
 
         elif btype == "thinking":
             text = block.get("thinking", "")
-            blocks.append({
-                "type": "thinking",
-                "text": text[:MAX_THINKING_LEN] + "…" if len(text) > MAX_THINKING_LEN else text,
-            })
+            blocks.append(
+                {
+                    "type": "thinking",
+                    "text": text[:MAX_THINKING_LEN] + "…"
+                    if len(text) > MAX_THINKING_LEN
+                    else text,
+                }
+            )
 
     return blocks

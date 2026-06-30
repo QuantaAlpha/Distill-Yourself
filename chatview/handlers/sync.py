@@ -6,6 +6,8 @@ Extracted from server.py — pure Python format conversion, no HTTP handler need
 import re
 from pathlib import Path
 
+from chatview.utils.sync import _safe_write_claude_md
+
 # ---------------------------------------------------------------------------
 # Paths (mirrored from server.py module-level constants)
 # ---------------------------------------------------------------------------
@@ -19,8 +21,8 @@ SYNC_MARKER_END = "<!-- evolve-sync:profile:end -->"
 def _sanitize_filename(text: str) -> str:
     """Convert text to a safe filename component."""
     # Keep alphanumeric, Chinese chars, hyphens, underscores
-    clean = re.sub(r'[^\w\u4e00-\u9fff-]', '_', text)
-    clean = re.sub(r'_+', '_', clean).strip('_')
+    clean = re.sub(r"[^\w\u4e00-\u9fff-]", "_", text)
+    clean = re.sub(r"_+", "_", clean).strip("_")
     return clean[:60] if clean else "unnamed"
 
 
@@ -32,12 +34,26 @@ def _evolve_sync_memory_preview(mem_data: dict) -> dict:
     files = []
     for nid, node in nodes.items():
         if node.get("confidence") == "low":
-            files.append({"id": nid, "filename": "", "label": node.get("label", ""), "status": "skip"})
+            files.append(
+                {
+                    "id": nid,
+                    "filename": "",
+                    "label": node.get("label", ""),
+                    "status": "skip",
+                }
+            )
             continue
         fname = f"evolve_{nid}.md"
         fpath = MEMORY_DIR / fname
         status = "update" if fpath.exists() else "create"
-        files.append({"id": nid, "filename": fname, "label": node.get("label", ""), "status": status})
+        files.append(
+            {
+                "id": nid,
+                "filename": fname,
+                "label": node.get("label", ""),
+                "status": status,
+            }
+        )
 
     summary = {"create": 0, "update": 0, "skip": 0}
     for f in files:
@@ -188,7 +204,7 @@ def _evolve_sync_claude_md_preview(prof_data: dict) -> dict:
 
 
 def _evolve_sync_claude_md_execute(prof_data: dict) -> dict:
-    """Write profile section to CLAUDE.md."""
+    """Write profile section to CLAUDE.md with backup, lock, and verification."""
     section = _build_profile_section(prof_data)
 
     CLAUDE_MD_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -211,7 +227,9 @@ def _evolve_sync_claude_md_execute(prof_data: dict) -> dict:
         new_text = existing + section
         status = "appended"
 
-    CLAUDE_MD_PATH.write_text(new_text, encoding="utf-8")
+    _safe_write_claude_md(
+        new_text, marker_start=SYNC_MARKER_START, marker_end=SYNC_MARKER_END
+    )
     line_count = len(section.strip().split("\n"))
     return {"status": status, "lines": line_count}
 

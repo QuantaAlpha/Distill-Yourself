@@ -34,8 +34,8 @@ _index_lock = threading.Lock()
 # NOTE: _codex_titles lives in chatview.parsers.codex (populated by _load_codex_titles)
 
 # Result cache for heavy endpoints (invalidated on index rebuild)
-_result_cache = {}   # key -> (index_gen, result)
-_index_gen = 0       # bumped on each build_index()
+_result_cache = {}  # key -> (index_gen, result)
+_index_gen = 0  # bumped on each build_index()
 _cache_lock = threading.Lock()
 _index_refresh_lock = threading.Lock()
 _index_refresh_running = False
@@ -125,14 +125,19 @@ def _index_refresh_worker(reason: str):
             _index_refresh_running = False
 
 
-def schedule_index_refresh_if_stale(reason: str = "stale-check", force_check: bool = False) -> bool:
+def schedule_index_refresh_if_stale(
+    reason: str = "stale-check", force_check: bool = False
+) -> bool:
     """Start a background index refresh if source JSONL files changed."""
     global _index_refresh_running, _last_index_stale_check
     now = time.time()
     with _index_refresh_lock:
         if _index_refresh_running:
             return False
-        if not force_check and now - _last_index_stale_check < INDEX_STALE_CHECK_INTERVAL:
+        if (
+            not force_check
+            and now - _last_index_stale_check < INDEX_STALE_CHECK_INTERVAL
+        ):
             return False
         _last_index_stale_check = now
 
@@ -153,10 +158,13 @@ def build_index(force: bool = False) -> dict:
 
     from chatview.parsers.claude import extract_metadata, pretty_project_name
     from chatview.parsers.codex import (
-        _load_codex_titles, _codex_project_name,
-        extract_codex_metadata, _store_session_insights,
+        _load_codex_titles,
+        _codex_project_name,
+        extract_codex_metadata,
+        _store_session_insights,
     )
     from chatview import db as _db
+
     _db.init_db()
 
     # Discover JSONL files
@@ -211,7 +219,11 @@ def build_index(force: bool = False) -> dict:
                         meta["source"] = "claude"
                         meta["_mtime"] = current_files.get(fp, 0)
                         new_sessions[meta["id"]] = meta
-                        _db.upsert_session(meta, meta.get("userTexts", []), meta.get("assistantSnippets", []))
+                        _db.upsert_session(
+                            meta,
+                            meta.get("userTexts", []),
+                            meta.get("assistantSnippets", []),
+                        )
                         _store_session_insights(meta)
                 except Exception as e:
                     print(f"Error parsing {fp}: {e}")
@@ -259,7 +271,9 @@ def build_index(force: bool = False) -> dict:
     codex_new = {}
     if codex_to_parse:
         with ThreadPoolExecutor(max_workers=MAX_SEARCH_WORKERS) as pool:
-            futures = {pool.submit(extract_codex_metadata, fp): fp for fp in codex_to_parse}
+            futures = {
+                pool.submit(extract_codex_metadata, fp): fp for fp in codex_to_parse
+            }
             for future in as_completed(futures):
                 fp = futures[future]
                 try:
@@ -269,7 +283,11 @@ def build_index(force: bool = False) -> dict:
                         meta["project"] = "codex"
                         meta["_mtime"] = current_files.get(fp, 0)
                         codex_new[meta["id"]] = meta
-                        _db.upsert_session(meta, meta.get("userTexts", []), meta.get("assistantSnippets", []))
+                        _db.upsert_session(
+                            meta,
+                            meta.get("userTexts", []),
+                            meta.get("assistantSnippets", []),
+                        )
                         _store_session_insights(meta)
                 except Exception as e:
                     print(f"Error parsing Codex {fp}: {e}")
@@ -293,7 +311,11 @@ def build_index(force: bool = False) -> dict:
     for sid, meta in sessions.items():
         pname = meta.get("projectName", "unknown")
         if pname not in projects:
-            projects[pname] = {"name": pname, "dirName": meta.get("project", ""), "sessionCount": 0}
+            projects[pname] = {
+                "name": pname,
+                "dirName": meta.get("project", ""),
+                "sessionCount": 0,
+            }
         projects[pname]["sessionCount"] += 1
 
     index = {
@@ -312,25 +334,36 @@ def build_index(force: bool = False) -> dict:
     if db_count < len(sessions):
         backfill_count = 0
         for sid, meta in sessions.items():
-            exists = _db.get_conn().execute("SELECT 1 FROM sessions WHERE id=?", (sid,)).fetchone()
+            exists = (
+                _db.get_conn()
+                .execute("SELECT 1 FROM sessions WHERE id=?", (sid,))
+                .fetchone()
+            )
             if not exists:
-                _db.upsert_session(meta, meta.get("userTexts", []), meta.get("assistantSnippets", []))
+                _db.upsert_session(
+                    meta, meta.get("userTexts", []), meta.get("assistantSnippets", [])
+                )
                 backfill_count += 1
         if backfill_count:
             print(f"DB backfill: {backfill_count} sessions")
 
     # Backfill insight tables if most sessions lack insight data
-    insight_sessions = _db.get_conn().execute(
-        "SELECT COUNT(DISTINCT session_id) FROM insight_tool_usage"
-    ).fetchone()[0]
+    insight_sessions = (
+        _db.get_conn()
+        .execute("SELECT COUNT(DISTINCT session_id) FROM insight_tool_usage")
+        .fetchone()[0]
+    )
     if insight_sessions < len(sessions) * 0.5 and len(sessions) > 0:
         # Collect session IDs already in insight tables
         existing_insight_sids = set(
-            r[0] for r in _db.get_conn().execute(
-                "SELECT DISTINCT session_id FROM insight_tool_usage"
-            ).fetchall()
+            r[0]
+            for r in _db.get_conn()
+            .execute("SELECT DISTINCT session_id FROM insight_tool_usage")
+            .fetchall()
         )
-        print(f"Backfilling insight tables ({len(sessions) - len(existing_insight_sids)} sessions)...")
+        print(
+            f"Backfilling insight tables ({len(sessions) - len(existing_insight_sids)} sessions)..."
+        )
         backfill_t = time.time()
         backfill_n = 0
         for sid, meta in sessions.items():
@@ -340,7 +373,11 @@ def build_index(force: bool = False) -> dict:
             source = meta.get("source", "claude")
             if fp and os.path.exists(fp):
                 try:
-                    fresh = extract_codex_metadata(fp) if source == "codex" else extract_metadata(fp)
+                    fresh = (
+                        extract_codex_metadata(fp)
+                        if source == "codex"
+                        else extract_metadata(fp)
+                    )
                     if fresh:
                         fresh["projectName"] = meta.get("projectName", "")
                         fresh["date"] = meta.get("date", "")
@@ -348,13 +385,20 @@ def build_index(force: bool = False) -> dict:
                         backfill_n += 1
                 except Exception:
                     pass
-        print(f"  Insight backfill: {backfill_n} sessions in {time.time() - backfill_t:.1f}s")
+        print(
+            f"  Insight backfill: {backfill_n} sessions in {time.time() - backfill_t:.1f}s"
+        )
 
     # Strip non-serializable insight data before cache write
     # NOTE: userTexts/assistantSnippets kept for now — analyze.py subprocess still reads them.
     # They can be stripped after analyze.py is refactored to use DB queries directly.
     for sid, meta in sessions.items():
-        for k in ("_insight_tools", "_insight_files", "_insight_errors", "_insight_snippets"):
+        for k in (
+            "_insight_tools",
+            "_insight_files",
+            "_insight_errors",
+            "_insight_snippets",
+        ):
             meta.pop(k, None)
 
     # Save to cache
@@ -379,5 +423,16 @@ def build_index(force: bool = False) -> dict:
             print(f"DB post-process error: {e}")
 
     db_count = _db.get_conn().execute("SELECT count(*) FROM sessions").fetchone()[0]
-    print(f"Index ready: {len(sessions)} sessions across {len(projects)} projects (DB: {db_count})")
+    print(
+        f"Index ready: {len(sessions)} sessions across {len(projects)} projects (DB: {db_count})"
+    )
+
+    # Clean up stale evolve cache entries (Issue 2.2)
+    try:
+        deleted = _db.cleanup_old_cache(max_age_days=30)
+        if deleted:
+            print(f"Evolve cache cleanup: {deleted} stale entries removed")
+    except Exception as e:
+        print(f"Evolve cache cleanup error: {e}")
+
     return index

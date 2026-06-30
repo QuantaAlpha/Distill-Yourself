@@ -25,6 +25,7 @@ import server
 # Minimal JSONL fixture
 # ---------------------------------------------------------------------------
 
+
 def _make_session_jsonl(session_id="test-api-sess-001"):
     """Return a list of JSONL dicts that form a valid session."""
     return [
@@ -33,17 +34,23 @@ def _make_session_jsonl(session_id="test-api-sess-001"):
             "type": "user",
             "timestamp": "2026-06-10T10:00:00Z",
             "sessionId": session_id,
-            "message": {"content": [{"type": "text", "text": "Hello from the API test"}]},
+            "message": {
+                "content": [{"type": "text", "text": "Hello from the API test"}]
+            },
         },
         {
             "type": "assistant",
             "timestamp": "2026-06-10T10:01:00Z",
-            "message": {"content": [{"type": "text", "text": "Hi, I can help with that."}]},
+            "message": {
+                "content": [{"type": "text", "text": "Hi, I can help with that."}]
+            },
         },
     ]
 
 
-def _make_codex_jsonl(session_id="019f-search-refresh-test", text="fresh codex search phrase"):
+def _make_codex_jsonl(
+    session_id="019f-search-refresh-test", text="fresh codex search phrase"
+):
     """Return JSONL dicts for a minimal Codex rollout session."""
     return [
         {
@@ -62,6 +69,7 @@ def _make_codex_jsonl(session_id="019f-search-refresh-test", text="fresh codex s
 # ---------------------------------------------------------------------------
 # Test fixture: spin up a server on an ephemeral port
 # ---------------------------------------------------------------------------
+
 
 class APITestCase(unittest.TestCase):
     """Base class that boots the server with a temp projects dir."""
@@ -113,6 +121,29 @@ class APITestCase(unittest.TestCase):
         cls._port = cls._server.server_address[1]
         cls._thread = threading.Thread(target=cls._server.serve_forever, daemon=True)
         cls._thread.start()
+
+    def setUp(self):
+        """Keep each test isolated while preserving the indexed session fixture."""
+        from chatview import db as _db
+
+        _db.init_db()
+        conn = _db.get_conn()
+        for table in (
+            "evolve_cache",
+            "evolve_runs",
+            "evidence_events",
+            "judgment_cards",
+            "card_relations",
+            "cognitive_traits",
+            "twin_checkpoints",
+            "chat_cache",
+        ):
+            conn.execute(f"DELETE FROM {table}")
+        conn.commit()
+        legacy_cache_dir = Path(self._tmpdir) / ".cache" / "evolve"
+        if legacy_cache_dir.exists():
+            for path in legacy_cache_dir.glob("*.json"):
+                path.unlink()
 
     @classmethod
     def tearDownClass(cls):
@@ -171,8 +202,8 @@ class APITestCase(unittest.TestCase):
 # Actual tests
 # ---------------------------------------------------------------------------
 
-class TestGetSessions(APITestCase):
 
+class TestGetSessions(APITestCase):
     def test_returns_list(self):
         code, body = self._get("/api/sessions")
         self.assertEqual(code, 200)
@@ -188,7 +219,6 @@ class TestGetSessions(APITestCase):
 
 
 class TestGetProjects(APITestCase):
-
     def test_returns_list(self):
         code, body = self._get("/api/projects")
         self.assertEqual(code, 200)
@@ -196,7 +226,6 @@ class TestGetProjects(APITestCase):
 
 
 class TestSearch(APITestCase):
-
     def test_search_returns_list(self):
         code, body = self._get("/api/search?q=Hello")
         self.assertEqual(code, 200)
@@ -221,8 +250,12 @@ class TestSearch(APITestCase):
         self.assertEqual(code, 200)
 
         from chatview import index as _idx
+
         os.makedirs(_idx.CODEX_SESSIONS_DIR, exist_ok=True)
-        session_file = _idx.CODEX_SESSIONS_DIR / "rollout-2026-06-10T11-00-00-019f-search-refresh-test.jsonl"
+        session_file = (
+            _idx.CODEX_SESSIONS_DIR
+            / "rollout-2026-06-10T11-00-00-019f-search-refresh-test.jsonl"
+        )
         fresh_text = "fresh codex search phrase"
         with open(session_file, "w", encoding="utf-8") as f:
             for obj in _make_codex_jsonl(text=fresh_text):
@@ -254,7 +287,6 @@ class TestSearch(APITestCase):
 
 
 class TestGetStats(APITestCase):
-
     def test_returns_dict(self):
         code, body = self._get("/api/stats")
         self.assertEqual(code, 200)
@@ -267,8 +299,285 @@ class TestGetStats(APITestCase):
         self.assertIn("totalProjects", body)
 
 
-class TestGetSessionNotFound(APITestCase):
+class TestEvolveEngineSelection(APITestCase):
+    def test_evolve_cache_falls_back_to_legacy_file_when_sqlite_empty(self):
+        from chatview import db as _db
 
+        legacy_dir = Path(self._tmpdir) / ".cache" / "evolve"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        with open(legacy_dir / "profile.legacy-test.json", "w", encoding="utf-8") as f:
+            json.dump({"categories": [{"title": "Legacy profile"}]}, f)
+
+        code, body = self._get(
+            "/api/evolve/profile?source=all&date=7d&project=&engine=auto&lang=zh"
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(body.get("categories"), [{"title": "Legacy profile"}])
+        migrated = _db.evolve_get("profile", "all", "7d", "", "legacy")
+        self.assertIsNotNone(migrated)
+        self.assertEqual(
+            migrated["data"].get("categories"), [{"title": "Legacy profile"}]
+        )
+
+    def test_evolve_cache_falls_back_to_latest_same_scope_across_engines(self):
+        from chatview import db as _db
+
+        _db.init_db()
+        _db.evolve_upsert(
+            "profile",
+            "all",
+            "7d",
+            "",
+            "claude",
+            json.dumps({"categories": [{"title": "Claude only"}]}),
+        )
+
+        code, body = self._get(
+            "/api/evolve/profile?source=all&date=7d&project=&engine=codex&lang=zh"
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(body.get("categories"), [{"title": "Claude only"}])
+
+    def test_evolve_cache_returns_exact_engine_match(self):
+        from chatview import db as _db
+
+        _db.init_db()
+        _db.evolve_upsert(
+            "profile",
+            "all",
+            "7d",
+            "",
+            "codex",
+            json.dumps({"categories": [{"title": "Codex result"}]}),
+        )
+
+        code, body = self._get(
+            "/api/evolve/profile?source=all&date=7d&project=&engine=codex&lang=zh"
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(body.get("categories"), [{"title": "Codex result"}])
+
+    def test_evolve_cache_prefers_exact_engine_over_shared_fallback(self):
+        from chatview import db as _db
+
+        _db.init_db()
+        _db.evolve_upsert(
+            "profile",
+            "all",
+            "7d",
+            "",
+            "auto",
+            json.dumps({"categories": [{"title": "Shared auto result"}]}),
+        )
+        _db.evolve_upsert(
+            "profile",
+            "all",
+            "7d",
+            "",
+            "claude",
+            json.dumps({"categories": [{"title": "Exact claude result"}]}),
+        )
+
+        code, body = self._get(
+            "/api/evolve/profile?source=all&date=7d&project=&engine=claude&lang=zh"
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(body.get("categories"), [{"title": "Exact claude result"}])
+
+
+class TestEvolveProgress(APITestCase):
+    def test_progress_without_run_returns_null(self):
+        code, body = self._get(
+            "/api/evolve/progress?tab=profile&source=all&date=7d&project=&engine=auto"
+        )
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertFalse(body["running"])
+        self.assertIsNone(body["run"])
+
+    def test_progress_returns_latest_exact_scope_run(self):
+        from chatview import db as _db
+
+        _db.init_db()
+        run_id = _db.evolve_run_start(
+            "profile",
+            "all",
+            "7d",
+            "",
+            "claude",
+            lang="zh",
+            snapshot={"text": "Analyzing profile...", "step_count": 2},
+        )
+        _db.evolve_run_update(
+            run_id,
+            status="failed",
+            snapshot={
+                "text": "Analyzing profile...",
+                "step_count": 2,
+                "error": "codex unavailable",
+            },
+            error_message="codex unavailable",
+        )
+
+        code, body = self._get(
+            "/api/evolve/progress?tab=profile&source=all&date=7d&project=&engine=claude"
+        )
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertFalse(body["running"])
+        self.assertEqual(body["run"]["run_id"], run_id)
+        self.assertEqual(body["run"]["status"], "failed")
+        self.assertEqual(body["run"]["snapshot"]["step_count"], 2)
+        self.assertEqual(body["run"]["error_message"], "codex unavailable")
+
+    def test_progress_falls_back_to_latest_same_scope_run_across_engines(self):
+        from chatview import db as _db
+
+        _db.init_db()
+        run_id = _db.evolve_run_start(
+            "profile",
+            "all",
+            "7d",
+            "",
+            "auto",
+            lang="zh",
+            snapshot={"text": "Shared run", "step_count": 1},
+        )
+        _db.evolve_run_update(
+            run_id,
+            status="completed",
+            snapshot={"text": "Shared run", "result": {"categories": []}},
+        )
+
+        code, body = self._get(
+            "/api/evolve/progress?tab=profile&source=all&date=7d&project=&engine=claude"
+        )
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["run"]["run_id"], run_id)
+        self.assertEqual(body["run"]["engine"], "auto")
+
+    def test_progress_without_tab_returns_scope_map(self):
+        from chatview import db as _db
+
+        _db.init_db()
+        run_id = _db.evolve_run_start(
+            "memory",
+            "all",
+            "7d",
+            "",
+            "auto",
+            lang="zh",
+            snapshot={"text": "Memory run"},
+        )
+        _db.evolve_run_update(
+            run_id,
+            status="completed",
+            snapshot={"text": "Memory run", "result": {"nodes": [], "links": []}},
+        )
+
+        code, body = self._get(
+            "/api/evolve/progress?source=all&date=7d&project=&engine=auto"
+        )
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertIn("tabs", body)
+        self.assertIn("memory", body["tabs"])
+        self.assertEqual(body["tabs"]["memory"]["run"]["run_id"], run_id)
+        self.assertEqual(body["tabs"]["memory"]["run"]["status"], "completed")
+
+    def test_progress_returns_cache_and_marks_inactive_running_stale(self):
+        from chatview import db as _db
+
+        _db.init_db()
+        _db.evolve_upsert(
+            "memory",
+            "all",
+            "7d",
+            "",
+            "auto",
+            json.dumps({"nodes": [{"id": "saved-memory"}], "links": []}),
+        )
+        run_id = _db.evolve_run_start(
+            "memory",
+            "all",
+            "7d",
+            "",
+            "auto",
+            lang="zh",
+            snapshot={"text": "old in-flight memory run", "step_count": 1},
+        )
+
+        code, body = self._get(
+            "/api/evolve/progress?source=all&date=7d&project=&engine=auto"
+        )
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertIn("memory", body["tabs"])
+        self.assertFalse(body["tabs"]["memory"]["running"])
+        self.assertTrue(body["tabs"]["memory"]["stale"])
+        self.assertEqual(body["tabs"]["memory"]["run"]["run_id"], run_id)
+        self.assertEqual(
+            body["tabs"]["memory"]["cache"]["data"]["nodes"],
+            [{"id": "saved-memory"}],
+        )
+
+    def test_progress_returns_legacy_cache_when_sqlite_empty(self):
+        from chatview import db as _db
+
+        legacy_dir = Path(self._tmpdir) / ".cache" / "evolve"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        with open(legacy_dir / "memory.legacy-test.json", "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "nodes": [{"id": "legacy-memory"}],
+                    "links": [],
+                    "cards": [{"id": "legacy-card"}],
+                },
+                f,
+            )
+
+        code, body = self._get(
+            "/api/evolve/progress?source=all&date=7d&project=&engine=auto"
+        )
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertIn("memory", body["tabs"])
+        self.assertFalse(body["tabs"]["memory"]["running"])
+        self.assertFalse(body["tabs"]["memory"]["stale"])
+        self.assertIsNone(body["tabs"]["memory"]["run"])
+        self.assertEqual(
+            body["tabs"]["memory"]["cache"]["data"]["nodes"],
+            [{"id": "legacy-memory"}],
+        )
+        migrated = _db.evolve_get("memory", "all", "7d", "", "legacy")
+        self.assertIsNotNone(migrated)
+        self.assertEqual(
+            migrated["data"].get("nodes"),
+            [{"id": "legacy-memory"}],
+        )
+
+
+class TestEvolveCancel(APITestCase):
+    def test_cancel_without_active_run_returns_error(self):
+        code, body = self._post(
+            "/api/evolve/cancel",
+            {
+                "tab": "profile",
+                "scope": {
+                    "source": "all",
+                    "date": "7d",
+                    "project": "",
+                    "engine": "auto",
+                },
+            },
+        )
+        self.assertEqual(code, 200)
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["error"], "No active analysis")
+
+
+class TestGetSessionNotFound(APITestCase):
     def test_nonexistent_session_returns_404(self):
         code, body = self._get("/api/session/nonexistent-id-zzz-does-not-exist")
         self.assertEqual(code, 404)
@@ -276,7 +585,6 @@ class TestGetSessionNotFound(APITestCase):
 
 
 class TestPostChatOversized(APITestCase):
-
     def test_oversized_body_returns_413(self):
         # MAX_POST_BODY is 10 MB; send Content-Length exceeding that
         url = f"http://127.0.0.1:{self._port}/api/chat"
@@ -292,7 +600,6 @@ class TestPostChatOversized(APITestCase):
 
 
 class TestTwinResume(APITestCase):
-
     def test_empty_db_returns_ok_false(self):
         """When no twin data exists, resume returns ok=False with null run."""
         code, body = self._post("/api/twin/resume", {"lang": "en"})
@@ -303,35 +610,50 @@ class TestTwinResume(APITestCase):
     def test_with_run_data_returns_run_info(self):
         """When twin data exists, resume returns latest run_id and stats."""
         from chatview import db as _db
+
         _db.init_db()
         run_id = "run_test_resume_001"
         # Insert an evidence event with known run_id
-        _db.cm_upsert("evidence_events", "ev_test_resume_001", {
-            "run_id": run_id,
-            "session_id": "sess-1",
-            "event_index": 1,
-            "signal_type": "correction",
-            "signal_intensity": 0.8,
-            "domain": "coding/test",
-            "lesson": "test lesson",
-        })
+        _db.cm_upsert(
+            "evidence_events",
+            "ev_test_resume_001",
+            {
+                "run_id": run_id,
+                "session_id": "sess-1",
+                "event_index": 1,
+                "signal_type": "correction",
+                "signal_intensity": 0.8,
+                "domain": "coding/test",
+                "lesson": "test lesson",
+            },
+        )
         # Insert a judgment card with same run_id
-        _db.cm_upsert("judgment_cards", "jc_test_resume_001", {
-            "run_id": run_id,
-            "applies_when": "test scenario",
-            "judgment": "test judgment",
-            "confidence": 0.7,
-            "status": "hypothesis",
-        })
+        _db.cm_upsert(
+            "judgment_cards",
+            "jc_test_resume_001",
+            {
+                "run_id": run_id,
+                "applies_when": "test scenario",
+                "judgment": "test judgment",
+                "confidence": 0.7,
+                "status": "hypothesis",
+            },
+        )
         # Insert a trait with same run_id
-        _db.cm_upsert("cognitive_traits", "ct_test_resume_001", {
-            "run_id": run_id,
-            "name": "Test Trait",
-            "category": "价值取向",
-            "description": "test description",
-            "strength": 0.8,
-            "status": "emerging",
-        })
+        _db.cm_upsert(
+            "cognitive_traits",
+            "ct_test_resume_001",
+            {
+                "run_id": run_id,
+                "name": "Test Trait",
+                "category": "价值取向",
+                "description": "test description",
+                "strength": 0.8,
+                "status": "emerging",
+            },
+        )
+        for stage in range(1, 6):
+            _db.save_checkpoint(run_id, stage, "completed")
 
         code, body = self._post("/api/twin/resume", {"lang": "en"})
         self.assertEqual(code, 200)
@@ -345,7 +667,6 @@ class TestTwinResume(APITestCase):
 
 
 class TestTwinCancel(APITestCase):
-
     def test_no_active_analysis_returns_error(self):
         """Cancel with no active analysis returns ok=False with error message."""
         code, body = self._post("/api/twin/cancel", {"run_id": "run_nonexistent"})
@@ -359,6 +680,24 @@ class TestTwinCancel(APITestCase):
         self.assertEqual(code, 200)
         self.assertFalse(body["ok"])
         self.assertIn("error", body)
+
+
+class TestTwinResumeCheckpointOnly(APITestCase):
+    def test_checkpoint_only_interrupted_run_is_resumable(self):
+        """A failed early-stage run with no extracted rows still appears in resume."""
+        from chatview import db as _db
+
+        _db.init_db()
+        run_id = "run_checkpoint_only_resume"
+        _db.save_checkpoint(run_id, 1, "failed")
+
+        code, body = self._post("/api/twin/resume", {"lang": "en"})
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["run"]["run_id"], run_id)
+        self.assertEqual(body["run"]["status"], "interrupted")
+        self.assertEqual(body["run"]["stats"], {"events": 0, "cards": 0, "traits": 0})
+        self.assertEqual(body["run"]["checkpoints"], {"1": "failed"})
 
 
 if __name__ == "__main__":

@@ -23,6 +23,9 @@ registerI18n({
     'sessions.date.3months': '3 个月',
     'sessions.loadMore': '+ {n} 更多会话',
     'sessions.msgs': '条消息',
+    'sessions.delete': '删除',
+    'sessions.deleteIcon': '✕',
+    'sessions.deleteConfirm': '确认删除"{title}"？',
   },
   en: {
     'sessions.allProjects': 'All Projects',
@@ -35,6 +38,9 @@ registerI18n({
     'sessions.date.3months': '3 Months',
     'sessions.loadMore': '+ {n} more sessions',
     'sessions.msgs': 'msgs',
+    'sessions.delete': 'Delete session',
+    'sessions.deleteIcon': '✕',
+    'sessions.deleteConfirm': 'Delete "{title}"?',
   },
 });
 
@@ -128,10 +134,19 @@ export function updateProjectTrigger() {
   if (textEl) textEl.textContent = state.currentProject || t("sessions.allProjects");
 }
 
+// ── Session Favorites (Star) ───────────────────────────────────────
+let starFilterActive = false;
+
+export function toggleStarFilter() {
+  starFilterActive = !starFilterActive;
+  renderSessions(state.allSessions);
+}
+
 // ── Session Filtering ────────────────────────────────────────────
 export function filterSessionList(sessions) {
   let filtered = applySourceFilter(sessions);
   filtered = applyDateFilter(filtered);
+  if (starFilterActive) filtered = filtered.filter(s => s.starred);
   return filtered;
 }
 
@@ -171,11 +186,19 @@ export function renderSessions(sessions) {
     const li = document.createElement("li");
     li.dataset.id = s.id;
     if (s.id === state.currentSessionId) li.classList.add("active");
+    if (s.starred) li.classList.add("starred");
     const dateStr = s.date ? formatDate(s.date) : "";
     const srcBadge = s.source === "codex" ? '<span class="src-badge codex">Codex</span>' : '';
     const msgCount = s.userMessageCount ? `<span class="msg-count">${s.userMessageCount} ${t("sessions.msgs")}</span>` : '';
+    const starIcon = s.starred ? '★' : '☆';
     li.innerHTML = `
-      <div class="session-title">${esc(s.title)}</div>
+      <div class="session-header-row">
+        <div class="session-title">${esc(s.title)}</div>
+        <div class="session-header-actions">
+          <button class="session-star-btn" title="${s.starred ? 'Unstar' : 'Star'}">${starIcon}</button>
+          <button class="session-delete-btn" title="${esc(t('sessions.delete') || 'Delete')}">${t('sessions.deleteIcon') || '✕'}</button>
+        </div>
+      </div>
       <div class="session-meta">
         ${srcBadge}
         <span class="session-project">${esc(s.project || '')}</span>
@@ -183,7 +206,51 @@ export function renderSessions(sessions) {
         ${msgCount}
       </div>
     `;
-    li.addEventListener("click", () => { _deps.switchSidebarPanel("sessions"); _deps.loadSession(s.id); });
+    li.addEventListener("click", (e) => {
+      if (e.target.closest('.session-delete-btn') || e.target.closest('.session-star-btn')) return;
+      _deps.switchSidebarPanel("sessions"); _deps.loadSession(s.id);
+    });
+    // Delete button handler
+    const delBtn = li.querySelector('.session-delete-btn');
+    if (delBtn) {
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const confirmed = confirm(t('sessions.deleteConfirm', { title: s.title }) + '');
+        if (!confirmed) return;
+        try {
+          const resp = await fetch(`/api/session/${s.id}`, { method: 'DELETE' });
+          const data = await resp.json();
+          if (!data.ok) throw new Error(data.error || 'Delete failed');
+          state.allSessions = state.allSessions.filter(ses => ses.id !== s.id);
+          renderSessions(state.allSessions);
+          if (window.showToast) window.showToast.success('Session deleted');
+        } catch (err) {
+          if (window.showToast) window.showToast.error('Delete failed: ' + err.message);
+          else alert('Delete failed: ' + err.message);
+        }
+      });
+    }
+    // Star button handler
+    const starBtn = li.querySelector('.session-star-btn');
+    if (starBtn) {
+      starBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        try {
+          const resp = await fetch(`/api/session/${s.id}/star`, { method: 'POST' });
+          const data = await resp.json();
+          if (data.ok) {
+            // Update in-place
+            const found = state.allSessions.find(ses => ses.id === s.id);
+            if (found) found.starred = data.starred ? 1 : 0;
+            renderSessions(state.allSessions);
+          }
+        } catch (err) {
+          if (window.showToast) window.showToast.error('Failed to toggle star');
+        }
+      });
+    }
     return li;
   };
 
@@ -236,14 +303,22 @@ export function renderSourceFilters() {
     { key: 'all', label: t("sessions.source.all") },
     { key: 'claude', label: t("sessions.source.claude") },
     { key: 'codex', label: t("sessions.source.codex") },
+    { key: 'starred', label: t("sessions.starred.filter"), className: 'star-filter-btn' },
   ];
   filters.forEach(f => {
     const btn = document.createElement('button');
     btn.className = `source-tab${f.key === state.currentSourceFilter ? ' active' : ''}`;
-    if (f.key !== 'all') btn.classList.add(f.key);
+    if (f.className) btn.classList.add(f.className);
+    if (f.key !== 'all' && f.key !== 'starred') btn.classList.add(f.key);
     btn.textContent = f.label;
     btn.addEventListener('click', () => {
-      state.currentSourceFilter = f.key;
+      if (f.key === 'starred') {
+        state.currentSourceFilter = 'all';
+        starFilterActive = !starFilterActive;
+      } else {
+        state.currentSourceFilter = f.key;
+        starFilterActive = false;
+      }
       const base = state.currentProject
         ? state.allSessions.filter(s => s.project === state.currentProject)
         : state.allSessions;

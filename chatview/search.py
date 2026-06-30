@@ -8,7 +8,9 @@ from chatview.index import schedule_index_refresh_if_stale
 
 def _tokenize_query(query: str) -> list:
     """Split query into tokens by whitespace and punctuation for fuzzy matching."""
-    tokens = re.split(r"""[\s，。、！？；：""''（）【】《》,.!?;:()\[\]<>\-—…·]+""", query)
+    tokens = re.split(
+        r"""[\s，。、！？；：""''（）【】《》,.!?;:()\[\]<>\-—…·]+""", query
+    )
     return [t for t in tokens if len(t) >= 2]
 
 
@@ -33,6 +35,7 @@ def search_sessions(query: str, refresh_on_empty: bool = True) -> list:
         return []
 
     from chatview import db as _db
+
     results = []
     seen = set()  # (session_id, idx) dedup
 
@@ -44,17 +47,19 @@ def search_sessions(query: str, refresh_on_empty: bool = True) -> list:
             continue
         seen.add(key)
         text = row.get("text", "")
-        results.append({
-            "sessionId": row["session_id"],
-            "title": row.get("title", "Untitled"),
-            "project": row.get("project_name", ""),
-            "date": row.get("ts", ""),
-            "messageIndex": row["idx"],
-            "snippet": _make_snippet(text, query.lower()),
-            "timestamp": row.get("ts", ""),
-            "matchType": "content",
-            "score": 0.9,
-        })
+        results.append(
+            {
+                "sessionId": row["session_id"],
+                "title": row.get("title", "Untitled"),
+                "project": row.get("project_name", ""),
+                "date": row.get("ts", ""),
+                "messageIndex": row["idx"],
+                "snippet": _make_snippet(text, query.lower()),
+                "timestamp": row.get("ts", ""),
+                "matchType": "content",
+                "score": 0.9,
+            }
+        )
 
     # 2) Title fuzzy match (still in-memory, but lightweight — one string per session)
     query_lower = query.lower()
@@ -66,17 +71,19 @@ def search_sessions(query: str, refresh_on_empty: bool = True) -> list:
         matched, score = _fuzzy_match(title.lower(), query_lower, tokens)
         if matched and (sid, 0) not in seen:
             seen.add((sid, 0))
-            results.append({
-                "sessionId": sid,
-                "title": title,
-                "project": meta.get("projectName", ""),
-                "date": meta.get("date", ""),
-                "messageIndex": 0,
-                "snippet": title,
-                "timestamp": meta.get("date", ""),
-                "matchType": "title",
-                "score": score,
-            })
+            results.append(
+                {
+                    "sessionId": sid,
+                    "title": title,
+                    "project": meta.get("projectName", ""),
+                    "date": meta.get("date", ""),
+                    "messageIndex": 0,
+                    "snippet": title,
+                    "timestamp": meta.get("date", ""),
+                    "matchType": "title",
+                    "score": score,
+                }
+            )
 
     results.sort(key=lambda r: (-r.get("score", 0), r.get("date", "")), reverse=False)
     if not results and refresh_on_empty:
@@ -97,5 +104,7 @@ def _make_snippet(text: str, query: str, tokens: list = None, ctx: int = 80) -> 
         return text[:160]
     start = max(0, idx - ctx)
     end = min(len(text), idx + len(query) + ctx)
-    snippet = ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
+    snippet = (
+        ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
+    )
     return snippet

@@ -134,6 +134,26 @@
 }
 #chat-history-list li:hover { background: var(--bg-hover); }
 #chat-history-list li.active { background: var(--bg-active); color: var(--text); }
+.chat-history-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.chat-history-row .session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chat-history-more {
+  flex-shrink: 0; width: 20px; height: 20px; border: none; border-radius: 5px;
+  background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0;
+}
+#chat-history-list li:hover .chat-history-more { opacity: 1; }
+.chat-history-more:hover { background: var(--bg-hover); color: var(--text); }
+.chat-history-menu {
+  position: fixed; z-index: 10000; min-width: 132px; padding: 4px;
+  background: var(--bg-surface); border: 1px solid var(--border-light);
+  border-radius: 8px; box-shadow: var(--shadow-md);
+}
+.chat-history-menu button {
+  display: block; width: 100%; border: none; background: transparent;
+  color: var(--text); text-align: left; padding: 7px 9px; border-radius: 6px;
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.chat-history-menu button:hover { background: var(--bg-hover); }
+.chat-history-menu button.danger { color: var(--danger, #e57373); }
 
 /* ---- Shared scope styles ---- */
 .scope-label { font-size: 11px; color: var(--text-muted); min-width: 40px; font-weight: 500; }

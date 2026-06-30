@@ -1,13 +1,25 @@
 """Chat endpoint handlers — extracted from ChatViewerHandler."""
 
+import hashlib
 import json
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from chatview.ai_engine import _run_ai_engine, _run_ai_engine_stream
-from chatview.handlers.base import _json_response, _error, _sse_event, _start_sse, _read_post_body
-from chatview.handlers.evolve import _collect_aggregates, _collect_profile_digest, _collect_stats
+from chatview.handlers.base import (
+    _json_response,
+    _error,
+    _sse_event,
+    _start_sse,
+    _read_post_body,
+)
+from chatview.handlers.evolve import (
+    _collect_aggregates,
+    _collect_profile_digest,
+    _collect_stats,
+)
+from chatview import db as _db
 from chatview import index as _idx
 from chatview.index import (
     CODEX_ARCHIVED_DIR,
@@ -24,7 +36,7 @@ def _handle_chat_stream(handler):
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
-        _error(handler,400, "Invalid JSON")
+        _error(handler, 400, "Invalid JSON")
         return
 
     prompt = data.get("prompt", "")
@@ -34,26 +46,29 @@ def _handle_chat_stream(handler):
     messages = data.get("messages", [])
 
     if not prompt:
-        _error(handler,400, "No prompt")
+        _error(handler, 400, "No prompt")
         return
 
-    full_prompt = _build_chat_prompt(handler, prompt, context_type, session_id, scope, messages)
+    full_prompt = _build_chat_prompt(
+        handler, prompt, context_type, session_id, scope, messages
+    )
     _start_sse(handler)
 
     # Global analysis needs more time (sub-agents, CLI exploration)
     chat_timeout = int(data.get("timeout", 900))
     chat_timeout = max(60, min(chat_timeout, 1800))  # clamp 1min-30min
     engine = (scope or {}).get("engine", "auto")
-    stream = _run_ai_engine_stream(full_prompt, allow_write=False, timeout=chat_timeout,
-                                   engine_override=engine)
+    stream = _run_ai_engine_stream(
+        full_prompt, allow_write=False, timeout=chat_timeout, engine_override=engine
+    )
     try:
         for evt in stream:
-            _sse_event(handler,evt)
+            _sse_event(handler, evt)
     except BrokenPipeError:
         return
     except Exception as e:
         try:
-            _sse_event(handler,{"type": "error", "message": str(e)})
+            _sse_event(handler, {"type": "error", "message": str(e)})
         except BrokenPipeError:
             pass
     finally:
@@ -61,14 +76,20 @@ def _handle_chat_stream(handler):
 
 
 def _handle_chat_legacy(handler):
-    """Original blocking chat endpoint (kept for compatibility)."""
+    """Original blocking chat endpoint (kept for compatibility).
+
+    Includes response caching (Issue 2.3):
+    - Computes sha256 hash of the prompt, checks chat_cache
+    - Returns cached response if found and within 24 hours
+    - Otherwise runs AI and caches result
+    """
     raw = _read_post_body(handler)
     if raw is None:
         return
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
-        _error(handler,400, "Invalid JSON")
+        _error(handler, 400, "Invalid JSON")
         return
 
     prompt = data.get("prompt", "")
@@ -78,22 +99,48 @@ def _handle_chat_legacy(handler):
     messages = data.get("messages", [])
 
     if not prompt:
-        _error(handler,400, "No prompt")
+        _error(handler, 400, "No prompt")
         return
 
-    full_prompt = _build_chat_prompt(handler, prompt, context_type, session_id, scope, messages)
+    full_prompt = _build_chat_prompt(
+        handler, prompt, context_type, session_id, scope, messages
+    )
+
+    # ── Cache lookup (Issue 2.3) ──
+    _db.init_db()
+    prompt_hash = hashlib.sha256(full_prompt.encode()).hexdigest()
+    try:
+        conn = _db.get_conn()
+        cached = conn.execute(
+            "SELECT response, created_at FROM chat_cache WHERE prompt_hash=?",
+            (prompt_hash,),
+        ).fetchone()
+        if cached:
+            created = datetime.fromisoformat(cached["created_at"])
+            if datetime.utcnow() - created <= timedelta(hours=24):
+                output = cached["response"]
+                _json_response(handler, {"response": output, "cached": True})
+                return
+    except Exception:
+        pass  # Cache miss or error — fall through to AI call
 
     try:
         legacy_timeout = int(data.get("timeout", 900))
         legacy_timeout = max(60, min(legacy_timeout, 1800))
         engine = (scope or {}).get("engine", "auto")
-        stdout, stderr, _ = _run_ai_engine(full_prompt, allow_write=False, timeout=legacy_timeout,
-                                           engine_override=engine)
+        stdout, stderr, _ = _run_ai_engine(
+            full_prompt,
+            allow_write=False,
+            timeout=legacy_timeout,
+            engine_override=engine,
+        )
         output = stdout.strip()
         if not output and stderr:
             stderr = stderr.strip()
             noise = ["plugin manifest", "MCP", "Warning", "shutdown"]
-            lines = [line for line in stderr.split("\n") if not any(n in line for n in noise)]
+            lines = [
+                line for line in stderr.split("\n") if not any(n in line for n in noise)
+            ]
             if lines:
                 output = "Error: " + "\n".join(lines[:5])
             else:
@@ -107,7 +154,19 @@ def _handle_chat_legacy(handler):
     except Exception as e:
         output = f"Error: {str(e)}"
 
-    _json_response(handler,{"response": output})
+    # Cache the result (non-error responses only)
+    if output and not output.startswith("Error:"):
+        try:
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                "INSERT OR REPLACE INTO chat_cache (prompt_hash, response, created_at) VALUES (?, ?, ?)",
+                (prompt_hash, output, now),
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+    _json_response(handler, {"response": output})
 
 
 def _compress_chat_history(messages: list) -> str:
@@ -127,7 +186,11 @@ def _compress_chat_history(messages: list) -> str:
         if role not in ("user", "assistant") or not isinstance(content, str):
             continue
         # Skip error/abort messages
-        if content.startswith("**Error:**") or content.endswith("*(已停止)*") or content.endswith("*(stopped)*"):
+        if (
+            content.startswith("**Error:**")
+            or content.endswith("*(已停止)*")
+            or content.endswith("*(stopped)*")
+        ):
             continue
         valid.append((role, content))
 
@@ -138,7 +201,11 @@ def _compress_chat_history(messages: list) -> str:
     processed = []
     for role, content in valid:
         if role == "assistant" and len(content) > ASSISTANT_TRUNCATE:
-            content = content[:ASSISTANT_TRUNCATE - 200] + "\n...[truncated]...\n" + content[-150:]
+            content = (
+                content[: ASSISTANT_TRUNCATE - 200]
+                + "\n...[truncated]...\n"
+                + content[-150:]
+            )
         processed.append((role, content))
 
     # Check total size; if over budget, keep head 2 + as many tail as fit
@@ -154,7 +221,9 @@ def _compress_chat_history(messages: list) -> str:
             tail.insert(0, (role, content))
             remaining -= len(content)
         omitted = len(processed) - len(head) - len(tail)
-        processed = head + [(None, f"[... {omitted} earlier messages omitted ...]")] + tail
+        processed = (
+            head + [(None, f"[... {omitted} earlier messages omitted ...]")] + tail
+        )
 
     # Format as numbered transcript
     lines = []
@@ -170,12 +239,22 @@ def _compress_chat_history(messages: list) -> str:
     return "\n\n".join(lines)
 
 
-def _build_chat_prompt(handler, prompt: str, context_type: str, session_id: str, scope: dict = None, messages: list = None) -> str:
+def _build_chat_prompt(
+    handler,
+    prompt: str,
+    context_type: str,
+    session_id: str,
+    scope: dict = None,
+    messages: list = None,
+) -> str:
     """Build a context-enriched prompt for the AI engine with rich metadata and CLI tools."""
     cli_path = str(Path(__file__).parents[1].parent / "analyze.py")
     lang = (scope or {}).get("lang", "zh")
     if lang == "en":
-        prompt = prompt + "\n\nIMPORTANT: All your output text must be in English. Keep JSON keys unchanged. Translate all labels, descriptions, summaries into English unless they are direct quotes from the user's conversation history."
+        prompt = (
+            prompt
+            + "\n\nIMPORTANT: All your output text must be in English. Keep JSON keys unchanged. Translate all labels, descriptions, summaries into English unless they are direct quotes from the user's conversation history."
+        )
     context_parts = [
         f"You have a CLI tool for analyzing conversation history: python3 {cli_path} <command> [options]",
         "Commands: sessions, read <id> [-s summary], search <query>, queries [--session <id>] [-k keyword], corrections, decisions, errors, stats, files, highlights",
@@ -200,22 +279,29 @@ def _build_chat_prompt(handler, prompt: str, context_type: str, session_id: str,
 
             context_parts.append("--- Analysis Context ---")
             context_parts.append("")
-            context_parts.append(f"You are analyzing a {source} session: '{title}' from project '{project}'.")
+            context_parts.append(
+                f"You are analyzing a {source} session: '{title}' from project '{project}'."
+            )
             context_parts.append(f"Quick read: python3 {cli_path} read {session_id}")
             context_parts.append(f"Session file (JSONL): {fp}")
             context_parts.append(f"User messages: {msg_count}")
 
             # Include user message previews for quick context (from DB)
             from chatview import db as _db
+
             user_msgs = _db.get_session_messages(session_id, role="user")
             if user_msgs:
                 context_parts.append("\nConversation outline (user messages preview):")
                 for i, msg in enumerate(user_msgs[:12]):
                     text = (msg.get("text", "") or "")[:200].replace("\n", " ")
-                    context_parts.append(f"  [{i+1}] {text}")
+                    context_parts.append(f"  [{i + 1}] {text}")
 
-            context_parts.append(f"\nPrefer using the CLI tool (python3 {cli_path} read {session_id}) over reading raw JSONL.")
-            context_parts.append("If you need raw JSONL: each line is a JSON object with type (user/assistant), message.content[] blocks (text/tool_use/thinking), timestamp.")
+            context_parts.append(
+                f"\nPrefer using the CLI tool (python3 {cli_path} read {session_id}) over reading raw JSONL."
+            )
+            context_parts.append(
+                "If you need raw JSONL: each line is a JSON object with type (user/assistant), message.content[] blocks (text/tool_use/thinking), timestamp."
+            )
 
     elif context_type == "global":
         scope = scope or {}
@@ -229,12 +315,14 @@ def _build_chat_prompt(handler, prompt: str, context_type: str, session_id: str,
         if scope.get("source") and scope["source"] != "all":
             cli_flags.append(f"--source {scope['source']}")
         if scope.get("project"):
-            cli_flags.append(f"--project \"{scope['project']}\"")
+            cli_flags.append(f'--project "{scope["project"]}"')
         flags_str = " ".join(cli_flags) if cli_flags else ""
         context_parts.append("--- Analysis Context ---")
         context_parts.append("")
         context_parts.append(f"Current scope filters: {flags_str or '(none)'}")
-        context_parts.append(f"IMPORTANT: Always pass these flags to the CLI tool. Example: python3 {cli_path} stats {flags_str}")
+        context_parts.append(
+            f"IMPORTANT: Always pass these flags to the CLI tool. Example: python3 {cli_path} stats {flags_str}"
+        )
         context_parts.append("")
 
         with _idx._index_lock:
@@ -246,13 +334,19 @@ def _build_chat_prompt(handler, prompt: str, context_type: str, session_id: str,
         for sid, m in sessions.items():
             if scope.get("project") and m.get("projectName") != scope["project"]:
                 continue
-            if scope.get("source") and scope["source"] != "all" and m.get("source", "claude") != scope["source"]:
+            if (
+                scope.get("source")
+                and scope["source"] != "all"
+                and m.get("source", "claude") != scope["source"]
+            ):
                 continue
             if scope.get("date") and scope["date"] != "all":
                 date_str = m.get("date", "")
                 if date_str:
                     try:
-                        d = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                        d = datetime.fromisoformat(
+                            date_str.replace("Z", "+00:00")
+                        ).replace(tzinfo=None)
                         days_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
                         max_days = days_map.get(scope["date"], 9999)
                         if (now - d).days > max_days:
@@ -276,10 +370,14 @@ def _build_chat_prompt(handler, prompt: str, context_type: str, session_id: str,
         if scope.get("source") and scope["source"] != "all":
             scope_desc.append(f"source={scope['source']}")
 
-        context_parts.append(f"Scope: {total} sessions{' (filter: ' + ', '.join(scope_desc) + ')' if scope_desc else ''}.")
+        context_parts.append(
+            f"Scope: {total} sessions{' (filter: ' + ', '.join(scope_desc) + ')' if scope_desc else ''}."
+        )
         # Compact project breakdown
         top_projects = sorted(proj_counts.items(), key=lambda x: -x[1])[:10]
-        context_parts.append("Projects: " + ", ".join(f"{p}({c})" for p, c in top_projects))
+        context_parts.append(
+            "Projects: " + ", ".join(f"{p}({c})" for p, c in top_projects)
+        )
         context_parts.append("")
 
         # Pre-computed data: digest + stats + aggregates (same as Evolve)
@@ -289,7 +387,9 @@ def _build_chat_prompt(handler, prompt: str, context_type: str, session_id: str,
 
         digest = _collect_profile_digest(handler, source, date, project, cli_path)
         if digest:
-            context_parts.append("# Pre-computed Profile Digest (data overview — do NOT re-run profile-digest)")
+            context_parts.append(
+                "# Pre-computed Profile Digest (data overview — do NOT re-run profile-digest)"
+            )
             context_parts.append(digest)
             context_parts.append("")
 
@@ -301,29 +401,36 @@ def _build_chat_prompt(handler, prompt: str, context_type: str, session_id: str,
 
         aggregates = _collect_aggregates(handler)
         if aggregates:
-            context_parts.append("# Pre-collected Aggregates (do NOT re-run aggregates)")
+            context_parts.append(
+                "# Pre-collected Aggregates (do NOT re-run aggregates)"
+            )
             context_parts.append(aggregates)
             context_parts.append("")
 
         # Sub-agent guidance for complex analysis
         if total > 10:
-            digest_cmd = f"python3 {cli_path} profile-digest --date {date} --source {source}" + (f' --project "{project}"' if project else "")
-            context_parts.extend([
-                "# Execution Strategy",
-                "",
-                "For complex analysis tasks, dispatch 2-3 sub-agents (via Agent tool) in parallel for efficiency.",
-                "Each agent's prompt MUST include:",
-                f"  - Digest command: `{digest_cmd}` (agent runs this to get the overview)",
-                f"  - CLI tool: `python3 {cli_path} <command> {flags_str}`",
-                "  - Its assigned focus area and specific exploration instructions",
-                "",
-                "Efficiency rules:",
-                "- Use the digest above as a map — skip to relevant sections, don't re-scan everything.",
-                "- Batch CLI commands in one Bash call (e.g. echo '=== A ==='; python3 ... ; echo '=== B ==='; python3 ...)",
-                "- Use `read -s <id>` for session context, `search <keyword>` for targeted exploration.",
-                "- Do NOT re-run stats/aggregates/profile-digest — that data is already above.",
-                "",
-            ])
+            digest_cmd = (
+                f"python3 {cli_path} profile-digest --date {date} --source {source}"
+                + (f' --project "{project}"' if project else "")
+            )
+            context_parts.extend(
+                [
+                    "# Execution Strategy",
+                    "",
+                    "For complex analysis tasks, dispatch 2-3 sub-agents (via Agent tool) in parallel for efficiency.",
+                    "Each agent's prompt MUST include:",
+                    f"  - Digest command: `{digest_cmd}` (agent runs this to get the overview)",
+                    f"  - CLI tool: `python3 {cli_path} <command> {flags_str}`",
+                    "  - Its assigned focus area and specific exploration instructions",
+                    "",
+                    "Efficiency rules:",
+                    "- Use the digest above as a map — skip to relevant sections, don't re-scan everything.",
+                    "- Batch CLI commands in one Bash call (e.g. echo '=== A ==='; python3 ... ; echo '=== B ==='; python3 ...)",
+                    "- Use `read -s <id>` for session context, `search <keyword>` for targeted exploration.",
+                    "- Do NOT re-run stats/aggregates/profile-digest — that data is already above.",
+                    "",
+                ]
+            )
 
     # Append chat history if available (multi-turn context)
     chat_history = _compress_chat_history(messages) if messages else ""

@@ -17,7 +17,7 @@ from chatview.db.core import (  # noqa: F401
 from chatview.db.sessions import (  # noqa: F401
     upsert_session, rebuild_fts, prune_stale_sessions,
     get_filtered_sessions, get_user_queries, search_fts,
-    get_session_meta, get_session_messages,
+    get_session_meta, get_session_by_partial_id, get_session_messages,
 )
 from chatview.db.insights import (  # noqa: F401
     get_aggregate, set_aggregate, refresh_aggregates,

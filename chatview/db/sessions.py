@@ -24,8 +24,9 @@ def upsert_session(meta: dict, user_texts: list, assistant_snippets: list):
     conn.execute(
         """INSERT OR REPLACE INTO sessions
            (id, title, date, last_date, file_path, file_size, file_mtime,
-            user_message_count, preview, project, project_name, source)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            user_message_count, preview, project, project_name, source, starred)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,
+            COALESCE((SELECT starred FROM sessions WHERE id=?),0))""",
         (
             sid,
             meta.get("title", ""),
@@ -39,28 +40,44 @@ def upsert_session(meta: dict, user_texts: list, assistant_snippets: list):
             meta.get("project", ""),
             meta.get("projectName", ""),
             meta.get("source", "claude"),
+            sid,  # for COALESCE subquery to preserve existing starred value
         ),
     )
 
     # Delete old messages (cascades FTS via triggers would need manual rebuild;
     # we delete FTS rows manually here).
-    old_ids = [r[0] for r in conn.execute(
-        "SELECT id FROM messages WHERE session_id=?", (sid,)
-    ).fetchall()]
+    old_ids = [
+        r[0]
+        for r in conn.execute(
+            "SELECT id FROM messages WHERE session_id=?", (sid,)
+        ).fetchall()
+    ]
     if old_ids:
         # 单个会话的消息数也可能超过 SQLite 宿主参数上限，分批删 FTS 行。
         for i in range(0, len(old_ids), 900):
-            chunk = old_ids[i:i + 900]
+            chunk = old_ids[i : i + 900]
             placeholders = ",".join("?" * len(chunk))
-            conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({placeholders})", chunk)
+            conn.execute(
+                f"DELETE FROM messages_fts WHERE rowid IN ({placeholders})", chunk
+            )
         conn.execute("DELETE FROM messages WHERE session_id=?", (sid,))
 
     # Insert new messages (user + assistant)
     rows = []
     for item in user_texts:
-        rows.append((sid, item.get("idx"), "user", item.get("text", ""), item.get("ts", "")))
+        rows.append(
+            (sid, item.get("idx"), "user", item.get("text", ""), item.get("ts", ""))
+        )
     for item in assistant_snippets:
-        rows.append((sid, item.get("idx"), "assistant", item.get("text", ""), item.get("ts", "")))
+        rows.append(
+            (
+                sid,
+                item.get("idx"),
+                "assistant",
+                item.get("text", ""),
+                item.get("ts", ""),
+            )
+        )
 
     if rows:
         conn.executemany(
@@ -100,21 +117,32 @@ def prune_stale_sessions(valid_file_paths) -> int:
         return 0
 
     # 分批规避 SQLite 宿主参数上限：先批量取出待删消息的 rowid 删 FTS，再分批删各表。
-    msg_ids = [r["id"] for r in query_in_chunks(
-        conn, "SELECT id FROM messages WHERE session_id IN ({placeholders})", stale_ids
-    )]
+    msg_ids = [
+        r["id"]
+        for r in query_in_chunks(
+            conn,
+            "SELECT id FROM messages WHERE session_id IN ({placeholders})",
+            stale_ids,
+        )
+    ]
     for i in range(0, len(msg_ids), 900):
-        chunk = msg_ids[i:i + 900]
+        chunk = msg_ids[i : i + 900]
         ph = ",".join("?" * len(chunk))
         conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({ph})", chunk)
 
-    for table in ("messages", "insight_tool_usage", "insight_file_refs", "insight_errors", "insight_snippets"):
+    for table in (
+        "messages",
+        "insight_tool_usage",
+        "insight_file_refs",
+        "insight_errors",
+        "insight_snippets",
+    ):
         for i in range(0, len(stale_ids), 900):
-            chunk = stale_ids[i:i + 900]
+            chunk = stale_ids[i : i + 900]
             ph = ",".join("?" * len(chunk))
             conn.execute(f"DELETE FROM {table} WHERE session_id IN ({ph})", chunk)
     for i in range(0, len(stale_ids), 900):
-        chunk = stale_ids[i:i + 900]
+        chunk = stale_ids[i : i + 900]
         ph = ",".join("?" * len(chunk))
         conn.execute(f"DELETE FROM sessions WHERE id IN ({ph})", chunk)
     conn.commit()
@@ -161,14 +189,19 @@ def get_user_queries(session_ids=None, limit=200) -> list:
             return []
         # 会话数可能超过 SQLite 宿主参数上限，按 id 分批查询；批内 ORDER BY/LIMIT 仅对
         # 单批生效，合并后再做全局 ts 降序并截断到 limit。
-        rows = query_in_chunks(conn, """
+        rows = query_in_chunks(
+            conn,
+            """
             SELECT m.text, m.ts, s.project_name, s.source, s.id AS session_id, s.title
             FROM messages m
             JOIN sessions s ON m.session_id = s.id
             WHERE m.role='user' AND m.session_id IN ({placeholders})
             ORDER BY m.ts DESC
             LIMIT ?
-        """, list(session_ids), extra_params=(limit,))
+        """,
+            list(session_ids),
+            extra_params=(limit,),
+        )
         result = [dict(r) for r in rows]
         result.sort(key=lambda r: r.get("ts") or "", reverse=True)
         return result[:limit]
@@ -187,13 +220,13 @@ def get_user_queries(session_ids=None, limit=200) -> list:
 
 def _sanitize_fts_query(query: str) -> str:
     """Sanitize a user query for FTS5 MATCH: wrap each token in double quotes."""
-    tokens = re.split(r'[\s,;]+', query.strip())
+    tokens = re.split(r"[\s,;]+", query.strip())
     sanitized = []
     for t in tokens:
-        clean = re.sub(r'["\*\(\)\{\}\[\]^~:]', '', t)
+        clean = re.sub(r'["\*\(\)\{\}\[\]^~:]', "", t)
         if clean:
             sanitized.append(f'"{clean}"')
-    return ' '.join(sanitized) if sanitized else ''
+    return " ".join(sanitized) if sanitized else ""
 
 
 def search_fts(query: str, limit=50) -> list:
@@ -229,7 +262,7 @@ def search_fts(query: str, limit=50) -> list:
         LIMIT ?
     """
     try:
-        rows = conn.execute(like_sql, [f'%{query}%', limit]).fetchall()
+        rows = conn.execute(like_sql, [f"%{query}%", limit]).fetchall()
         return [dict(r) for r in rows]
     except sqlite3.OperationalError:
         return []
@@ -239,14 +272,22 @@ def search_fts(query: str, limit=50) -> list:
 # Single-session lookups
 # ---------------------------------------------------------------------------
 def get_session_meta(session_id: str) -> Optional[dict]:
-    """Return a single session dict by exact or partial ID match."""
+    """Return a single session dict by exact ID match only.  Returns None if not found."""
     conn = get_conn()
     row = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
-    if row:
-        return dict(row)
+    return dict(row) if row else None
+
+
+def get_session_by_partial_id(partial_id: str) -> Optional[dict]:
+    """Return a single session dict by partial ID match (substring via =).
+
+    Searches for the first session whose id matches ``partial_id`` as a
+    substring.  Returns None if no session matches.
+    """
+    conn = get_conn()
     rows = conn.execute(
         "SELECT * FROM sessions WHERE id LIKE ? LIMIT 1",
-        (f"%{session_id}%",),
+        (f"%{partial_id}%",),
     ).fetchall()
     return dict(rows[0]) if rows else None
 

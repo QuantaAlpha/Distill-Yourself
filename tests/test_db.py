@@ -43,6 +43,7 @@ class BaseTestCase(unittest.TestCase):
     def setUp(self):
         from pathlib import Path
         from chatview.db import core as _dbcore
+
         self._orig_db_path = _dbcore.DB_PATH
         self._orig_cache_dir = _dbcore.CACHE_DIR
         self._tmpdir = tempfile.mkdtemp()
@@ -53,6 +54,7 @@ class BaseTestCase(unittest.TestCase):
 
     def tearDown(self):
         from chatview.db import core as _dbcore
+
         _dbcore.DB_PATH = self._orig_db_path
         _dbcore.CACHE_DIR = self._orig_cache_dir
         _dbcore._local = threading.local()
@@ -63,11 +65,12 @@ class BaseTestCase(unittest.TestCase):
 # Schema migration tests
 # ---------------------------------------------------------------------------
 
-class TestSchemaMigration(unittest.TestCase):
 
+class TestSchemaMigration(unittest.TestCase):
     def setUp(self):
         from pathlib import Path
         from chatview.db import core as _dbcore
+
         self._orig_db_path = _dbcore.DB_PATH
         self._orig_cache_dir = _dbcore.CACHE_DIR
         self._tmpdir = tempfile.mkdtemp()
@@ -77,6 +80,7 @@ class TestSchemaMigration(unittest.TestCase):
 
     def tearDown(self):
         from chatview.db import core as _dbcore
+
         _dbcore.DB_PATH = self._orig_db_path
         _dbcore.CACHE_DIR = self._orig_cache_dir
         _dbcore._local = threading.local()
@@ -136,13 +140,34 @@ class TestSchemaMigration(unittest.TestCase):
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(evidence_events)")}
         self.assertIn("idx_evidence_run", indexes)
 
+    def test_evolve_get_shared_migrates_legacy_file_into_sqlite(self):
+        from pathlib import Path
+        from chatview import db as _db
+
+        _db.init_db()
+        legacy_dir = Path(self._tmpdir) / "evolve"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        with open(legacy_dir / "profile.legacy-test.json", "w", encoding="utf-8") as f:
+            f.write('{"categories":[{"title":"Legacy profile"}]}')
+
+        row = _db.evolve_get_shared("profile", "all", "7d", "", "auto")
+        self.assertIsNotNone(row)
+        self.assertEqual(row["engine"], "legacy")
+
+        migrated = _db.evolve_get("profile", "all", "7d", "", "legacy")
+        self.assertIsNotNone(migrated)
+        self.assertEqual(
+            migrated["data"].get("categories"),
+            [{"title": "Legacy profile"}],
+        )
+
 
 # ---------------------------------------------------------------------------
 # Session lifecycle tests
 # ---------------------------------------------------------------------------
 
-class TestSessionLifecycle(BaseTestCase):
 
+class TestSessionLifecycle(BaseTestCase):
     def test_upsert_then_get_meta(self):
         db.upsert_session(_META, _USER_TEXTS, _ASST_SNIPPETS)
         result = db.get_session_meta("test-session-001")
@@ -160,7 +185,11 @@ class TestSessionLifecycle(BaseTestCase):
         db.upsert_session(_META, _USER_TEXTS, _ASST_SNIPPETS)
 
         new_user_texts = [
-            {"idx": 0, "text": "Completely different content xyz", "ts": "2026-06-02T10:00:00Z"},
+            {
+                "idx": 0,
+                "text": "Completely different content xyz",
+                "ts": "2026-06-02T10:00:00Z",
+            },
         ]
         db.upsert_session(_META, new_user_texts, [])
 
@@ -172,8 +201,8 @@ class TestSessionLifecycle(BaseTestCase):
 
     def test_get_session_meta_partial_id(self):
         db.upsert_session(_META, [], [])
-        # Partial match: just the suffix
-        result = db.get_session_meta("session-001")
+        # Partial match: must use get_session_by_partial_id now
+        result = db.get_session_by_partial_id("session-001")
         self.assertIsNotNone(result)
         self.assertEqual(result["id"], "test-session-001")
 
@@ -193,8 +222,8 @@ class TestSessionLifecycle(BaseTestCase):
 # Cognitive model tests
 # ---------------------------------------------------------------------------
 
-class TestCognitiveModel(BaseTestCase):
 
+class TestCognitiveModel(BaseTestCase):
     _TABLE = "judgment_cards"
     _CARD_ID = "card-001"
     _CARD_DATA = {
@@ -250,8 +279,8 @@ class TestCognitiveModel(BaseTestCase):
 # Edge case tests
 # ---------------------------------------------------------------------------
 
-class TestEdgeCases(BaseTestCase):
 
+class TestEdgeCases(BaseTestCase):
     def test_search_fts_invalid_syntax_returns_empty(self):
         db.upsert_session(_META, _USER_TEXTS, _ASST_SNIPPETS)
         # FTS5 operators like AND/OR require operands; bare "AND" is invalid
@@ -268,14 +297,16 @@ class TestEdgeCases(BaseTestCase):
 # FTS search edge cases
 # ---------------------------------------------------------------------------
 
-class TestSearchFTSEdgeCases(BaseTestCase):
 
+class TestSearchFTSEdgeCases(BaseTestCase):
     def test_search_fts_special_chars_no_crash(self):
         """Queries with FTS5 metacharacters should not crash; they fall back to LIKE."""
         db.upsert_session(_META, _USER_TEXTS, _ASST_SNIPPETS)
-        for q in ['"unclosed', '***', '(((', 'foo"bar', 'a*b(c']:
+        for q in ['"unclosed', "***", "(((", 'foo"bar', "a*b(c"]:
             result = db.search_fts(q)
-            self.assertIsInstance(result, list, f"search_fts({q!r}) should return a list")
+            self.assertIsInstance(
+                result, list, f"search_fts({q!r}) should return a list"
+            )
 
     def test_search_fts_returns_ranked(self):
         """Sessions with more matches should appear (both should be found)."""

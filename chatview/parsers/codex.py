@@ -10,6 +10,7 @@ from pathlib import Path
 
 from chatview.parsers.claude import _truncate_tool_output, _strip_tags
 from chatview.utils.text import normalize_error as _normalize_error
+
 CODEX_DIR = Path.home() / ".codex"
 CODEX_SESSIONS_DIR = CODEX_DIR / "sessions"
 CODEX_ARCHIVED_DIR = CODEX_DIR / "archived_sessions"
@@ -19,8 +20,12 @@ CODEX_INDEX_FILE = CODEX_DIR / "session_index.jsonl"
 _codex_titles = {}  # session_id -> thread_name
 
 _CODEX_TOOL_NAMES = {
-    "shell": "Bash", "exec_command": "Bash", "write_stdin": "Bash",
-    "apply_patch": "Edit", "read_file": "Read", "write_file": "Write",
+    "shell": "Bash",
+    "exec_command": "Bash",
+    "write_stdin": "Bash",
+    "apply_patch": "Edit",
+    "read_file": "Read",
+    "write_file": "Write",
     "list_directory": "Glob",
 }
 
@@ -43,7 +48,11 @@ def _normalize_codex_tool_input(raw_name: str, args: dict) -> dict:
         cmd = args.get("cmd")
     if isinstance(cmd, list):
         # Collapse ["bash","-lc","<script>"] to the inner script when present.
-        if len(cmd) >= 3 and cmd[0] in ("bash", "sh", "zsh") and cmd[1] in ("-lc", "-c"):
+        if (
+            len(cmd) >= 3
+            and cmd[0] in ("bash", "sh", "zsh")
+            and cmd[1] in ("-lc", "-c")
+        ):
             out["command"] = cmd[2]
         else:
             out["command"] = " ".join(str(c) for c in cmd)
@@ -101,10 +110,10 @@ def _codex_project_name(cwd: str) -> str:
     home = str(Path.home())
     name = cwd
     if name.startswith(home):
-        name = name[len(home):].lstrip("/")
+        name = name[len(home) :].lstrip("/")
     for prefix in ("Desktop/proj/", "Desktop/personal/", "Desktop/", "Documents/"):
         if name.startswith(prefix):
-            name = name[len(prefix):]
+            name = name[len(prefix) :]
             break
     return name or "Codex"
 
@@ -126,13 +135,13 @@ def extract_codex_metadata(filepath: str):
     _file_refs = {}
     _error_list = []
     _err_re = re.compile(
-        r'((?:Traceback.*?:\s*)?'
-        r'(?:(?:Error|Exception|TypeError|ValueError|KeyError|AttributeError|'
-        r'ImportError|ModuleNotFoundError|NameError|IndexError|RuntimeError|'
-        r'SyntaxError|FileNotFoundError|PermissionError|OSError|IOError|'
-        r'ConnectionError|TimeoutError)'
-        r'[:\s].{0,120}))',
-        re.IGNORECASE
+        r"((?:Traceback.*?:\s*)?"
+        r"(?:(?:Error|Exception|TypeError|ValueError|KeyError|AttributeError|"
+        r"ImportError|ModuleNotFoundError|NameError|IndexError|RuntimeError|"
+        r"SyntaxError|FileNotFoundError|PermissionError|OSError|IOError|"
+        r"ConnectionError|TimeoutError)"
+        r"[:\s].{0,120}))",
+        re.IGNORECASE,
     )
 
     try:
@@ -157,7 +166,9 @@ def extract_codex_metadata(filepath: str):
                 elif rec_type == "event_msg" and payload.get("type") == "user_message":
                     text = payload.get("message", "")
                     if text.strip():
-                        user_texts.append({"idx": msg_index, "text": text[:2000], "ts": ts})
+                        user_texts.append(
+                            {"idx": msg_index, "text": text[:2000], "ts": ts}
+                        )
                     msg_index += 1
 
                 elif rec_type == "response_item":
@@ -165,10 +176,15 @@ def extract_codex_metadata(filepath: str):
                     if p_type == "message" and payload.get("role") == "assistant":
                         blocks = payload.get("content", [])
                         for blk in blocks:
-                            if isinstance(blk, dict) and blk.get("type") == "output_text":
+                            if (
+                                isinstance(blk, dict)
+                                and blk.get("type") == "output_text"
+                            ):
                                 t = blk.get("text", "").strip()
                                 if t:
-                                    assistant_snippets.append({"idx": msg_index, "text": t[:300], "ts": ts})
+                                    assistant_snippets.append(
+                                        {"idx": msg_index, "text": t[:300], "ts": ts}
+                                    )
                                     break
                         msg_index += 1
                     elif p_type in ("function_call", "custom_tool_call"):
@@ -183,17 +199,25 @@ def extract_codex_metadata(filepath: str):
                         if p_type == "function_call":
                             args_str = payload.get("arguments", "{}")
                             try:
-                                args = json.loads(args_str) if isinstance(args_str, str) else {}
+                                args = (
+                                    json.loads(args_str)
+                                    if isinstance(args_str, str)
+                                    else {}
+                                )
                             except json.JSONDecodeError:
                                 args = {}
                             fp = args.get("file_path") or args.get("path") or ""
-                        else: # custom_tool_call
+                        else:  # custom_tool_call
                             input_str = payload.get("input", "")
                             if raw_name == "apply_patch":
                                 fp = _apply_patch_summary(input_str)
                             else:
                                 try:
-                                    args = json.loads(input_str) if isinstance(input_str, str) else {}
+                                    args = (
+                                        json.loads(input_str)
+                                        if isinstance(input_str, str)
+                                        else {}
+                                    )
                                     fp = args.get("file_path") or args.get("path") or ""
                                 except json.JSONDecodeError:
                                     fp = ""
@@ -279,13 +303,15 @@ def load_codex_session(session_id: str, index: dict, index_lock):
             if rec_type == "event_msg" and payload.get("type") == "user_message":
                 text = _strip_tags(payload.get("message", ""))
                 if text.strip():
-                    messages.append({
-                        "id": payload.get("client_id", ""),
-                        "type": "user",
-                        "timestamp": ts,
-                        "isSidechain": False,
-                        "content": [{"type": "text", "text": text}],
-                    })
+                    messages.append(
+                        {
+                            "id": payload.get("client_id", ""),
+                            "type": "user",
+                            "timestamp": ts,
+                            "isSidechain": False,
+                            "content": [{"type": "text", "text": text}],
+                        }
+                    )
 
             elif rec_type == "response_item":
                 p_type = payload.get("type")
@@ -293,31 +319,43 @@ def load_codex_session(session_id: str, index: dict, index_lock):
                 # Assistant text
                 if p_type == "message" and payload.get("role") == "assistant":
                     blocks = payload.get("content", [])
-                    texts = [b.get("text", "") for b in blocks if b.get("type") == "output_text"]
+                    texts = [
+                        b.get("text", "")
+                        for b in blocks
+                        if b.get("type") == "output_text"
+                    ]
                     text = "\n".join(texts)
                     if text.strip():
-                        messages.append({
-                            "id": "", "type": "assistant", "timestamp": ts,
-                            "isSidechain": False,
-                            "content": [{"type": "text", "text": text}],
-                        })
+                        messages.append(
+                            {
+                                "id": "",
+                                "type": "assistant",
+                                "timestamp": ts,
+                                "isSidechain": False,
+                                "content": [{"type": "text", "text": text}],
+                            }
+                        )
 
                 # Reasoning → thinking block (skip encrypted-only records)
                 elif p_type == "reasoning":
                     parts = []
-                    for seg in (payload.get("summary") or []):
+                    for seg in payload.get("summary") or []:
                         if isinstance(seg, dict) and seg.get("text"):
                             parts.append(seg["text"])
-                    for seg in (payload.get("content") or []):
+                    for seg in payload.get("content") or []:
                         if isinstance(seg, dict) and seg.get("text"):
                             parts.append(seg["text"])
                     think = "\n\n".join(p.strip() for p in parts if p.strip())
                     if think:
-                        messages.append({
-                            "id": "", "type": "assistant", "timestamp": ts,
-                            "isSidechain": False,
-                            "content": [{"type": "thinking", "text": think}],
-                        })
+                        messages.append(
+                            {
+                                "id": "",
+                                "type": "assistant",
+                                "timestamp": ts,
+                                "isSidechain": False,
+                                "content": [{"type": "thinking", "text": think}],
+                            }
+                        )
 
                 # Tool call
                 elif p_type in ("function_call", "custom_tool_call"):
@@ -346,30 +384,42 @@ def load_codex_session(session_id: str, index: dict, index_lock):
                             inp_display[k] = v[:500] + "…[truncated]"
                         else:
                             inp_display[k] = v
-                    messages.append({
-                        "id": "", "type": "assistant", "timestamp": ts,
-                        "isSidechain": False,
-                        "content": [{
-                            "type": "tool_use",
-                            "name": _CODEX_TOOL_NAMES.get(name, name),
-                            "id": payload.get("call_id", ""),
-                            "input": inp_display,
-                        }],
-                    })
+                    messages.append(
+                        {
+                            "id": "",
+                            "type": "assistant",
+                            "timestamp": ts,
+                            "isSidechain": False,
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "name": _CODEX_TOOL_NAMES.get(name, name),
+                                    "id": payload.get("call_id", ""),
+                                    "input": inp_display,
+                                }
+                            ],
+                        }
+                    )
 
                 # Tool result
                 elif p_type in ("function_call_output", "custom_tool_call_output"):
                     output = payload.get("output", "")
                     output = _truncate_tool_output(output)
-                    messages.append({
-                        "id": "", "type": "tool_result", "timestamp": ts,
-                        "isSidechain": False,
-                        "content": [{
+                    messages.append(
+                        {
+                            "id": "",
                             "type": "tool_result",
-                            "toolUseId": payload.get("call_id", ""),
-                            "content": output,
-                        }],
-                    })
+                            "timestamp": ts,
+                            "isSidechain": False,
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "toolUseId": payload.get("call_id", ""),
+                                    "content": output,
+                                }
+                            ],
+                        }
+                    )
 
     return {
         "id": session_id,
@@ -388,6 +438,7 @@ def load_codex_session(session_id: str, index: dict, index_lock):
 def _store_session_insights(meta):
     """Extract insight data from meta and store in DB."""
     from chatview import db as _db
+
     sid = meta["id"]
     project = meta.get("projectName", "")
     date_str = meta.get("date", "")
@@ -396,15 +447,15 @@ def _store_session_insights(meta):
 
     tool_daily = meta.get("_insight_tools", {})
     if tool_daily:
-        _db.bulk_insert_tool_usage([
-            (sid, day, tool, count) for (day, tool), count in tool_daily.items()
-        ])
+        _db.bulk_insert_tool_usage(
+            [(sid, day, tool, count) for (day, tool), count in tool_daily.items()]
+        )
 
     file_refs = meta.get("_insight_files", {})
     if file_refs:
-        _db.bulk_insert_file_refs([
-            (sid, fp, count, project) for fp, count in file_refs.items()
-        ])
+        _db.bulk_insert_file_refs(
+            [(sid, fp, count, project) for fp, count in file_refs.items()]
+        )
 
     error_list = meta.get("_insight_errors", [])
     if error_list:
@@ -413,14 +464,18 @@ def _store_session_insights(meta):
             if norm not in err_agg:
                 err_agg[norm] = {"day": day, "count": 0}
             err_agg[norm]["count"] += 1
-        _db.bulk_insert_errors([
-            (sid, key, data["day"], project, data["count"])
-            for key, data in err_agg.items()
-        ])
+        _db.bulk_insert_errors(
+            [
+                (sid, key, data["day"], project, data["count"])
+                for key, data in err_agg.items()
+            ]
+        )
 
     snippet_list = meta.get("_insight_snippets", [])
     if snippet_list:
-        _db.bulk_insert_snippets([
-            (sid, lang, code, context, date_str, int(applied))
-            for lang, code, context, applied in snippet_list
-        ])
+        _db.bulk_insert_snippets(
+            [
+                (sid, lang, code, context, date_str, int(applied))
+                for lang, code, context, applied in snippet_list
+            ]
+        )

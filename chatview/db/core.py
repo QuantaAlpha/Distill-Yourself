@@ -1,5 +1,6 @@
 """Database connection, schema initialization, and migrations."""
 
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -35,7 +36,9 @@ def get_conn() -> sqlite3.Connection:
 _IN_CHUNK_SIZE = 900
 
 
-def query_in_chunks(conn, sql_template, ids, extra_params=(), chunk_size=_IN_CHUNK_SIZE):
+def query_in_chunks(
+    conn, sql_template, ids, extra_params=(), chunk_size=_IN_CHUNK_SIZE
+):
     """对 `IN ({placeholders})` 形式的 SELECT 按 id 分批执行并拼接结果。
 
     sql_template 必须且仅含一个 `{placeholders}` 占位槽。ids 会被切成多批（避免
@@ -45,11 +48,155 @@ def query_in_chunks(conn, sql_template, ids, extra_params=(), chunk_size=_IN_CHU
     rows = []
     extra = list(extra_params)
     for i in range(0, len(ids), chunk_size):
-        chunk = list(ids[i:i + chunk_size])
+        chunk = list(ids[i : i + chunk_size])
         placeholders = ",".join("?" * len(chunk))
         sql = sql_template.format(placeholders=placeholders)
         rows.extend(conn.execute(sql, chunk + extra).fetchall())
     return rows
+
+
+# ---------------------------------------------------------------------------
+# SQL injection defense: whitelist tables/columns/definitions
+# ---------------------------------------------------------------------------
+_KNOWN_TABLES = frozenset(
+    {
+        "sessions",
+        "messages",
+        "evidence_events",
+        "judgment_cards",
+        "card_relations",
+        "cognitive_traits",
+        "evolve_cache",
+        "aggregates",
+        "insight_tool_usage",
+        "insight_file_refs",
+        "insight_errors",
+        "insight_snippets",
+        "messages_fts",
+        "twin_checkpoints",
+        "evolve_runs",
+        "chat_cache",
+    }
+)
+
+_KNOWN_COLUMNS = frozenset(
+    {
+        # sessions
+        "id",
+        "title",
+        "date",
+        "last_date",
+        "file_path",
+        "file_size",
+        "file_mtime",
+        "user_message_count",
+        "preview",
+        "project",
+        "project_name",
+        "source",
+        "starred",
+        # evidence_events
+        "run_id",
+        "session_id",
+        "event_index",
+        "card_id",
+        "task_type",
+        "ai_action",
+        "user_reaction",
+        "resolution",
+        "lesson",
+        "signal_type",
+        "signal_intensity",
+        "domain",
+        "created_at",
+        # judgment_cards
+        "applies_when",
+        "judgment",
+        "agent_action",
+        "exceptions",
+        "tags",
+        "confidence",
+        "status",
+        "evidence_count",
+        "updated_at",
+        # cognitive_traits
+        "name",
+        "category",
+        "description",
+        "strength",
+        "supporting_card_ids",
+        # card_relations
+        "from_id",
+        "to_id",
+        "relation",
+        # evolve_cache
+        "tab",
+        "source",
+        "date_range",
+        "project",
+        "engine",
+        "data",
+        # aggregates
+        "key",
+        "value",
+        # insight_*
+        "day",
+        "tool_name",
+        "count",
+        "file_path",
+        "error_key",
+        "language",
+        "code",
+        "context",
+        "applied",
+        # twin_checkpoints / chat_cache
+        "stage",
+        "started_at",
+        "completed_at",
+        "prompt_hash",
+        "response",
+        # evolve_runs
+        "lang",
+        "status",
+        "snapshot",
+        "error_message",
+        "run_id",
+    }
+)
+
+_VALID_DEFINITIONS = frozenset(
+    {
+        "TEXT",
+        "INTEGER",
+        "REAL",
+        "BLOB",
+        "TEXT NOT NULL",
+        "INTEGER NOT NULL",
+        "REAL NOT NULL",
+        "TEXT DEFAULT ''",
+        "INTEGER DEFAULT 0",
+        "REAL DEFAULT 0.0",
+    }
+)
+
+
+def _validate_table_name(table: str) -> None:
+    """Raise ValueError if table is not in the known whitelist."""
+    if table not in _KNOWN_TABLES:
+        raise ValueError(f"Unknown or disallowed table: {table!r}")
+
+
+def _validate_column_name(column: str) -> None:
+    """Raise ValueError if column is not in the known whitelist."""
+    if column not in _KNOWN_COLUMNS:
+        raise ValueError(f"Unknown or disallowed column: {column!r}")
+
+
+def _validate_column_definition(definition: str) -> None:
+    """Raise ValueError if definition is not in the known whitelist."""
+    norm = " ".join(definition.strip().upper().split())
+    if norm not in _VALID_DEFINITIONS:
+        raise ValueError(f"Unknown or disallowed column definition: {definition!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -244,22 +391,82 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_evolve_tab     ON evolve_cache(tab);
         CREATE INDEX IF NOT EXISTS idx_evolve_updated  ON evolve_cache(updated_at);
+
+        -- =================================================================
+        -- Evolve run/progress tracking
+        -- =================================================================
+        CREATE TABLE IF NOT EXISTS evolve_runs (
+            run_id         TEXT PRIMARY KEY,
+            tab            TEXT NOT NULL,
+            source         TEXT NOT NULL DEFAULT 'all',
+            date_range     TEXT NOT NULL DEFAULT '7d',
+            project        TEXT NOT NULL DEFAULT '',
+            engine         TEXT NOT NULL DEFAULT 'auto',
+            lang           TEXT NOT NULL DEFAULT 'zh',
+            status         TEXT NOT NULL DEFAULT 'running',
+            snapshot       TEXT NOT NULL DEFAULT '{}',
+            error_message  TEXT NOT NULL DEFAULT '',
+            created_at     TEXT NOT NULL,
+            updated_at     TEXT NOT NULL,
+            completed_at   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_evolve_runs_scope
+            ON evolve_runs(tab, source, date_range, project, engine, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_evolve_runs_status
+            ON evolve_runs(status, updated_at);
+
+        -- =================================================================
+        -- Twin analysis checkpoint tracking
+        -- =================================================================
+        CREATE TABLE IF NOT EXISTS twin_checkpoints (
+            run_id TEXT NOT NULL,
+            stage INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            started_at TEXT,
+            completed_at TEXT,
+            PRIMARY KEY (run_id, stage)
+        );
+
+        -- =================================================================
+        -- AI Chat response cache
+        -- =================================================================
+        CREATE TABLE IF NOT EXISTS chat_cache (
+            prompt_hash TEXT PRIMARY KEY,
+            response TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
     """)
     _ensure_column(conn, "evidence_events", "run_id", "TEXT")
     _ensure_column(conn, "judgment_cards", "run_id", "TEXT")
     _ensure_column(conn, "cognitive_traits", "run_id", "TEXT")
+    _ensure_column(conn, "sessions", "starred", "INTEGER DEFAULT 0")
     _migrate_evidence_run_unique(conn)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_run ON evidence_events(run_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_session ON evidence_events(session_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_domain ON evidence_events(domain)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_signal ON evidence_events(signal_type)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_card ON evidence_events(card_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_evidence_run ON evidence_events(run_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_evidence_session ON evidence_events(session_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_evidence_domain ON evidence_events(domain)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_evidence_signal ON evidence_events(signal_type)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_evidence_card ON evidence_events(card_id)"
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cards_run ON judgment_cards(run_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_traits_run ON cognitive_traits(run_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_traits_run ON cognitive_traits(run_id)"
+    )
     conn.commit()
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str):
+    _validate_table_name(table)
+    _validate_column_name(column)
+    _validate_column_definition(definition)
     cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
@@ -273,6 +480,9 @@ def _migrate_evidence_run_unique(conn: sqlite3.Connection):
         name = idx[1]
         unique = idx[2]
         if not unique:
+            continue
+        # Guard: index name must be alphanumeric + underscore only
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             continue
         cols = [r[2] for r in conn.execute(f"PRAGMA index_info({name})").fetchall()]
         if cols == ["session_id", "event_index"]:
@@ -303,7 +513,10 @@ def _migrate_evidence_run_unique(conn: sqlite3.Connection):
             UNIQUE(run_id, session_id, event_index)
         )
     """)
-    legacy_cols = {row[1] for row in conn.execute("PRAGMA table_info(evidence_events_legacy)").fetchall()}
+    legacy_cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(evidence_events_legacy)").fetchall()
+    }
     select_run = "run_id" if "run_id" in legacy_cols else "NULL AS run_id"
     conn.execute(f"""
         INSERT OR IGNORE INTO evidence_events

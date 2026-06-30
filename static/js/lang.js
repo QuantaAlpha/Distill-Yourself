@@ -110,6 +110,52 @@ const I18N = {
     'chat.expandFull': '展开全文 ↓',
     'chat.collapse': '收起 ↑',
     'chat.analysisComplete': '✅ 分析完成：发现 {0} 条结果。3 秒后跳转到 Evolve → {1}',
+
+    // ── Sidebar nav items ──
+    'nav.sessions': '会话',
+    'nav.evolve': 'AI Evolve',
+    'nav.insights': 'Insights',
+    'nav.twin': 'Distill Yourself',
+
+    // ── Filter popover ──
+    'filter.label': 'Filter',
+    'filter.source': 'Source',
+    'filter.date': 'Date',
+    'filter.project': 'Project',
+    'filter.clearAll': 'Clear all',
+
+    // ── Search sort options ──
+    'sort.dateDesc': 'By Date ↓',
+    'sort.dateAsc': 'By Date ↑',
+    'sort.relevance': 'By Relevance',
+
+    // ── Right panel tabs ──
+    'rp.outline': 'Outline',
+    'rp.ai': 'AI',
+    'rp.summary': 'Summary',
+
+    // ── Session star ──
+    'sessions.starred': '已收藏',
+    'sessions.starred.filter': 'Starred',
+    'sessions.starred.empty': '没有收藏的会话。',
+
+    // ── Onboarding ──
+    'onboarding.step1.title': '连接数据源',
+    'onboarding.step1.desc': '将 Claude Code 或 Codex CLI 的对话数据目录指向此应用。',
+    'onboarding.step2.title': '索引对话',
+    'onboarding.step2.desc': '刷新以扫描和索引你的所有对话历史。',
+    'onboarding.step3.title': '开始探索',
+    'onboarding.step3.desc': '浏览会话、分析模式、提炼洞察和认知模型。',
+
+    // ── Export ──
+    'export.json': '导出 JSON',
+    'export.markdown': '导出 Markdown',
+    'export.twinData': '导出 Twin 数据',
+
+    // ── Notifications ──
+    'notify.analysisDone': '分析完成：{label}',
+    'notify.twinDone': 'Twin 分析完成',
+    'notify.evolveDone': 'Evolve 分析完成',
   },
 
   en: {
@@ -213,6 +259,52 @@ const I18N = {
     'chat.expandFull': 'Expand all ↓',
     'chat.collapse': 'Collapse ↑',
     'chat.analysisComplete': '✅ Analysis complete: found {0} results. Redirecting to Evolve → {1} in 3s',
+
+    // ── Sidebar nav items ──
+    'nav.sessions': 'Sessions',
+    'nav.evolve': 'AI Evolve',
+    'nav.insights': 'Insights',
+    'nav.twin': 'Distill Yourself',
+
+    // ── Filter popover ──
+    'filter.label': 'Filter',
+    'filter.source': 'Source',
+    'filter.date': 'Date',
+    'filter.project': 'Project',
+    'filter.clearAll': 'Clear all',
+
+    // ── Search sort options ──
+    'sort.dateDesc': 'By Date ↓',
+    'sort.dateAsc': 'By Date ↑',
+    'sort.relevance': 'By Relevance',
+
+    // ── Right panel tabs ──
+    'rp.outline': 'Outline',
+    'rp.ai': 'AI',
+    'rp.summary': 'Summary',
+
+    // ── Session star ──
+    'sessions.starred': 'Starred',
+    'sessions.starred.filter': 'Starred',
+    'sessions.starred.empty': 'No starred sessions.',
+
+    // ── Onboarding ──
+    'onboarding.step1.title': 'Connect Data',
+    'onboarding.step1.desc': 'Point this app to your Claude Code or Codex CLI conversation directories.',
+    'onboarding.step2.title': 'Index Conversations',
+    'onboarding.step2.desc': 'Refresh to scan and index all your conversation history.',
+    'onboarding.step3.title': 'Explore',
+    'onboarding.step3.desc': 'Browse sessions, analyze patterns, distill insights and cognitive models.',
+
+    // ── Export ──
+    'export.json': 'Export JSON',
+    'export.markdown': 'Export Markdown',
+    'export.twinData': 'Export Twin Data',
+
+    // ── Notifications ──
+    'notify.analysisDone': 'Analysis complete: {label}',
+    'notify.twinDone': 'Twin analysis complete',
+    'notify.evolveDone': 'Evolve analysis complete',
   },
 };
 

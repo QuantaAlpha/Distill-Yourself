@@ -73,7 +73,7 @@ export function initThemeToggle() {
 // ── HTML / string helpers ────────────────────────────────────────
 export function esc(str) {
   if (!str) return "";
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
 export function escRegex(str) {
@@ -249,8 +249,13 @@ export function renderMarkdown(text, opts) {
   });
   // Now escape the rest
   s = esc(s);
-  // Links
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Links — with URL scheme validation
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g, (match, text, url) => {
+    if (/^(javascript|data|vbscript):/i.test(url)) {
+      return text; // render as plain text, no link
+    }
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+  });
   // Bold
   s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Blockquotes

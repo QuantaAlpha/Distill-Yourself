@@ -30,7 +30,9 @@
       </div>
       <div class="topbar-right">
         <select id="global-engine-select" title="AI Engine">
+          <option value="auto">Auto</option>
           <option value="claude">Claude</option>
+          <option value="codex">Codex</option>
         </select>
         <div id="lang-toggle" class="lang-toggle" title="Language">
           <button class="lang-opt" data-lang="zh">中</button>
@@ -48,45 +50,45 @@
         <nav id="sidebar-nav">
           <button class="sidebar-nav-item active" data-view="sessions">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            Sessions
+            <span data-i18n="nav.sessions">Sessions</span>
           </button>
           <button class="sidebar-nav-item" data-view="ai">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 2v4"/><path d="M12 12l7-7"/><circle cx="12" cy="12" r="3"/></svg>
-            AI Evolve
+            <span data-i18n="nav.evolve">AI Evolve</span>
           </button>
           <button class="sidebar-nav-item" data-view="insights">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-            Insights
+            <span data-i18n="nav.insights">Insights</span>
           </button>
           <button class="sidebar-nav-item" data-view="twin">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 0 0-16 0"/><path d="M12 12v4"/><circle cx="12" cy="19" r="2" fill="currentColor" opacity="0.4"/></svg>
-            Distill Yourself
+            <span data-i18n="nav.twin">Distill Yourself</span>
           </button>
         </nav>
         <!-- Filter button + popover -->
         <div id="filter-btn-wrapper">
           <button id="filter-btn">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-            <span>Filter</span>
+            <span data-i18n="filter.label">Filter</span>
             <span id="filter-chips"></span>
           </button>
           <div id="filter-popover" class="hidden">
             <div class="filter-popover-section">
-              <div class="filter-popover-label">Source</div>
+              <div class="filter-popover-label" data-i18n="filter.source">Source</div>
               <div id="source-tabs"></div>
             </div>
             <div class="filter-popover-section">
-              <div class="filter-popover-label">Date</div>
+              <div class="filter-popover-label" data-i18n="filter.date">Date</div>
               <div class="date-filters"></div>
             </div>
             <div class="filter-popover-section">
-              <div class="filter-popover-label">Project</div>
+              <div class="filter-popover-label" data-i18n="filter.project">Project</div>
               <div id="project-bar">
-                <button id="project-trigger"><span id="project-trigger-text">All Projects</span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 4 5 6.5 7.5 4"/></svg></button>
+                <button id="project-trigger"><span id="project-trigger-text" data-i18n="sessions.allProjects">All Projects</span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 4 5 6.5 7.5 4"/></svg></button>
                 <div id="project-dropdown" class="hidden"></div>
               </div>
             </div>
-            <button id="filter-clear" class="hidden">Clear all</button>
+            <button id="filter-clear" class="hidden" data-i18n="filter.clearAll">Clear all</button>
           </div>
         </div>
         <!-- Session list / Chat history -->
@@ -122,6 +124,31 @@
                 </div>
               </div>
               <div class="welcome-stats" id="welcome-stats"></div>
+            </div>
+            <!-- Onboarding steps (shown when 0 sessions) -->
+            <div id="onboarding-steps" class="onboarding-steps hidden">
+              <div class="onboarding-step" data-i18n-step="1">
+                <div class="onboarding-step-num">1</div>
+                <div class="onboarding-step-content">
+                  <h4 data-i18n="onboarding.step1.title">连接数据源</h4>
+                  <p data-i18n="onboarding.step1.desc">将 Claude Code 或 Codex CLI 的对话数据目录指向此应用。</p>
+                </div>
+              </div>
+              <div class="onboarding-step" data-i18n-step="2">
+                <div class="onboarding-step-num">2</div>
+                <div class="onboarding-step-content">
+                  <h4 data-i18n="onboarding.step2.title">索引对话</h4>
+                  <p data-i18n="onboarding.step2.desc">刷新以扫描和索引你的所有对话历史。</p>
+                  <button id="onboarding-index-btn" class="btn-text">🔄 Refresh</button>
+                </div>
+              </div>
+              <div class="onboarding-step" data-i18n-step="3">
+                <div class="onboarding-step-num">3</div>
+                <div class="onboarding-step-content">
+                  <h4 data-i18n="onboarding.step3.title">开始探索</h4>
+                  <p data-i18n="onboarding.step3.desc">浏览会话、分析模式、提炼洞察和认知模型。</p>
+                </div>
+              </div>
             </div>
             <div class="welcome-primary-grid">
               <button class="welcome-card welcome-primary-card" data-action="sessions">
@@ -236,9 +263,11 @@
               <button id="twin-btn-progress" class="btn-text hidden" data-i18n="twin.viewProgress">📊 查看进度</button>
               <button id="twin-btn-analyze" class="btn-text">🔄 Analyze</button>
               <button id="twin-btn-sync" class="btn-text">📤 Sync</button>
+              <button id="twin-btn-export" class="btn-text" data-i18n="export.twinData">📦 Export Twin Data</button>
             </div>
           </div>
           <div id="twin-body">
+            <div id="twin-resume-prompt" class="hidden"></div>
             <div id="twin-persona-card" role="button" tabindex="0" data-i18n-title="twin.openPack" title="点击打开 Runtime Pack">
               <div id="twin-persona-avatar" role="button" tabindex="0" data-i18n-title="twin.selectType" title="选择认知类型">
                 <img id="twin-persona-img" src="" alt="Cognitive avatar" />
@@ -320,7 +349,8 @@
               <button id="btn-refresh" class="btn-text" title="Refresh">↻ Refresh</button>
               <button id="btn-user-only" class="btn-text" title="Show user messages only">👤 User Only</button>
               <button id="btn-collapse-all" class="btn-text" title="Expand/collapse tool blocks">Expand All</button>
-              <button id="btn-export" class="btn-text" title="Export as Markdown">⬇ Export</button>
+              <button id="btn-export" class="btn-text" data-i18n-title="export.markdown" title="Export as Markdown" data-i18n="export.markdown">⬇ Export</button>
+              <button id="btn-export-json" class="btn-text" data-i18n-title="export.json" title="Export as JSON" data-i18n="export.json">⬇ JSON</button>
             </div>
           </div>
           <div id="conv-body">
@@ -329,9 +359,9 @@
             <aside id="right-panel">
               <!-- Tab switcher for right panel -->
               <div id="rp-tabs">
-                <button class="rp-tab" data-panel="outline">Outline</button>
-                <button class="rp-tab active" data-panel="ai">AI</button>
-                <button class="rp-tab" data-panel="summary">Summary</button>
+                <button class="rp-tab" data-panel="outline"><span data-i18n="rp.outline">Outline</span></button>
+                <button class="rp-tab active" data-panel="ai"><span data-i18n="rp.ai">AI</span></button>
+                <button class="rp-tab" data-panel="summary"><span data-i18n="rp.summary">Summary</span></button>
               </div>
               <div id="rp-outline" class="rp-content hidden">
                 <ul id="outline-list"></ul>
@@ -381,9 +411,9 @@
             <h2>Search Results</h2>
             <span id="search-result-count" class="badge"></span>
             <select id="search-sort" title="Sort order">
-              <option value="date-desc">By Date ↓</option>
-              <option value="date-asc">By Date ↑</option>
-              <option value="relevance">By Relevance</option>
+              <option value="date-desc" data-i18n="sort.dateDesc">By Date ↓</option>
+              <option value="date-asc" data-i18n="sort.dateAsc">By Date ↑</option>
+              <option value="relevance" data-i18n="sort.relevance">By Relevance</option>
             </select>
           </div>
           <ul id="search-results-list"></ul>

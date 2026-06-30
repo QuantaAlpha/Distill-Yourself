@@ -34,7 +34,7 @@ def pretty_project_name(dirname: str) -> str:
 # ---------------------------------------------------------------------------
 # JSONL Metadata Extraction (fast — for index building)
 # ---------------------------------------------------------------------------
-def extract_metadata(filepath: str) :
+def extract_metadata(filepath: str):
     """Quick scan of a JSONL file to extract session metadata."""
     title = None
     custom_title = None
@@ -45,19 +45,19 @@ def extract_metadata(filepath: str) :
     assistant_snippets = []  # (message_index, first 300 chars of text)
     msg_index = 0
     # Insight extraction accumulators
-    _tool_daily = {}     # (day, tool_name) -> count
-    _file_refs = {}      # file_path -> count
-    _error_list = []     # [(normalized_error, day)]
-    _snippet_list = []   # [(lang, code, context, applied)]
-    _code_re = re.compile(r'```(\w*)\n([\s\S]*?)```')
+    _tool_daily = {}  # (day, tool_name) -> count
+    _file_refs = {}  # file_path -> count
+    _error_list = []  # [(normalized_error, day)]
+    _snippet_list = []  # [(lang, code, context, applied)]
+    _code_re = re.compile(r"```(\w*)\n([\s\S]*?)```")
     _err_re = re.compile(
-        r'((?:Traceback.*?:\s*)?'
-        r'(?:(?:Error|Exception|TypeError|ValueError|KeyError|AttributeError|'
-        r'ImportError|ModuleNotFoundError|NameError|IndexError|RuntimeError|'
-        r'SyntaxError|FileNotFoundError|PermissionError|OSError|IOError|'
-        r'ConnectionError|TimeoutError)'
-        r'[:\s].{0,120}))',
-        re.IGNORECASE
+        r"((?:Traceback.*?:\s*)?"
+        r"(?:(?:Error|Exception|TypeError|ValueError|KeyError|AttributeError|"
+        r"ImportError|ModuleNotFoundError|NameError|IndexError|RuntimeError|"
+        r"SyntaxError|FileNotFoundError|PermissionError|OSError|IOError|"
+        r"ConnectionError|TimeoutError)"
+        r"[:\s].{0,120}))",
+        re.IGNORECASE,
     )
     _prev_user_msg = ""
 
@@ -122,9 +122,16 @@ def extract_metadata(filepath: str) :
                                 for m in _code_re.finditer(blk.get("text", "")):
                                     lang = m.group(1) or ""
                                     code = m.group(2).strip()
-                                    if 3 < len(code.split("\n")) <= 50 and len(code) > 30:
-                                        _code_blocks.append({"lang": lang, "code": code[:1000]})
-                            elif isinstance(blk, dict) and blk.get("type") == "tool_use":
+                                    if (
+                                        3 < len(code.split("\n")) <= 50
+                                        and len(code) > 30
+                                    ):
+                                        _code_blocks.append(
+                                            {"lang": lang, "code": code[:1000]}
+                                        )
+                            elif (
+                                isinstance(blk, dict) and blk.get("type") == "tool_use"
+                            ):
                                 # Insight: tool usage + file refs
                                 tool_name = blk.get("name", "unknown")
                                 day = (first_ts or "")[:10]
@@ -136,14 +143,18 @@ def extract_metadata(filepath: str) :
                                 if fp and not fp.startswith("/tmp"):
                                     _file_refs[fp] = _file_refs.get(fp, 0) + 1
                                 if tool_name in ("Edit", "Write"):
-                                    w = inp.get("new_string", "") or inp.get("content", "")
+                                    w = inp.get("new_string", "") or inp.get(
+                                        "content", ""
+                                    )
                                     if w:
                                         _tool_writes.append(w[:2000])
                     elif isinstance(a_content, str) and a_content.strip():
                         a_texts.append(a_content.strip())
                     if a_texts:
                         snippet = a_texts[0][:300]
-                        assistant_snippets.append({"idx": msg_index, "text": snippet, "ts": ts})
+                        assistant_snippets.append(
+                            {"idx": msg_index, "text": snippet, "ts": ts}
+                        )
                     # Insight: determine applied status for code snippets
                     for cb in _code_blocks:
                         applied = False
@@ -151,10 +162,14 @@ def extract_metadata(filepath: str) :
                             code_lines = set(cb["code"].strip().split("\n")[:10])
                             for tw in _tool_writes:
                                 tw_lines = set(tw.strip().split("\n")[:20])
-                                if len(code_lines & tw_lines) >= min(2, len(code_lines)):
+                                if len(code_lines & tw_lines) >= min(
+                                    2, len(code_lines)
+                                ):
                                     applied = True
                                     break
-                        _snippet_list.append((cb["lang"], cb["code"], _prev_user_msg, applied))
+                        _snippet_list.append(
+                            (cb["lang"], cb["code"], _prev_user_msg, applied)
+                        )
                     msg_index += 1
 
                 elif msg_type == "user" and obj.get("toolUseResult"):
@@ -162,7 +177,10 @@ def extract_metadata(filepath: str) :
                     content = obj.get("message", {}).get("content", [])
                     if isinstance(content, list):
                         for blk in content:
-                            if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                            if (
+                                isinstance(blk, dict)
+                                and blk.get("type") == "tool_result"
+                            ):
                                 result_text = blk.get("content", "")
                                 if isinstance(result_text, list):
                                     result_text = json.dumps(result_text)
@@ -250,7 +268,9 @@ def _strip_tags(text: str) -> str:
         if not stripped:
             continue
         # Skip known system-generated lines
-        if stripped.startswith(("The user opened the file", "The user selected the line")):
+        if stripped.startswith(
+            ("The user opened the file", "The user selected the line")
+        ):
             continue
         filtered.append(line)
     return "\n".join(filtered).strip()

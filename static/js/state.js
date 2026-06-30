@@ -19,6 +19,7 @@ export const state = {
   outlineVisible: true,
   _scrollHandler: null,
   _sidebarScrollHandler: null,
+  _visibilityHandler: null,
   currentMessages: [],
   currentView: "sessions",
   viewHistory: [],
@@ -35,10 +36,10 @@ export const state = {
   globalAiHandle: null,
 
   // Global AI scope state
-  globalScopeSource: "all",
-  globalScopeDate: "7d",
-  globalScopeProject: "",
-  globalScopeEngine: localStorage.getItem("chatview-engine") || "claude",
+  globalScopeSource: localStorage.getItem("chatview-ai-scope-source") || "all",
+  globalScopeDate: localStorage.getItem("chatview-ai-scope-date") || "7d",
+  globalScopeProject: localStorage.getItem("chatview-ai-scope-project") || "",
+  globalScopeEngine: localStorage.getItem("chatview-engine") || "auto",
   availableEngines: [],
   chatTimeout: parseInt(localStorage.getItem("chatview-timeout") || "900", 10),
 

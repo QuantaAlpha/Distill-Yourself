@@ -78,9 +78,23 @@
   border-radius: var(--radius-sm);
   margin-bottom: 1px;
   transition: background 0.12s;
+  position: relative;
 }
 #session-list li:hover { background: var(--bg-hover); }
 #session-list li.active { background: var(--bg-active); }
+.session-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 4px; }
+.session-header-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.session-star-btn {
+  flex-shrink: 0; width: 20px; height: 20px; border: none;
+  background: transparent; color: var(--text-muted); font-size: 13px;
+  cursor: pointer; border-radius: 4px; display: flex; align-items: center;
+  justify-content: center; opacity: 0; transition: opacity 0.15s, color 0.15s;
+  line-height: 1; margin-top: 0;
+}
+#session-list li:hover .session-star-btn { opacity: 1; }
+#session-list li.starred .session-star-btn { opacity: 1; color: #f59e0b; }
+.session-star-btn:hover { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
+#session-list li.starred { background: rgba(255, 247, 237, 0.5); }
 .session-title {
   font-size: 14px;
   font-weight: 400;
@@ -89,7 +103,18 @@
   text-overflow: ellipsis;
   color: var(--text);
   line-height: 1.4;
+  flex: 1;
+  min-width: 0;
 }
+.session-delete-btn {
+  flex-shrink: 0; width: 20px; height: 20px; border: none;
+  background: transparent; color: var(--text-muted); font-size: 11px;
+  cursor: pointer; border-radius: 4px; display: flex; align-items: center;
+  justify-content: center; opacity: 0; transition: opacity 0.15s, background 0.12s, color 0.12s;
+  margin-top: 0; line-height: 1;
+}
+#session-list li:hover .session-delete-btn { opacity: 1; }
+.session-delete-btn:hover { background: var(--danger-dim, rgba(229,115,115,0.15)); color: var(--danger, #e57373); }
 .session-meta {
   font-size: 11px; color: var(--text-muted); display: flex; gap: 6px;
   margin-top: 2px; align-items: center; flex-wrap: wrap;
@@ -129,6 +154,8 @@
 .source-tab:hover { color: var(--text-secondary); background: var(--bg-hover); }
 .source-tab.active { color: var(--accent); background: var(--accent-dim); }
 .source-tab.codex.active { color: #10a37f; background: rgba(16,163,127,0.1); }
+.star-filter-btn { font-size: 12px; }
+button.source-tab.star-filter-btn.active { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
 
 /* ---- Date filter ---- */
 .date-filters { display: flex; gap: 3px; margin-left: auto; }

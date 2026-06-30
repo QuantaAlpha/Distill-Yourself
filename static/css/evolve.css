@@ -1,4 +1,5 @@
 /* ---- AI Page (Evolve + Chat split layout) ---- */
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 #ai-scope-bar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 8px 20px; border-bottom: 1px solid var(--border-light);
@@ -75,6 +76,10 @@
 }
 .evolve-tab:hover { color: var(--text); }
 .evolve-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.evolve-tab-status { margin-left: 4px; font-size: 11px; }
+.evolve-tab-status.loading { animation: spin 1s linear infinite; }
+.evolve-tab-status.error { color: var(--danger, #e53e3e); }
+.evolve-tab-status.cached { color: var(--success, #16a34a); }
 
 #evolve-tab-content {
   background: var(--bg-surface); border: 1px solid var(--border-light);
@@ -129,8 +134,75 @@
 }
 .sync-result.error { color: var(--danger, #e53e3e); }
 
-#evolve-tab-body { padding: 20px; position: relative; }
+#evolve-tab-body { padding: 20px; position: relative; background: var(--bg-surface); }
 .evolve-tab-panel { width: 100%; }
+
+/* Empty state — clean, not an error */
+.evolve-empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 80px 20px 60px; min-height: 300px;
+}
+.evolve-empty-icon {
+  font-size: 40px; margin-bottom: 16px; opacity: 0.5;
+}
+.evolve-empty-title {
+  font-size: 15px; font-weight: 600; color: var(--text); margin: 0 0 8px;
+}
+.evolve-empty-hint {
+  font-size: 13px; color: var(--text-muted); margin: 0 0 20px; line-height: 1.5;
+}
+
+/* Error state — distinct visuals from empty state */
+.evolve-error-state {
+  padding: 60px 20px;
+}
+.evolve-error-icon {
+  opacity: 0.8; filter: none; font-size: 36px;
+}
+.evolve-error-state .evolve-empty-title {
+  color: var(--danger, #e53e3e);
+}
+.evolve-error-state .evolve-empty-hint {
+  color: var(--text-muted);
+}
+
+/* Refresh-all progress banner */
+.evolve-refresh-all-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; margin-bottom: 16px;
+  background: var(--accent-dim, #e8f0fe);
+  border: 1px solid var(--accent, #5856d6);
+  border-radius: var(--radius, 8px);
+  font-size: 13px; font-weight: 500;
+  color: var(--text, #1a1a1a);
+}
+.evolve-think-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); animation: pulse 1s infinite;
+}
+
+/* Retry / Start-analysis button in empty + error states */
+.evolve-retry-btn {
+  margin-top: 12px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px 20px;
+  font-size: 13px; font-weight: 600; line-height: 1;
+  color: #fff;
+  background: var(--accent, #5856d6);
+  border: 1px solid var(--accent, #5856d6);
+  border-radius: var(--radius, 8px);
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.05s, box-shadow 0.15s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.evolve-retry-btn:hover { filter: brightness(1.08); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18); }
+.evolve-retry-btn:active { transform: translateY(1px); filter: brightness(0.96); }
+.evolve-retry-btn:focus-visible { outline: 2px solid var(--accent, #5856d6); outline-offset: 2px; }
+/* In error state, use the danger color for the retry button border accent */
+.evolve-error-state .evolve-retry-btn {
+  background: var(--accent, #5856d6);
+  border-color: var(--accent, #5856d6);
+}
 
 .evolve-empty-state {
   text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px;

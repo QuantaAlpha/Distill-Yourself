@@ -10,7 +10,10 @@ from pathlib import Path
 
 from chatview.commands.analysis import _get_filtered_db, _get_messages_db
 from chatview.commands.corrections import (
-    _data_corrections, _data_decisions, _data_errors, _data_highlights,
+    _data_corrections,
+    _data_decisions,
+    _data_errors,
+    _data_highlights,
 )
 
 
@@ -20,21 +23,25 @@ from chatview.commands.corrections import (
 
 _CATEGORY_PATTERNS = {
     "style": re.compile(
-        r'太[简精粗]|太复杂|太臃肿|过度[设计复杂抽象]|'
-        r'too (?:complex|verbose|long|simple|short)|overcomplicat|unnecessar',
-        re.IGNORECASE),
+        r"太[简精粗]|太复杂|太臃肿|过度[设计复杂抽象]|"
+        r"too (?:complex|verbose|long|simple|short)|overcomplicat|unnecessar",
+        re.IGNORECASE,
+    ),
     "scope": re.compile(
-        r'不需要这个|多余|没必要|不是我说的|我说的是|我要的是|'
-        r'not what I (?:asked|meant|wanted)|I meant|我没说|我没让你|谁让你',
-        re.IGNORECASE),
+        r"不需要这个|多余|没必要|不是我说的|我说的是|我要的是|"
+        r"not what I (?:asked|meant|wanted)|I meant|我没说|我没让你|谁让你",
+        re.IGNORECASE,
+    ),
     "accuracy": re.compile(
-        r'不对[，。！\s]|错了[，。！\s]|你搞错|搞反了|你理解错|你没[看听懂理解]|应该是|'
-        r'wrong|not right|you forgot|you missed|incorrect|mistaken',
-        re.IGNORECASE),
+        r"不对[，。！\s]|错了[，。！\s]|你搞错|搞反了|你理解错|你没[看听懂理解]|应该是|"
+        r"wrong|not right|you forgot|you missed|incorrect|mistaken",
+        re.IGNORECASE,
+    ),
     "workflow": re.compile(
-        r'重新来|重做|回退|改回去|撤销|换一种|再看看|再想想|再试试|'
-        r'revert|undo|roll\s*back|start over|try again',
-        re.IGNORECASE),
+        r"重新来|重做|回退|改回去|撤销|换一种|再看看|再想想|再试试|"
+        r"revert|undo|roll\s*back|start over|try again",
+        re.IGNORECASE,
+    ),
 }
 
 
@@ -100,10 +107,12 @@ def cmd_evolve_rules(args):
             # Build evidence
             evidence = []
             for g in group[:5]:
-                evidence.append({
-                    "session": g.get("sessionId", ""),
-                    "quote": g.get("text", "")[:150],
-                })
+                evidence.append(
+                    {
+                        "session": g.get("sessionId", ""),
+                        "quote": g.get("text", "")[:150],
+                    }
+                )
 
             # Determine rule/why/positive/negative from context
             rule_text = f"\u7528\u6237\u7ea0\u6b63\uff1a{signal_key}"
@@ -111,20 +120,26 @@ def cmd_evolve_rules(args):
             ai_text = representative.get("aiText", "")
 
             # Map Chinese category names
-            cat_label = {"style": "\u98ce\u683c", "scope": "\u8303\u56f4", "accuracy": "\u51c6\u786e\u6027",
-                         "workflow": "\u5de5\u4f5c\u6d41"}.get(cat, cat)
+            cat_label = {
+                "style": "\u98ce\u683c",
+                "scope": "\u8303\u56f4",
+                "accuracy": "\u51c6\u786e\u6027",
+                "workflow": "\u5de5\u4f5c\u6d41",
+            }.get(cat, cat)
 
-            rules.append({
-                "id": f"r{rule_id}",
-                "priority": priority,
-                "category": cat_label,
-                "rule": rule_text,
-                "why": why,
-                "positive": "",
-                "negative": ai_text[:100] if ai_text else "",
-                "evidence": evidence,
-                "frequency": freq,
-            })
+            rules.append(
+                {
+                    "id": f"r{rule_id}",
+                    "priority": priority,
+                    "category": cat_label,
+                    "rule": rule_text,
+                    "why": why,
+                    "positive": "",
+                    "negative": ai_text[:100] if ai_text else "",
+                    "evidence": evidence,
+                    "frequency": freq,
+                }
+            )
 
     rules.sort(key=lambda r: {"P0": 0, "P1": 1, "P2": 2}.get(r["priority"], 9))
     result = {"rules": rules}
@@ -150,21 +165,23 @@ def cmd_evolve_signals(args):
         if date:
             date_counts[date][cat] += 1
 
-        events.append({
-            "id": f"c{i+1}",
-            "date": date,
-            "session": c.get("sessionId", ""),
-            "type": cat,
-            "userQuote": c.get("text", "")[:200],
-            "aiIssue": c.get("aiText", "")[:150] if c.get("aiText") else "",
-            "correction": "",
-            "linkedRule": None,
-        })
+        events.append(
+            {
+                "id": f"c{i + 1}",
+                "date": date,
+                "session": c.get("sessionId", ""),
+                "type": cat,
+                "userQuote": c.get("text", "")[:200],
+                "aiIssue": c.get("aiText", "")[:150] if c.get("aiText") else "",
+                "correction": "",
+                "linkedRule": None,
+            }
+        )
 
-    timeline = sorted([
-        {"date": d, "counts": dict(counts)}
-        for d, counts in date_counts.items()
-    ], key=lambda x: x["date"])
+    timeline = sorted(
+        [{"date": d, "counts": dict(counts)} for d, counts in date_counts.items()],
+        key=lambda x: x["date"],
+    )
 
     result = {"timeline": timeline, "events": events[:100]}
 
@@ -172,7 +189,9 @@ def cmd_evolve_signals(args):
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
-        print(f"Generated {len(timeline)} timeline entries, {len(events)} events \u2192 {out_path}")
+        print(
+            f"Generated {len(timeline)} timeline entries, {len(events)} events \u2192 {out_path}"
+        )
 
 
 def cmd_evolve_patterns(args):
@@ -187,22 +206,26 @@ def cmd_evolve_patterns(args):
     # 1. Error patterns -> "error" type bubbles
     for err in errors[:20]:
         pid += 1
-        bubbles.append({
-            "id": f"p{pid}",
-            "label": err.get("pattern", "")[:30],
-            "frequency": err.get("count", 1),
-            "type": "error",
-            "trend": "stable",
-        })
-        cards.append({
-            "id": f"p{pid}",
-            "description": err.get("sample", err.get("pattern", "")),
-            "frequency": err.get("count", 1),
-            "cost": f"{err.get('sessions', 1)} sessions affected",
-            "suggestion": "\u68c0\u67e5\u9519\u8bef\u6839\u56e0\uff0c\u6dfb\u52a0\u9632\u5fa1\u6027\u5904\u7406",
-            "sessions": [],
-            "trend": "stable",
-        })
+        bubbles.append(
+            {
+                "id": f"p{pid}",
+                "label": err.get("pattern", "")[:30],
+                "frequency": err.get("count", 1),
+                "type": "error",
+                "trend": "stable",
+            }
+        )
+        cards.append(
+            {
+                "id": f"p{pid}",
+                "description": err.get("sample", err.get("pattern", "")),
+                "frequency": err.get("count", 1),
+                "cost": f"{err.get('sessions', 1)} sessions affected",
+                "suggestion": "\u68c0\u67e5\u9519\u8bef\u6839\u56e0\uff0c\u6dfb\u52a0\u9632\u5fa1\u6027\u5904\u7406",
+                "sessions": [],
+                "trend": "stable",
+            }
+        )
 
     # 2. Correction patterns -> group by category for "workflow"/"efficiency" bubbles
     cat_counts = defaultdict(lambda: {"count": 0, "sessions": set(), "samples": []})
@@ -213,31 +236,43 @@ def cmd_evolve_patterns(args):
         if len(cat_counts[cat]["samples"]) < 3:
             cat_counts[cat]["samples"].append(c.get("text", "")[:100])
 
-    cat_labels = {"style": "\u98ce\u683c\u95ee\u9898", "scope": "\u8303\u56f4\u8513\u5ef6", "accuracy": "\u51c6\u786e\u6027\u95ee\u9898",
-                  "workflow": "\u5de5\u4f5c\u6d41\u95ee\u9898"}
-    cat_types = {"style": "efficiency", "scope": "efficiency",
-                 "accuracy": "knowledge_gap", "workflow": "workflow"}
+    cat_labels = {
+        "style": "\u98ce\u683c\u95ee\u9898",
+        "scope": "\u8303\u56f4\u8513\u5ef6",
+        "accuracy": "\u51c6\u786e\u6027\u95ee\u9898",
+        "workflow": "\u5de5\u4f5c\u6d41\u95ee\u9898",
+    }
+    cat_types = {
+        "style": "efficiency",
+        "scope": "efficiency",
+        "accuracy": "knowledge_gap",
+        "workflow": "workflow",
+    }
 
     for cat, data in cat_counts.items():
         if data["count"] < 1:
             continue
         pid += 1
-        bubbles.append({
-            "id": f"p{pid}",
-            "label": cat_labels.get(cat, cat),
-            "frequency": data["count"],
-            "type": cat_types.get(cat, "workflow"),
-            "trend": "stable",
-        })
-        cards.append({
-            "id": f"p{pid}",
-            "description": f"{cat_labels.get(cat, cat)}\uff1a{'; '.join(data['samples'][:2])}",
-            "frequency": data["count"],
-            "cost": f"{len(data['sessions'])} sessions",
-            "suggestion": f"\u5173\u6ce8 {cat_labels.get(cat, cat)} \u76f8\u5173\u7684\u91cd\u590d\u7ea0\u6b63",
-            "sessions": list(data["sessions"])[:5],
-            "trend": "stable",
-        })
+        bubbles.append(
+            {
+                "id": f"p{pid}",
+                "label": cat_labels.get(cat, cat),
+                "frequency": data["count"],
+                "type": cat_types.get(cat, "workflow"),
+                "trend": "stable",
+            }
+        )
+        cards.append(
+            {
+                "id": f"p{pid}",
+                "description": f"{cat_labels.get(cat, cat)}\uff1a{'; '.join(data['samples'][:2])}",
+                "frequency": data["count"],
+                "cost": f"{len(data['sessions'])} sessions",
+                "suggestion": f"\u5173\u6ce8 {cat_labels.get(cat, cat)} \u76f8\u5173\u7684\u91cd\u590d\u7ea0\u6b63",
+                "sessions": list(data["sessions"])[:5],
+                "trend": "stable",
+            }
+        )
 
     bubbles.sort(key=lambda b: -b["frequency"])
     cards.sort(key=lambda c: -c["frequency"])
@@ -258,46 +293,105 @@ def cmd_evolve_patterns(args):
 _EVOLVE_SCHEMAS = {
     "profile": {
         "top_fields": {"categories": list, "radar": dict},
-        "categories_item": {"required": {"name": str}, "optional": {"icon": str, "tags": list, "items": list}},
-        "categories_item_item": {"required": {"text": str}, "optional": {"confidence": str, "session": str}},
-        "radar_dimension": {"required": {"name": str, "score": (int, float)}, "optional": {"evidence": str}},
+        "categories_item": {
+            "required": {"name": str},
+            "optional": {"icon": str, "tags": list, "items": list},
+        },
+        "categories_item_item": {
+            "required": {"text": str},
+            "optional": {"confidence": str, "session": str},
+        },
+        "radar_dimension": {
+            "required": {"name": str, "score": (int, float)},
+            "optional": {"evidence": str},
+        },
         "id_field": None,  # categories matched by "name"
     },
     "memory": {
         "top_fields": {"nodes": list, "links": list, "cards": list},
         "node": {
             "required": {"id": str, "label": str},
-            "optional": {"type": str, "frequency": (int, float), "confidence": str,
-                         "priority": str, "status": str, "scope": str, "sessions": list}
+            "optional": {
+                "type": str,
+                "frequency": (int, float),
+                "confidence": str,
+                "priority": str,
+                "status": str,
+                "scope": str,
+                "sessions": list,
+            },
         },
         "link": {
             "required": {"source": str, "target": str},
-            "optional": {"strength": (int, float), "relation": str}
+            "optional": {"strength": (int, float), "relation": str},
         },
         "card": {
             "required": {"id": str},
-            "optional": {"trigger": str, "instruction": str, "avoid": str,
-                         "content": str, "firstSeen": str, "lastSeen": str,
-                         "lastValidated": str, "evidence": (str, list),
-                         "conflictsWith": list}
+            "optional": {
+                "trigger": str,
+                "instruction": str,
+                "avoid": str,
+                "content": str,
+                "firstSeen": str,
+                "lastSeen": str,
+                "lastValidated": str,
+                "evidence": (str, list),
+                "conflictsWith": list,
+            },
         },
         "id_field": "id",
     },
     "rules": {
         "top_fields": {"rules": list},
-        "rule": {"required": {"id": str, "rule": str}, "optional": {"priority": str, "category": str, "content": str, "why": str, "positive": str, "negative": str, "evidence": list, "frequency": (int, float)}},
+        "rule": {
+            "required": {"id": str, "rule": str},
+            "optional": {
+                "priority": str,
+                "category": str,
+                "content": str,
+                "why": str,
+                "positive": str,
+                "negative": str,
+                "evidence": list,
+                "frequency": (int, float),
+            },
+        },
         "id_field": "id",
     },
     "signals": {
         "top_fields": {"timeline": list, "events": list},
-        "event": {"required": {"id": str}, "optional": {"date": str, "session": str, "type": str, "userQuote": str, "aiIssue": str, "correction": str, "linkedRule": (str, type(None))}},
+        "event": {
+            "required": {"id": str},
+            "optional": {
+                "date": str,
+                "session": str,
+                "type": str,
+                "userQuote": str,
+                "aiIssue": str,
+                "correction": str,
+                "linkedRule": (str, type(None)),
+            },
+        },
         "timeline_item": {"required": {"date": str, "counts": dict}, "optional": {}},
         "id_field": "id",
     },
     "patterns": {
         "top_fields": {"bubbles": list, "cards": list},
-        "bubble": {"required": {"id": str, "label": str}, "optional": {"frequency": (int, float), "type": str, "trend": str}},
-        "card": {"required": {"id": str}, "optional": {"description": str, "frequency": (int, float), "cost": str, "suggestion": str, "sessions": list, "trend": str}},
+        "bubble": {
+            "required": {"id": str, "label": str},
+            "optional": {"frequency": (int, float), "type": str, "trend": str},
+        },
+        "card": {
+            "required": {"id": str},
+            "optional": {
+                "description": str,
+                "frequency": (int, float),
+                "cost": str,
+                "suggestion": str,
+                "sessions": list,
+                "trend": str,
+            },
+        },
         "id_field": "id",
     },
 }
@@ -321,7 +415,9 @@ def _validate_evolve_data(tab, data):
             data[field] = expected_type()  # auto-fill with empty
             continue
         if not isinstance(data[field], expected_type):
-            errors.append(f"'{field}' must be {expected_type.__name__}, got {type(data[field]).__name__}")
+            errors.append(
+                f"'{field}' must be {expected_type.__name__}, got {type(data[field]).__name__}"
+            )
 
     if errors:
         return False, errors
@@ -336,7 +432,13 @@ def _validate_evolve_data(tab, data):
                 if isinstance(item, str):
                     cat["items"][j] = {"text": item}  # auto-fix string->object
                 elif isinstance(item, dict):
-                    errors.extend(_check_item(f"categories[{i}].items[{j}]", item, schema["categories_item_item"]))
+                    errors.extend(
+                        _check_item(
+                            f"categories[{i}].items[{j}]",
+                            item,
+                            schema["categories_item_item"],
+                        )
+                    )
             # Validate tags
             if "tags" in cat and not isinstance(cat["tags"], list):
                 errors.append(f"categories[{i}].tags must be array")
@@ -347,7 +449,9 @@ def _validate_evolve_data(tab, data):
                 try:
                     s = float(dim["score"])
                     if not (0 <= s <= 1):
-                        errors.append(f"radar.dimensions[{i}].score must be 0.0-1.0, got {s}")
+                        errors.append(
+                            f"radar.dimensions[{i}].score must be 0.0-1.0, got {s}"
+                        )
                     dim["score"] = s
                 except (TypeError, ValueError):
                     errors.append(f"radar.dimensions[{i}].score must be a number")
@@ -390,19 +494,32 @@ def _check_item(path, item, spec):
     for key, expected in spec.get("required", {}).items():
         if key not in item:
             errors.append(f"{path}.{key}: required field missing")
-        elif not isinstance(item[key], expected if isinstance(expected, tuple) else (expected,)):
-            errors.append(f"{path}.{key}: expected {expected}, got {type(item[key]).__name__}")
+        elif not isinstance(
+            item[key], expected if isinstance(expected, tuple) else (expected,)
+        ):
+            errors.append(
+                f"{path}.{key}: expected {expected}, got {type(item[key]).__name__}"
+            )
     for key, expected in spec.get("optional", {}).items():
         if key in item and item[key] is not None:
-            if not isinstance(item[key], expected if isinstance(expected, tuple) else (expected,)):
-                errors.append(f"{path}.{key}: expected {expected}, got {type(item[key]).__name__}")
+            if not isinstance(
+                item[key], expected if isinstance(expected, tuple) else (expected,)
+            ):
+                errors.append(
+                    f"{path}.{key}: expected {expected}, got {type(item[key]).__name__}"
+                )
     return errors
 
 
 def _read_evolve_cache(tab, cache_key=""):
     """Read existing cache for a tab, or return empty dict."""
     suffix = f".{cache_key}" if cache_key else ""
-    cache_path = Path(__file__).resolve().parent.parent.parent / ".cache" / "evolve" / f"{tab}{suffix}.json"
+    cache_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / ".cache"
+        / "evolve"
+        / f"{tab}{suffix}.json"
+    )
     if cache_path.exists():
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
@@ -428,7 +545,10 @@ def _merge_evolve_data(tab, existing, new_data):
                 old_tags.update(cat.get("tags", []))
                 old["tags"] = list(old_tags)
                 # Merge items by text (deduplicate)
-                old_texts = {(it["text"] if isinstance(it, dict) else it) for it in old.get("items", [])}
+                old_texts = {
+                    (it["text"] if isinstance(it, dict) else it)
+                    for it in old.get("items", [])
+                }
                 for item in cat.get("items", []):
                     text = item["text"] if isinstance(item, dict) else item
                     if text not in old_texts:
@@ -463,8 +583,12 @@ def _merge_evolve_data(tab, existing, new_data):
                 old_by_date = {t["date"]: t for t in old_list}
                 for t in new_data[field]:
                     old_by_date[t["date"]] = t
-                existing[field] = sorted(old_by_date.values(), key=lambda x: x.get("date", ""))
-            elif all(isinstance(item, dict) and "id" in item for item in new_data[field]):
+                existing[field] = sorted(
+                    old_by_date.values(), key=lambda x: x.get("date", "")
+                )
+            elif all(
+                isinstance(item, dict) and "id" in item for item in new_data[field]
+            ):
                 old_by_id = {item["id"]: item for item in old_list}
                 for item in new_data[field]:
                     old_by_id[item["id"]] = item  # replace on match, add if new
@@ -482,16 +606,26 @@ def _delete_evolve_data(tab, existing, ids):
 
     if tab == "profile":
         # Delete categories by name
-        existing["categories"] = [c for c in existing.get("categories", []) if c.get("name") not in ids_set]
+        existing["categories"] = [
+            c for c in existing.get("categories", []) if c.get("name") not in ids_set
+        ]
         # Delete radar dimensions by name
         if "radar" in existing:
-            existing["radar"]["dimensions"] = [d for d in existing["radar"].get("dimensions", []) if d.get("name") not in ids_set]
+            existing["radar"]["dimensions"] = [
+                d
+                for d in existing["radar"].get("dimensions", [])
+                if d.get("name") not in ids_set
+            ]
     else:
         schema = _EVOLVE_SCHEMAS.get(tab, {})
         for field in schema.get("top_fields", {}):
             items = existing.get(field, [])
             if isinstance(items, list):
-                existing[field] = [item for item in items if not (isinstance(item, dict) and item.get("id") in ids_set)]
+                existing[field] = [
+                    item
+                    for item in items
+                    if not (isinstance(item, dict) and item.get("id") in ids_set)
+                ]
 
     return existing
 
@@ -499,6 +633,7 @@ def _delete_evolve_data(tab, existing, ids):
 def cmd_profile_digest(args):
     """Generate a pre-computed profile digest for sub-agents."""
     from chatview import db as _db
+
     _db.init_db()
 
     result = {}
@@ -535,9 +670,12 @@ def cmd_profile_digest(args):
     # --- projects (top 5) ---
     top_projects = sorted(proj_counts.items(), key=lambda x: -x[1]["sessions"])[:5]
     result["projects"] = [
-        {"name": name, "sessions": data["sessions"],
-         "pct": round(data["sessions"] / max(total_sessions, 1) * 100),
-         "queries": data["queries"]}
+        {
+            "name": name,
+            "sessions": data["sessions"],
+            "pct": round(data["sessions"] / max(total_sessions, 1) * 100),
+            "queries": data["queries"],
+        }
         for name, data in top_projects
     ]
 
@@ -560,17 +698,26 @@ def cmd_profile_digest(args):
             if len(group) < 1:
                 continue
             # Pick best sample: AI-confirmed first, then longest text
-            group.sort(key=lambda x: (-int(x.get("aiConfirmed", False)), -len(x.get("text", ""))))
+            group.sort(
+                key=lambda x: (
+                    -int(x.get("aiConfirmed", False)),
+                    -len(x.get("text", "")),
+                )
+            )
             rep = group[0]
-            projects_seen = list(set(g.get("project", "") for g in group if g.get("project")))
-            episodes.append({
-                "category": cat,
-                "signal": signal_key,
-                "sample_text": rep.get("text", "")[:200],
-                "repeat_count": len(group),
-                "ai_confirmed_count": sum(1 for g in group if g.get("aiConfirmed")),
-                "projects_seen": projects_seen[:5],
-            })
+            projects_seen = list(
+                set(g.get("project", "") for g in group if g.get("project"))
+            )
+            episodes.append(
+                {
+                    "category": cat,
+                    "signal": signal_key,
+                    "sample_text": rep.get("text", "")[:200],
+                    "repeat_count": len(group),
+                    "ai_confirmed_count": sum(1 for g in group if g.get("aiConfirmed")),
+                    "projects_seen": projects_seen[:5],
+                }
+            )
 
     episodes.sort(key=lambda e: -e["repeat_count"])
 
@@ -589,23 +736,28 @@ def cmd_profile_digest(args):
         elif kind == "insight":
             by_subtype["ai_insight"] += 1
 
-    confirmed_count = sum(1 for c in corrections if c.get("source") == "user" and c.get("aiConfirmed"))
+    confirmed_count = sum(
+        1 for c in corrections if c.get("source") == "user" and c.get("aiConfirmed")
+    )
     by_subtype["confirmed"] = confirmed_count
 
     result["corrections"] = {
         "total": len(corrections),
         "by_subtype": dict(by_subtype),
         "by_category": dict(by_category),
-        "correction_rate_per_100_queries": round(len(corrections) / max(total_queries, 1) * 100, 1),
+        "correction_rate_per_100_queries": round(
+            len(corrections) / max(total_queries, 1) * 100, 1
+        ),
         "episodes": episodes[:15],
     }
 
     # --- positive signals (short user confirmations/approvals) ---
     _confirm_re = re.compile(
-        r'^(\u53ef\u4ee5\u7684?|OK[\u7684\u4e86]?|\u597d[\u7684\u4e86]?|\u884c[\u7684\u4e86]?|\u5bf9[\u7684\u4e86]?|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837|\u55ef|'
-        r'yes|perfect|looks good|lgtm|exactly|great|approved|'
-        r'\u8fd9\u4e2a[\u65b9\u6848\u4e0d]?\u9519|\u631a\u597d|\u4e0d\u9519|\u53ef\u4ee5|\u540c\u610f)',
-        re.IGNORECASE)
+        r"^(\u53ef\u4ee5\u7684?|OK[\u7684\u4e86]?|\u597d[\u7684\u4e86]?|\u884c[\u7684\u4e86]?|\u5bf9[\u7684\u4e86]?|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837|\u55ef|"
+        r"yes|perfect|looks good|lgtm|exactly|great|approved|"
+        r"\u8fd9\u4e2a[\u65b9\u6848\u4e0d]?\u9519|\u631a\u597d|\u4e0d\u9519|\u53ef\u4ee5|\u540c\u610f)",
+        re.IGNORECASE,
+    )
     positive = []
     for q in all_queries_raw:
         text = q.get("text", "").strip()
@@ -617,11 +769,13 @@ def cmd_profile_digest(args):
         # Skip noise
         if text.startswith(("<", "{", "```", "#", "/")):
             continue
-        positive.append({
-            "user_text": text[:60],
-            "project": q.get("project_name", ""),
-            "date": (q.get("ts") or "")[:10],
-        })
+        positive.append(
+            {
+                "user_text": text[:60],
+                "project": q.get("project_name", ""),
+                "date": (q.get("ts") or "")[:10],
+            }
+        )
     # Deduplicate
     seen_texts = set()
     unique_positive = []
@@ -638,13 +792,18 @@ def cmd_profile_digest(args):
     result["decisions"] = {
         "total": len(all_decisions),
         "samples": [
-            {"text": d.get("text", "")[:200], "date": d.get("date", ""), "project": d.get("project", "")}
+            {
+                "text": d.get("text", "")[:200],
+                "date": d.get("date", ""),
+                "project": d.get("project", ""),
+            }
             for d in all_decisions[:5]
         ],
     }
 
     # --- files ---
     from chatview.commands.analysis import _data_files
+
     all_files = _data_files(args)[:10]
 
     # Extension distribution
@@ -653,12 +812,18 @@ def cmd_profile_digest(args):
         ext = os.path.splitext(finfo.get("path", ""))[-1] or ".other"
         ext_counts[ext] += finfo.get("edits", 0) + finfo.get("writes", 0)
     total_edits = sum(ext_counts.values()) or 1
-    ext_dist = {ext: round(count / total_edits * 100) for ext, count in
-                sorted(ext_counts.items(), key=lambda x: -x[1])[:6]}
+    ext_dist = {
+        ext: round(count / total_edits * 100)
+        for ext, count in sorted(ext_counts.items(), key=lambda x: -x[1])[:6]
+    }
 
     result["files"] = {
         "top_edited": [
-            {"path": f.get("path", ""), "edits": f.get("edits", 0), "sessions": f.get("sessions", 0)}
+            {
+                "path": f.get("path", ""),
+                "edits": f.get("edits", 0),
+                "sessions": f.get("sessions", 0),
+            }
             for f in all_files[:8]
         ],
         "extension_distribution": ext_dist,
@@ -669,7 +834,11 @@ def cmd_profile_digest(args):
 
     result["errors"] = {
         "top": [
-            {"pattern": e.get("pattern", ""), "count": e.get("count", 0), "sessions": e.get("sessions", 0)}
+            {
+                "pattern": e.get("pattern", ""),
+                "count": e.get("count", 0),
+                "sessions": e.get("sessions", 0),
+            }
             for e in all_errors[:5]
         ],
     }
@@ -679,16 +848,26 @@ def cmd_profile_digest(args):
 
     hotspots = sorted(all_highlights, key=lambda h: -h.get("corrections", 0))
     result["friction_hotspots"] = [
-        {"session_id": h["id"], "title": h.get("title", ""), "corrections": h.get("corrections", 0),
-         "queries": h.get("messages", 0), "project": h.get("project", ""), "date": h.get("date", "")}
-        for h in hotspots[:5] if h.get("corrections", 0) >= 2
+        {
+            "session_id": h["id"],
+            "title": h.get("title", ""),
+            "corrections": h.get("corrections", 0),
+            "queries": h.get("messages", 0),
+            "project": h.get("project", ""),
+            "date": h.get("date", ""),
+        }
+        for h in hotspots[:5]
+        if h.get("corrections", 0) >= 2
     ]
 
     # --- query samples (representative user messages) ---
     # Select diverse samples: spread across projects, varied lengths
-    valid_queries = [q for q in all_queries_raw
-                     if len(q.get("text", "")) >= 10
-                     and not q.get("text", "").strip().startswith(("<", "{", "```", "#"))]
+    valid_queries = [
+        q
+        for q in all_queries_raw
+        if len(q.get("text", "")) >= 10
+        and not q.get("text", "").strip().startswith(("<", "{", "```", "#"))
+    ]
     # Bucket by project, pick from each
     proj_buckets = defaultdict(list)
     for q in valid_queries:
@@ -702,11 +881,13 @@ def cmd_profile_digest(args):
             bucket = proj_buckets[proj]
             if idx < len(bucket):
                 text = bucket[idx]["text"][:200].replace("\n", " ")
-                query_samples.append({
-                    "text": text,
-                    "project": proj,
-                    "date": (bucket[idx].get("ts") or "")[:10],
-                })
+                query_samples.append(
+                    {
+                        "text": text,
+                        "project": proj,
+                        "date": (bucket[idx].get("ts") or "")[:10],
+                    }
+                )
             if len(query_samples) >= 20:
                 break
         idx += 1
@@ -714,25 +895,53 @@ def cmd_profile_digest(args):
     result["query_samples"] = query_samples
 
     # --- high signal sessions (top 10 by corrections + decisions) ---
-    top_sessions = sorted(all_highlights,
-                          key=lambda h: -(h.get("corrections", 0) + h.get("decisions", 0)))[:10]
+    top_sessions = sorted(
+        all_highlights, key=lambda h: -(h.get("corrections", 0) + h.get("decisions", 0))
+    )[:10]
     result["high_signal_sessions"] = [
-        {"id": h["id"], "title": h.get("title", ""), "topic": h.get("topic", ""),
-         "corrections": h.get("corrections", 0), "decisions": h.get("decisions", 0),
-         "messages": h.get("messages", 0), "project": h.get("project", ""),
-         "date": h.get("date", ""), "source": h.get("source", "")}
+        {
+            "id": h["id"],
+            "title": h.get("title", ""),
+            "topic": h.get("topic", ""),
+            "corrections": h.get("corrections", 0),
+            "decisions": h.get("decisions", 0),
+            "messages": h.get("messages", 0),
+            "project": h.get("project", ""),
+            "date": h.get("date", ""),
+            "source": h.get("source", ""),
+        }
         for h in top_sessions
     ]
 
     # --- session topic distribution (keyword-based) ---
     topic_patterns = {
-        "bugfix": re.compile(r'fix|bug|\u4fee|\u62a5\u9519|error|broken|crash|\u574f\u4e86|\u4e0dwork|\u4e0d\u884c', re.I),
-        "feature": re.compile(r'\u65b0\u589e|\u6dfb\u52a0|\u5b9e\u73b0|add|implement|create|build|\u5199\u4e00\u4e2a|\u505a\u4e00\u4e2a', re.I),
-        "ui_design": re.compile(r'UI|\u6837\u5f0f|\u5e03\u5c40|\u989c\u8272|style|layout|design|CSS|\u524d\u7aef|\u9875\u9762', re.I),
-        "architecture": re.compile(r'\u67b6\u6784|\u65b9\u6848|\u8bbe\u8ba1|\u91cd\u6784|refactor|schema|migrate|\u8fc1\u79fb', re.I),
-        "research": re.compile(r'\u8c03\u7814|\u5206\u6790|research|investigate|\u5bf9\u6bd4|compare|\u770b\u770b', re.I),
-        "review": re.compile(r'review|\u68c0\u67e5|\u9a8c\u8bc1|\u6d4b\u8bd5|test|verify|check', re.I),
-        "config_ops": re.compile(r'\u914d\u7f6e|deploy|\u90e8\u7f72|install|\u5b89\u88c5|setup|\u73af\u5883', re.I),
+        "bugfix": re.compile(
+            r"fix|bug|\u4fee|\u62a5\u9519|error|broken|crash|\u574f\u4e86|\u4e0dwork|\u4e0d\u884c",
+            re.I,
+        ),
+        "feature": re.compile(
+            r"\u65b0\u589e|\u6dfb\u52a0|\u5b9e\u73b0|add|implement|create|build|\u5199\u4e00\u4e2a|\u505a\u4e00\u4e2a",
+            re.I,
+        ),
+        "ui_design": re.compile(
+            r"UI|\u6837\u5f0f|\u5e03\u5c40|\u989c\u8272|style|layout|design|CSS|\u524d\u7aef|\u9875\u9762",
+            re.I,
+        ),
+        "architecture": re.compile(
+            r"\u67b6\u6784|\u65b9\u6848|\u8bbe\u8ba1|\u91cd\u6784|refactor|schema|migrate|\u8fc1\u79fb",
+            re.I,
+        ),
+        "research": re.compile(
+            r"\u8c03\u7814|\u5206\u6790|research|investigate|\u5bf9\u6bd4|compare|\u770b\u770b",
+            re.I,
+        ),
+        "review": re.compile(
+            r"review|\u68c0\u67e5|\u9a8c\u8bc1|\u6d4b\u8bd5|test|verify|check", re.I
+        ),
+        "config_ops": re.compile(
+            r"\u914d\u7f6e|deploy|\u90e8\u7f72|install|\u5b89\u88c5|setup|\u73af\u5883",
+            re.I,
+        ),
     }
     topic_dist = defaultdict(int)
     for h in all_highlights:
@@ -767,7 +976,7 @@ def cmd_profile_digest(args):
                         continue
                     if obj.get("type") != "assistant":
                         continue
-                    for blk in (obj.get("message", {}).get("content", []) or []):
+                    for blk in obj.get("message", {}).get("content", []) or []:
                         if not isinstance(blk, dict):
                             continue
                         if blk.get("type") == "tool_use":
@@ -799,7 +1008,7 @@ def cmd_profile_digest(args):
     for q in valid_queries[:500]:
         text = q.get("text", "")
         lengths.append(len(text))
-        cjk = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+        cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
         if cjk > len(text) * 0.1:
             zh_count += 1
         else:
@@ -808,10 +1017,13 @@ def cmd_profile_digest(args):
     lengths.sort()
 
     # Style samples: short directive-style messages
-    style_candidates = [q for q in valid_queries
-                        if 10 <= len(q.get("text", "")) <= 80
-                        and not q.get("text", "").startswith(("#", "/", "```"))
-                        and "[Request interrupted" not in q.get("text", "")]
+    style_candidates = [
+        q
+        for q in valid_queries
+        if 10 <= len(q.get("text", "")) <= 80
+        and not q.get("text", "").startswith(("#", "/", "```"))
+        and "[Request interrupted" not in q.get("text", "")
+    ]
     seen = set()
     style_samples = []
     for q in style_candidates:
@@ -823,7 +1035,10 @@ def cmd_profile_digest(args):
             break
 
     result["communication"] = {
-        "language_mix": {"zh": round(zh_count / total_lang * 100), "en": round(en_count / total_lang * 100)},
+        "language_mix": {
+            "zh": round(zh_count / total_lang * 100),
+            "en": round(en_count / total_lang * 100),
+        },
         "msg_length": {
             "avg_chars": round(sum(lengths) / max(len(lengths), 1)),
             "median_chars": lengths[len(lengths) // 2] if lengths else 0,
@@ -838,6 +1053,7 @@ def cmd_profile_digest(args):
 def cmd_aggregates(args):
     """Print pre-computed aggregates from SQLite DB as JSON."""
     from chatview import db as _db
+
     _db.init_db()
     keys = ["project_distribution", "daily_activity", "topic_by_project"]
     result = {}
@@ -862,6 +1078,7 @@ def cmd_evolve_write(args):
     Output: "OK" on success, error details on failure.
     """
     from chatview import db as _db
+
     tab = args.tab
     mode = args.mode
     source = getattr(args, "source", "all") or "all"
@@ -870,7 +1087,10 @@ def cmd_evolve_write(args):
     engine = getattr(args, "engine", "auto") or "auto"
 
     if tab not in _EVOLVE_SCHEMAS:
-        print(f"ERROR: invalid tab '{tab}'. Valid: {', '.join(_EVOLVE_SCHEMAS.keys())}", file=sys.stderr)
+        print(
+            f"ERROR: invalid tab '{tab}'. Valid: {', '.join(_EVOLVE_SCHEMAS.keys())}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     def _read_existing():
@@ -880,14 +1100,19 @@ def cmd_evolve_write(args):
     if mode == "delete":
         ids = [i.strip() for i in (args.ids or "").split(",") if i.strip()]
         if not ids:
-            print("ERROR: --ids required for delete mode (comma-separated)", file=sys.stderr)
+            print(
+                "ERROR: --ids required for delete mode (comma-separated)",
+                file=sys.stderr,
+            )
             sys.exit(1)
         existing = _read_existing()
         if not existing:
             print("ERROR: no existing data to delete from", file=sys.stderr)
             sys.exit(1)
         result = _delete_evolve_data(tab, existing, ids)
-        _db.evolve_upsert(tab, source, date, project, engine, json.dumps(result, ensure_ascii=False))
+        _db.evolve_upsert(
+            tab, source, date, project, engine, json.dumps(result, ensure_ascii=False)
+        )
         print(f"OK: deleted {len(ids)} item(s) from {tab} \u2192 SQLite")
         return
 
@@ -902,7 +1127,10 @@ def cmd_evolve_write(args):
     # Validate schema
     ok, errors = _validate_evolve_data(tab, data)
     if not ok:
-        print(f"ERROR: schema validation failed ({len(errors)} issue(s)):", file=sys.stderr)
+        print(
+            f"ERROR: schema validation failed ({len(errors)} issue(s)):",
+            file=sys.stderr,
+        )
         for err in errors[:10]:
             print(f"  - {err}", file=sys.stderr)
         if len(errors) > 10:
@@ -915,5 +1143,7 @@ def cmd_evolve_write(args):
     else:
         result = data
 
-    _db.evolve_upsert(tab, source, date, project, engine, json.dumps(result, ensure_ascii=False))
+    _db.evolve_upsert(
+        tab, source, date, project, engine, json.dumps(result, ensure_ascii=False)
+    )
     print(f"OK: {mode} {tab} \u2192 SQLite")

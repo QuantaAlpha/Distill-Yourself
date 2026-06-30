@@ -74,7 +74,12 @@ def refresh_aggregates():
 def clear_session_insights(session_id: str):
     """Delete all insight rows for a session (before re-extraction)."""
     conn = get_conn()
-    for table in ("insight_tool_usage", "insight_file_refs", "insight_errors", "insight_snippets"):
+    for table in (
+        "insight_tool_usage",
+        "insight_file_refs",
+        "insight_errors",
+        "insight_snippets",
+    ):
         conn.execute(f"DELETE FROM {table} WHERE session_id=?", (session_id,))
     conn.commit()
 
@@ -143,7 +148,8 @@ def query_tool_heatmap():
 def query_file_hotspots(limit=50):
     """Return top files by access count across all sessions."""
     conn = get_conn()
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT file_path,
                SUM(count) as total_count,
                COUNT(DISTINCT session_id) as session_count,
@@ -152,14 +158,17 @@ def query_file_hotspots(limit=50):
         GROUP BY file_path
         ORDER BY total_count DESC
         LIMIT ?
-    """, (limit,)).fetchall()
+    """,
+        (limit,),
+    ).fetchall()
     return [dict(r) for r in rows]
 
 
 def query_error_patterns(limit=30):
     """Return top error patterns aggregated across sessions."""
     conn = get_conn()
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT error_key,
                SUM(count) as total_count,
                COUNT(DISTINCT session_id) as session_count,
@@ -170,21 +179,26 @@ def query_error_patterns(limit=30):
         GROUP BY error_key
         ORDER BY total_count DESC
         LIMIT ?
-    """, (limit,)).fetchall()
+    """,
+        (limit,),
+    ).fetchall()
     return [dict(r) for r in rows]
 
 
 def query_snippets(limit=150):
     """Return code snippets sorted by applied first, then newest."""
     conn = get_conn()
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT s.session_id, ses.title as session_title, ses.project_name as project,
                s.language, s.code, s.context, s.date, s.applied
         FROM insight_snippets s
         LEFT JOIN sessions ses ON ses.id = s.session_id
         ORDER BY s.applied DESC, s.date DESC
         LIMIT ?
-    """, (limit,)).fetchall()
+    """,
+        (limit,),
+    ).fetchall()
     return [dict(r) for r in rows]
 
 

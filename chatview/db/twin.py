@@ -1,5 +1,6 @@
 """Cognitive Model (Digital Twin) CRUD helpers."""
 
+import re
 import sqlite3
 from datetime import datetime
 from typing import Optional
@@ -9,21 +10,51 @@ from .core import get_conn
 
 # Table registry: name -> data columns (excluding id, updated_at which are auto-managed)
 _CM_TABLES = {
-    "evidence_events": ["run_id", "session_id", "event_index", "card_id", "task_type",
-                        "ai_action", "user_reaction", "resolution", "lesson",
-                        "signal_type", "signal_intensity", "domain", "created_at"],
-    "judgment_cards": ["run_id", "applies_when", "judgment", "agent_action", "exceptions",
-                       "tags", "confidence", "status", "evidence_count", "created_at"],
+    "evidence_events": [
+        "run_id",
+        "session_id",
+        "event_index",
+        "card_id",
+        "task_type",
+        "ai_action",
+        "user_reaction",
+        "resolution",
+        "lesson",
+        "signal_type",
+        "signal_intensity",
+        "domain",
+        "created_at",
+    ],
+    "judgment_cards": [
+        "run_id",
+        "applies_when",
+        "judgment",
+        "agent_action",
+        "exceptions",
+        "tags",
+        "confidence",
+        "status",
+        "evidence_count",
+        "created_at",
+    ],
     "card_relations": ["from_id", "to_id", "relation"],
-    "cognitive_traits": ["run_id", "name", "category", "description", "strength",
-                         "supporting_card_ids", "status", "evidence_count"],
+    "cognitive_traits": [
+        "run_id",
+        "name",
+        "category",
+        "description",
+        "strength",
+        "supporting_card_ids",
+        "status",
+        "evidence_count",
+    ],
 }
 
 # Full column whitelist for ORDER BY / validation (includes id and audit columns)
 _CM_ALL_COLUMNS = {
-    table: {"id"} | set(cols) | (
-        {"updated_at"} if table in ("judgment_cards", "cognitive_traits") else set()
-    )
+    table: {"id"}
+    | set(cols)
+    | ({"updated_at"} if table in ("judgment_cards", "cognitive_traits") else set())
     for table, cols in _CM_TABLES.items()
 }
 
@@ -56,9 +87,64 @@ def _validate_order(table: str, order: str) -> None:
                 f"Valid columns: {sorted(valid_cols)}"
             )
         if direction not in ("ASC", "DESC"):
-            raise ValueError(
-                f"Invalid ORDER BY direction {direction!r} in {order!r}"
-            )
+            raise ValueError(f"Invalid ORDER BY direction {direction!r} in {order!r}")
+
+
+# Operators and keywords allowed in WHERE clauses (defense-in-depth)
+_WHERE_ALLOWED_TOKENS = frozenset(
+    {
+        "=",
+        "!=",
+        "<>",
+        "<",
+        ">",
+        "<=",
+        ">=",
+        "AND",
+        "OR",
+        "NOT",
+        "IN",
+        "IS",
+        "NULL",
+        "LIKE",
+        "(",
+        ")",
+        ",",
+        "?",
+        "BETWEEN",
+    }
+)
+
+
+def _validate_where(table: str, where: str) -> None:
+    """Validate a WHERE clause: all column names must be in the table's whitelist.
+
+    This is defense-in-depth.  The caller already promises that user-supplied
+    values are passed via ``params``, but we still verify that every identifier
+    in the clause resolves to a known column so a malicious ``where`` string
+    cannot inject a subquery or unparameterized literal.
+
+    Raises ``ValueError`` on any suspicious token.
+    """
+    if not where:
+        return
+    valid_cols = _CM_ALL_COLUMNS[table]
+    # Tokenise: split on whitespace / punctuation boundaries.
+    # Handle single-quoted string literals as atomic tokens.
+    tokens = re.findall(r"'[^']*'|[A-Za-z_]\w*|[=!<>]+|[(),]|[\?\*]|[^\s]+", where)
+    for tok in tokens:
+        # Accept single-quoted string literals as-is
+        if tok.startswith("'") and tok.endswith("'"):
+            continue
+        if tok in _WHERE_ALLOWED_TOKENS:
+            continue
+        if tok in valid_cols:
+            continue
+        raise ValueError(
+            f"Disallowed token {tok!r} in WHERE clause for table {table!r}. "
+            f"Only parameterised values (?) and allowed column names are permitted. "
+            f"Valid columns: {sorted(valid_cols)}"
+        )
 
 
 def cm_upsert(table: str, item_id: str, data: dict, commit: bool = True):
@@ -80,12 +166,18 @@ def cm_upsert(table: str, item_id: str, data: dict, commit: bool = True):
         merged.update({k: v for k, v in data.items() if v is not None})
         if has_updated:
             merged["updated_at"] = now
-        update_cols = [c for c in cols + (["updated_at"] if has_updated else []) if c in merged]
+        update_cols = [
+            c for c in cols + (["updated_at"] if has_updated else []) if c in merged
+        ]
         assignments = ",".join(f"{c}=?" for c in update_cols)
         vals = [merged[c] for c in update_cols] + [item_id]
         conn.execute(f"UPDATE {table} SET {assignments} WHERE id=?", vals)
     else:
-        if table == "evidence_events" and data.get("session_id") is not None and data.get("event_index") is not None:
+        if (
+            table == "evidence_events"
+            and data.get("session_id") is not None
+            and data.get("event_index") is not None
+        ):
             run_id = data.get("run_id")
             if run_id:
                 conflict = conn.execute(
@@ -126,8 +218,9 @@ def cm_get(table: str, item_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def cm_get_all(table: str, where: str = "", params: tuple = (), order: str = "",
-               limit: int = 500) -> list:
+def cm_get_all(
+    table: str, where: str = "", params: tuple = (), order: str = "", limit: int = 500
+) -> list:
     """Get all rows from a CM table with optional filters.
 
     Args:
@@ -141,6 +234,7 @@ def cm_get_all(table: str, where: str = "", params: tuple = (), order: str = "",
     """
     _validate_cm_table(table)
     _validate_order(table, order)
+    _validate_where(table, where)
     conn = get_conn()
     sql = f"SELECT * FROM {table}"
     if where:
@@ -172,6 +266,7 @@ def cm_count(table: str, where: str = "", params: tuple = ()) -> int:
         params: Parameter values for the ``where`` clause.
     """
     _validate_cm_table(table)
+    _validate_where(table, where)
     conn = get_conn()
     sql = f"SELECT COUNT(*) FROM {table}"
     if where:
@@ -245,3 +340,116 @@ def get_twin_stats() -> dict:
             except sqlite3.OperationalError:
                 pass
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Twin analysis checkpoint helpers (Issue 2.1)
+# ---------------------------------------------------------------------------
+
+
+def save_checkpoint(run_id: str, stage: int, status: str) -> None:
+    """UPSERT a checkpoint entry for a given run_id and stage.
+
+    Args:
+        run_id: The twin analysis run identifier.
+        stage: The pipeline stage number (1-5).
+        status: One of "pending", "running", "completed", "failed".
+    """
+    conn = get_conn()
+    now = datetime.utcnow().isoformat()
+    started = now if status in ("running", "failed") else None
+    completed = now if status in ("completed", "failed") else None
+    conn.execute(
+        """
+        INSERT INTO twin_checkpoints (run_id, stage, status, started_at, completed_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(run_id, stage) DO UPDATE SET
+            status=excluded.status,
+            started_at=COALESCE(excluded.started_at, twin_checkpoints.started_at),
+            completed_at=COALESCE(excluded.completed_at, twin_checkpoints.completed_at)
+    """,
+        (run_id, stage, status, started, completed),
+    )
+    conn.commit()
+
+
+def get_checkpoint(run_id: str) -> dict:
+    """Returns a dict of all stages and their statuses for a given run_id.
+
+    Args:
+        run_id: The twin analysis run identifier.
+
+    Returns:
+        A dict mapping stage numbers (int) to their status strings.
+        Example: {1: "completed", 2: "running", 3: "pending"}
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT stage, status FROM twin_checkpoints WHERE run_id=? ORDER BY stage",
+        (run_id,),
+    ).fetchall()
+    return {row["stage"]: row["status"] for row in rows}
+
+
+def get_latest_checkpoint() -> Optional[dict]:
+    """Returns the most recent run_id and its checkpoint statuses.
+
+    Returns:
+        A dict with {"run_id": str, "stages": {stage: status}} or None
+        if no checkpoints exist.
+    """
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT run_id FROM twin_checkpoints "
+        "ORDER BY COALESCE(started_at, completed_at, '1970-01-01') DESC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return None
+    return {"run_id": row["run_id"], "stages": get_checkpoint(row["run_id"])}
+
+
+def list_recent_run_ids(limit: int = 5) -> list:
+    """Return the most recent distinct twin run_ids, newest first.
+
+    Merges run_ids from evidence_events / judgment_cards / cognitive_traits
+    (by MAX(created_at)) and twin_checkpoints (by latest started_at/completed_at),
+    keeps the latest timestamp per run_id, and returns up to `limit` ids sorted
+    by that timestamp descending.
+
+    Returns a list of {"run_id": str, "ts": str} dicts.
+    """
+    conn = get_conn()
+    latest = {}  # run_id -> latest timestamp string
+
+    def _merge(run_id, ts):
+        if not run_id or not ts:
+            return
+        prev = latest.get(run_id)
+        if prev is None or ts > prev:
+            latest[run_id] = ts
+
+    for table in ("evidence_events", "judgment_cards", "cognitive_traits"):
+        try:
+            rows = conn.execute(
+                f"SELECT run_id, MAX(created_at) AS ts FROM {table} "
+                f"WHERE run_id IS NOT NULL AND run_id != '' GROUP BY run_id"
+            ).fetchall()
+            for r in rows:
+                _merge(r["run_id"], r["ts"])
+        except Exception:
+            continue
+
+    try:
+        rows = conn.execute(
+            "SELECT run_id, "
+            "MAX(COALESCE(completed_at, started_at, '1970-01-01')) AS ts "
+            "FROM twin_checkpoints "
+            "WHERE run_id IS NOT NULL AND run_id != '' GROUP BY run_id"
+        ).fetchall()
+        for r in rows:
+            _merge(r["run_id"], r["ts"])
+    except Exception:
+        pass
+
+    ordered = sorted(latest.items(), key=lambda kv: kv[1], reverse=True)
+    return [{"run_id": rid, "ts": ts} for rid, ts in ordered[: max(0, int(limit))]]

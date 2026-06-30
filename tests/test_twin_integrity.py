@@ -177,6 +177,266 @@ class TwinIntegrityTestCase(unittest.TestCase):
         self.assertNotIn("B scenario", text)
         self.assertNotIn("Trait B", text)
 
+    def test_twin_cancel_preserves_stage_data_and_marks_checkpoint_cancelled(self):
+        """Cancelling a running analysis must NOT delete completed stage data;
+        it should keep events/cards/traits and mark the run's checkpoint so a
+        later resume can continue instead of restarting from stage 1."""
+        from chatview.handlers import twin as _twin
+
+        run_id = "run_cancel_test"
+        # Seed completed stage-1 data + a checkpoint state.
+        db.cm_upsert("evidence_events", "ev_keep", {
+            "run_id": run_id,
+            "session_id": "s1",
+            "event_index": 1,
+            "lesson": "keep me",
+            "signal_type": "correction",
+            "domain": "coding/scope",
+        })
+        db.save_checkpoint(run_id, 1, "completed")
+        db.save_checkpoint(run_id, 2, "running")
+
+        class _FakeProc:
+            pid = -99999  # nonexistent pgid → killpg raises, handled gracefully
+
+            def wait(self, timeout=None):
+                return 0
+
+        # Register an active run.
+        with _twin._analyze_lock:
+            _twin._active_analyze_proc = _FakeProc()
+            _twin._active_analyze_run_id = run_id
+
+        captured = {}
+
+        class _FakeHandler:
+            def __init__(self):
+                self.wfile = io.BytesIO()
+                self.headers = {}
+
+            def send_response(self, code):
+                captured["code"] = code
+
+            def send_header(self, *a, **k):
+                pass
+
+            def end_headers(self):
+                pass
+
+            @property
+            def rfile(self):
+                return io.BytesIO(json.dumps({"run_id": run_id}).encode())
+
+        # _read_post_body reads Content-Length from headers; emulate no-body path.
+        handler = _FakeHandler()
+        handler.headers = {"Content-Length": "0"}
+
+        try:
+            _twin._handle_twin_cancel(handler)
+        finally:
+            with _twin._analyze_lock:
+                _twin._active_analyze_proc = None
+                _twin._active_analyze_run_id = None
+
+        # Data must survive cancellation.
+        self.assertEqual(db.cm_count("evidence_events"), 1)
+        self.assertEqual(db.cm_get("evidence_events", "ev_keep")["lesson"], "keep me")
+        # The completed stage stays completed; the running stage is marked cancelled.
+        cps = db.get_checkpoint(run_id)
+        self.assertEqual(cps.get(1), "completed")
+        self.assertEqual(cps.get(2), "cancelled")
+
+    def test_twin_resume_uses_checkpoint_run_id_as_authority(self):
+        """Resume must treat twin_checkpoints as the authoritative run source so a
+        cancelled run (data preserved, stages marked cancelled) reports the same
+        run_id and a resumable 'partial' status."""
+        from chatview.handlers import twin as _twin
+
+        run_id = "run_resume_auth"
+        db.cm_upsert("evidence_events", "ev_r", {
+            "run_id": run_id,
+            "session_id": "s1",
+            "event_index": 1,
+            "lesson": "stage1 done",
+            "signal_type": "correction",
+            "domain": "coding/scope",
+        })
+        db.save_checkpoint(run_id, 1, "completed")
+        db.save_checkpoint(run_id, 2, "cancelled")
+
+        class _FakeHandler:
+            def __init__(self):
+                self.wfile = io.BytesIO()
+                self.headers = {"Content-Length": "0"}
+
+            def send_response(self, code):
+                pass
+
+            def send_header(self, *a, **k):
+                pass
+
+            def end_headers(self):
+                pass
+
+        handler = _FakeHandler()
+        _twin._handle_twin_resume(handler)
+        resp = json.loads(handler.wfile.getvalue().decode())
+
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["run"]["run_id"], run_id)
+        # status reflects partial progress, and checkpoints are surfaced.
+        self.assertIn(resp["run"]["status"], ("partial", "interrupted"))
+        self.assertEqual(resp["run"]["checkpoints"].get("1"), "completed")
+
+    def test_twin_progress_reports_running_state_and_checkpoints(self):
+        """GET /api/twin/progress lets a reopened tab re-attach to a background
+        run: it must report whether an analysis is still running plus the
+        per-stage checkpoint map so the UI can rebuild progress without
+        restarting from stage 1."""
+        from chatview.handlers import twin as _twin
+
+        run_id = "run_progress_test"
+        db.cm_upsert("evidence_events", "ev_p", {
+            "run_id": run_id,
+            "session_id": "s1",
+            "event_index": 1,
+            "lesson": "stage1 done",
+            "signal_type": "correction",
+            "domain": "coding/scope",
+        })
+        db.save_checkpoint(run_id, 1, "completed")
+        db.save_checkpoint(run_id, 2, "running")
+
+        class _FakeProc:
+            def poll(self):
+                return None  # still running
+
+        # Simulate a live background run.
+        with _twin._analyze_lock:
+            _twin._active_analyze_proc = _FakeProc()
+            _twin._active_analyze_run_id = run_id
+
+        class _FakeHandler:
+            def __init__(self):
+                self.wfile = io.BytesIO()
+                self.headers = {"Content-Length": "0"}
+                self.path = "/api/twin/progress"
+
+            def send_response(self, code):
+                pass
+
+            def send_header(self, *a, **k):
+                pass
+
+            def end_headers(self):
+                pass
+
+        handler = _FakeHandler()
+        try:
+            _twin._handle_twin_progress(handler)
+        finally:
+            with _twin._analyze_lock:
+                _twin._active_analyze_proc = None
+                _twin._active_analyze_run_id = None
+
+        resp = json.loads(handler.wfile.getvalue().decode())
+        self.assertTrue(resp["ok"])
+        self.assertTrue(resp["running"])
+        self.assertEqual(resp["run"]["run_id"], run_id)
+        self.assertEqual(resp["run"]["checkpoints"].get("1"), "completed")
+        self.assertEqual(resp["run"]["checkpoints"].get("2"), "running")
+
+    def test_twin_progress_reports_not_running_when_idle(self):
+        """When no analysis is active, progress reports running=False but still
+        surfaces the latest run so the UI can show stored results."""
+        from chatview.handlers import twin as _twin
+
+        run_id = "run_idle"
+        db.cm_upsert("evidence_events", "ev_i", {
+            "run_id": run_id,
+            "session_id": "s1",
+            "event_index": 1,
+            "lesson": "done",
+            "signal_type": "correction",
+            "domain": "coding/scope",
+        })
+        db.save_checkpoint(run_id, 1, "completed")
+
+        with _twin._analyze_lock:
+            _twin._active_analyze_proc = None
+            _twin._active_analyze_run_id = None
+
+        class _FakeHandler:
+            def __init__(self):
+                self.wfile = io.BytesIO()
+                self.headers = {"Content-Length": "0"}
+                self.path = "/api/twin/progress"
+
+            def send_response(self, code):
+                pass
+
+            def send_header(self, *a, **k):
+                pass
+
+            def end_headers(self):
+                pass
+
+        handler = _FakeHandler()
+        _twin._handle_twin_progress(handler)
+        resp = json.loads(handler.wfile.getvalue().decode())
+        self.assertTrue(resp["ok"])
+        self.assertFalse(resp["running"])
+
+    def test_twin_runs_lists_recent_runs_newest_first_and_capped(self):
+        """GET /api/twin/runs returns at most 5 distinct runs, newest first,
+        each with derived status/stats/checkpoints so the UI can render a
+        recent-history list below the current progress summary."""
+        from chatview.handlers import twin as _twin
+
+        # Seed 6 runs with ascending created_at so ordering is deterministic.
+        for i in range(1, 7):
+            run_id = f"run_{i:02d}"
+            db.cm_upsert("evidence_events", f"ev_{i}", {
+                "run_id": run_id,
+                "session_id": "s1",
+                "event_index": i,
+                "lesson": f"lesson {i}",
+                "signal_type": "correction",
+                "domain": "coding/scope",
+                "created_at": f"2026-06-2{i}T10:00:00",
+            })
+            db.save_checkpoint(run_id, 1, "completed")
+
+        class _FakeHandler:
+            def __init__(self):
+                self.wfile = io.BytesIO()
+                self.headers = {"Content-Length": "0"}
+                self.path = "/api/twin/runs"
+
+            def send_response(self, code):
+                pass
+
+            def send_header(self, *a, **k):
+                pass
+
+            def end_headers(self):
+                pass
+
+        handler = _FakeHandler()
+        _twin._handle_twin_runs(handler)
+        resp = json.loads(handler.wfile.getvalue().decode())
+
+        self.assertTrue(resp["ok"])
+        runs = resp["runs"]
+        # Capped at 5 and newest first.
+        self.assertEqual(len(runs), 5)
+        self.assertEqual(runs[0]["run_id"], "run_06")
+        self.assertEqual(runs[-1]["run_id"], "run_02")
+        # Each run carries derived stats + checkpoints + a timestamp.
+        self.assertEqual(runs[0]["stats"]["events"], 1)
+        self.assertEqual(runs[0]["checkpoints"].get("1"), "completed")
+        self.assertTrue(runs[0]["ts"])
+
     def test_prune_stale_sessions_removes_sessions_messages_and_insights(self):
         meta = {
             "id": "stale",

@@ -14,25 +14,43 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 from chatview.handlers.base import (
-    _json_response, _error, _serve_file,
+    _json_response,
+    _error,
+    _serve_file,
 )
 from chatview.handlers.data import (
-    _get_projects, _get_sessions, _get_timeline, _get_stats,
-    _get_analytics, _get_session_summary, _get_snippets,
-    _get_file_evolution, _get_project_health,
+    _get_projects,
+    _get_sessions,
+    _get_timeline,
+    _get_stats,
+    _get_analytics,
+    _get_session_summary,
+    _get_snippets,
+    _get_file_evolution,
+    _get_project_health,
 )
 from chatview.handlers.evolve import (
-    _get_evolve_tab, _handle_evolve_stream, _AI_TABS,
+    _get_evolve_tab,
+    _handle_evolve_stream,
+    _handle_evolve_progress,
+    _handle_evolve_cancel,
+    _AI_TABS,
 )
 from chatview.handlers.chat import _handle_chat_stream, _handle_chat_legacy
 from chatview.handlers.twin import (
-    _handle_evolve_sync, _handle_twin_analyze, _handle_twin_sync,
-    _handle_twin_resume, _handle_twin_cancel,
+    _handle_evolve_sync,
+    _handle_twin_analyze,
+    _handle_twin_sync,
+    _handle_twin_resume,
+    _handle_twin_cancel,
+    _handle_twin_progress,
+    _handle_twin_runs,
 )
 from chatview.index import (
     INDEX_CACHE,
     _cached,
-    build_index, schedule_index_refresh_if_stale,
+    build_index,
+    schedule_index_refresh_if_stale,
 )
 from chatview.session_loader import load_session
 from chatview.search import search_sessions
@@ -87,7 +105,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             project = params.get("project", [None])[0]
             _json_response(self, _get_sessions(self, project))
         elif path.startswith("/api/session/"):
-            sid = path[len("/api/session/"):]
+            sid = path[len("/api/session/") :]
             data = load_session(sid)
             if data:
                 _json_response(self, data)
@@ -104,38 +122,52 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"similar": [], "chain": [], "decisions": []})
         elif path == "/api/session-summary":
             sid = params.get("session", [None])[0]
-            _json_response(self, _cached(f"summary:{sid}", lambda: _get_session_summary(self, sid)))
+            _json_response(
+                self, _cached(f"summary:{sid}", lambda: _get_session_summary(self, sid))
+            )
         elif path == "/api/snippets":
             _json_response(self, _cached("snippets", lambda: _get_snippets(self)))
         elif path == "/api/file-evolution":
             fp = params.get("file", [None])[0]
-            _json_response(self, _cached(f"evolution:{fp}", lambda: _get_file_evolution(self, fp)))
+            _json_response(
+                self, _cached(f"evolution:{fp}", lambda: _get_file_evolution(self, fp))
+            )
         elif path == "/api/project-health":
             _json_response(self, _get_project_health(self))
         elif path == "/api/sessions/check":
             schedule_index_refresh_if_stale(reason="sessions-check", force_check=True)
             from chatview import index as _idx_mod
+
             with _idx_mod._index_lock:
                 gen = _idx_mod._index_gen
                 count = len(_idx_mod._index.get("sessions", {}))
             _json_response(self, {"gen": gen, "count": count})
         elif path == "/api/engines":
             engines = []
-            for name, cmd in [("claude", ["claude", "--version"]), ("codex", ["codex", "--version"])]:
+            for name, cmd in [
+                ("claude", ["claude", "--version"]),
+                ("codex", ["codex", "--version"]),
+            ]:
                 try:
                     result = subprocess.run(cmd, capture_output=True, timeout=5)
                     if result.returncode == 0:
                         engines.append(name)
                 except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
                     pass
-            _json_response(self, {"engines": engines, "default": engines[0] if engines else "claude"})
+            _json_response(
+                self,
+                {"engines": engines, "default": engines[0] if engines else "claude"},
+            )
         elif path == "/api/refresh":
             build_index()
             _json_response(self, {"ok": True})
         elif path == "/api/stats":
             _json_response(self, _get_stats(self))
         elif path.startswith("/api/evolve/"):
-            tab = path[len("/api/evolve/"):]
+            if path == "/api/evolve/progress":
+                _handle_evolve_progress(self, params)
+                return
+            tab = path[len("/api/evolve/") :]
             if tab not in ("rules", "signals", "patterns", "profile", "memory"):
                 _error(self, 400, "Invalid evolve tab")
             else:
@@ -145,32 +177,63 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 project = params.get("project", [""])[0]
                 engine = params.get("engine", ["auto"])[0]
                 lang = params.get("lang", ["zh"])[0]
+                try:
+                    timeout = int(params.get("timeout", ["900"])[0])
+                except (ValueError, TypeError):
+                    timeout = 900
+                timeout = max(60, min(timeout, 3600))
                 stream = params.get("stream", ["0"])[0] == "1"
                 if stream and tab in _AI_TABS:
-                    _handle_evolve_stream(self, tab, source, date, project, engine, lang)
+                    _handle_evolve_stream(
+                        self, tab, source, date, project, engine, lang, timeout
+                    )
                 else:
-                    _json_response(self, _get_evolve_tab(self, tab, refresh, source, date, project, engine, lang))
+                    _json_response(
+                        self,
+                        _get_evolve_tab(
+                            self,
+                            tab,
+                            refresh,
+                            source,
+                            date,
+                            project,
+                            engine,
+                            lang,
+                            timeout,
+                        ),
+                    )
         # --- Cognitive Handbook (Digital Twin) endpoints ---
         elif path == "/api/twin/stats":
             _json_response(self, _db.get_twin_stats())
+        elif path == "/api/twin/progress":
+            _handle_twin_progress(self)
+        elif path == "/api/twin/runs":
+            _handle_twin_runs(self)
         elif path == "/api/twin/overview":
             overview = {}
             try:
                 card_count = _db.cm_count("judgment_cards")
-                card_items = _db.cm_get_all("judgment_cards", order="confidence DESC", limit=5)
+                card_items = _db.cm_get_all(
+                    "judgment_cards", order="confidence DESC", limit=5
+                )
                 overview["cards"] = {"count": card_count, "items": card_items}
             except Exception:
                 overview["cards"] = {"count": 0, "items": []}
             try:
                 trait_count = _db.cm_count("cognitive_traits")
-                trait_items = _db.cm_get_all("cognitive_traits", order="strength DESC", limit=50)
+                trait_items = _db.cm_get_all(
+                    "cognitive_traits", order="strength DESC", limit=50
+                )
                 overview["traits"] = {"count": trait_count, "items": trait_items}
             except Exception:
                 overview["traits"] = {"count": 0, "items": []}
             try:
                 event_count = _db.cm_count("evidence_events")
-                event_items = _db.cm_get_all("evidence_events",
-                                             order="signal_intensity DESC, created_at DESC", limit=3)
+                event_items = _db.cm_get_all(
+                    "evidence_events",
+                    order="signal_intensity DESC, created_at DESC",
+                    limit=3,
+                )
                 overview["events"] = {"count": event_count, "items": event_items}
             except Exception:
                 overview["events"] = {"count": 0, "items": []}
@@ -185,7 +248,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             lang = params.get("lang", ["zh"])[0]
             # GET 必须快速返回：只读缓存，绝不在请求线程内触发耗时 AI 选择
             # （AI 选择由 twin 分析的后台 SSE 流以 force=True 预先计算并写缓存）。
-            selection = _select_cognitive_avatar(force=False, lang=lang, cache_only=True)
+            selection = _select_cognitive_avatar(
+                force=False, lang=lang, cache_only=True
+            )
             if selection:
                 _json_response(self, selection)
             else:
@@ -202,9 +267,13 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 where_parts.append("domain LIKE ?")
                 where_params.append(f"%{domain}%")
             where = " AND ".join(where_parts)
-            items = _db.cm_get_all("evidence_events", where=where,
-                                   params=tuple(where_params),
-                                   order="signal_intensity DESC, created_at DESC", limit=limit)
+            items = _db.cm_get_all(
+                "evidence_events",
+                where=where,
+                params=tuple(where_params),
+                order="signal_intensity DESC, created_at DESC",
+                limit=limit,
+            )
             _json_response(self, {"events": items})
         elif path == "/api/twin/cards":
             status = params.get("status", [None])[0]
@@ -220,8 +289,13 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 where_params.append(f"%{tag}%")
             where = " AND ".join(where_parts)
             order = "confidence DESC" if sort == "confidence" else "updated_at DESC"
-            items = _db.cm_get_all("judgment_cards", where=where,
-                                   params=tuple(where_params), order=order, limit=limit)
+            items = _db.cm_get_all(
+                "judgment_cards",
+                where=where,
+                params=tuple(where_params),
+                order=order,
+                limit=limit,
+            )
             _json_response(self, {"cards": items})
         elif path == "/api/twin/traits":
             status = params.get("status", [None])[0]
@@ -235,20 +309,27 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 where_parts.append("category=?")
                 where_params.append(category)
             where = " AND ".join(where_parts)
-            items = _db.cm_get_all("cognitive_traits", where=where,
-                                   params=tuple(where_params), order="strength DESC", limit=limit)
+            items = _db.cm_get_all(
+                "cognitive_traits",
+                where=where,
+                params=tuple(where_params),
+                order="strength DESC",
+                limit=limit,
+            )
             _json_response(self, {"traits": items})
         elif path.startswith("/api/twin/card/"):
-            card_id = path[len("/api/twin/card/"):]
+            card_id = path[len("/api/twin/card/") :]
             card = _db.cm_get("judgment_cards", card_id)
             if card is None:
                 _error(self, 404, "Card not found")
             else:
                 evidence = _db.cm_get_evidence_for_card(card_id)
                 relations = _db.cm_get_card_relations(card_id)
-                _json_response(self, {"card": card, "evidence": evidence, "relations": relations})
+                _json_response(
+                    self, {"card": card, "evidence": evidence, "relations": relations}
+                )
         elif path.startswith("/api/twin/trait/"):
-            trait_id = path[len("/api/twin/trait/"):]
+            trait_id = path[len("/api/twin/trait/") :]
             trait = _db.cm_get("cognitive_traits", trait_id)
             if trait is None:
                 _error(self, 404, "Trait not found")
@@ -263,12 +344,18 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"trait": trait, "supporting_cards": cards})
         elif path == "/api/twin/runtime-preview":
             lang = params.get("lang", ["zh"])[0]
-            cards = _db.cm_get_all("judgment_cards",
-                                   where="status IN ('confirmed','emerging')",
-                                   order="confidence DESC", limit=25)
-            traits = _db.cm_get_all("cognitive_traits",
-                                    where="status IN ('confirmed','emerging')",
-                                    order="strength DESC", limit=15)
+            cards = _db.cm_get_all(
+                "judgment_cards",
+                where="status IN ('confirmed','emerging')",
+                order="confidence DESC",
+                limit=25,
+            )
+            traits = _db.cm_get_all(
+                "cognitive_traits",
+                where="status IN ('confirmed','emerging')",
+                order="strength DESC",
+                limit=15,
+            )
             if lang == "en":
                 traits_header = "## About This User\n"
                 cards_header = "\n## Situational Judgments\n"
@@ -281,7 +368,9 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             if traits:
                 lines.append(traits_header)
                 for t in traits:
-                    lines.append(f"**{t.get('name','')}**。{t.get('description','')}\n")
+                    lines.append(
+                        f"**{t.get('name', '')}**。{t.get('description', '')}\n"
+                    )
             if cards:
                 lines.append(cards_header)
                 for c in cards:
@@ -295,11 +384,14 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                     if exceptions:
                         lines.append(f"{exception_label}{exceptions}")
                     lines.append("")
-            _json_response(self, {
-                "text": "\n".join(lines),
-                "card_count": len(cards),
-                "trait_count": len(traits),
-            })
+            _json_response(
+                self,
+                {
+                    "text": "\n".join(lines),
+                    "card_count": len(cards),
+                    "trait_count": len(traits),
+                },
+            )
         else:
             # Serve static files (with path traversal protection)
             if path == "/":
@@ -326,6 +418,17 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
+    def do_DELETE(self):
+        try:
+            self._do_DELETE_inner()
+        except BrokenPipeError:
+            pass
+        except Exception as e:
+            try:
+                _error(self, 500, f"Internal server error: {type(e).__name__}")
+            except Exception:
+                pass
+
     def _do_POST_inner(self):
         parsed = urlparse(self.path)
 
@@ -335,6 +438,13 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             _handle_chat_legacy(self)
         elif parsed.path == "/api/evolve/sync":
             _handle_evolve_sync(self)
+        elif parsed.path == "/api/evolve/cancel":
+            from chatview.handlers.base import _read_post_body
+
+            raw = _read_post_body(self)
+            if raw is None:
+                return
+            _handle_evolve_cancel(self, raw)
         elif parsed.path == "/api/twin/analyze":
             _handle_twin_analyze(self)
         elif parsed.path == "/api/twin/resume":
@@ -343,6 +453,37 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             _handle_twin_cancel(self)
         elif parsed.path == "/api/twin/sync":
             _handle_twin_sync(self)
+        elif parsed.path.startswith("/api/session/") and parsed.path.endswith("/star"):
+            sid = parsed.path[len("/api/session/") : -len("/star")]
+            import chatview.db as _db
+
+            conn = _db.get_conn()
+            row = conn.execute(
+                "SELECT starred FROM sessions WHERE id=?", (sid,)
+            ).fetchone()
+            if row is None:
+                _error(self, 404, "Session not found")
+            else:
+                new_val = 0 if row["starred"] else 1
+                conn.execute("UPDATE sessions SET starred=? WHERE id=?", (new_val, sid))
+                conn.commit()
+                _json_response(self, {"ok": True, "starred": bool(new_val)})
+        else:
+            _error(self, 404, "Not found")
+
+    def _do_DELETE_inner(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path.startswith("/api/session/"):
+            sid = path[len("/api/session/") :]
+            from chatview.handlers.data import _delete_session
+
+            result = _delete_session(sid)
+            if result.get("ok"):
+                _json_response(self, result)
+            else:
+                _error(self, 404, result.get("error", "Not found"))
         else:
             _error(self, 404, "Not found")
 
@@ -354,8 +495,61 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def _kill_existing(port):
-    """Kill any process already listening on the port."""
+def _cmdline_matches(pid: int) -> bool:
+    """Check if process PID's command line contains 'chatview' or 'server.py'.
+
+    Uses psutil if available; otherwise falls back to /proc/<pid>/cmdline on
+    Linux or 'ps -p <pid> -o command=' on macOS/BSD.
+    """
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    try:
+        import psutil
+
+        try:
+            proc = psutil.Process(pid_int)
+            cmdline = " ".join(proc.cmdline())
+            return "chatview" in cmdline or "server.py" in cmdline
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return False
+    except ImportError:
+        pass
+    # Fallback: read /proc/<pid>/cmdline (Linux)
+    try:
+        with open(f"/proc/{pid_int}/cmdline", "rb") as f:
+            raw = f.read()
+        cmdline = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        return "chatview" in cmdline or "server.py" in cmdline
+    except (FileNotFoundError, PermissionError, OSError):
+        pass
+    # Fallback: ps -p <pid> -o command= (macOS / BSD)
+    try:
+        out = subprocess.check_output(
+            ["ps", "-p", str(pid_int), "-o", "command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).strip()
+        return "chatview" in out or "server.py" in out
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ):
+        pass
+    # If we cannot determine the command line, be safe: do NOT kill
+    return False
+
+
+def _kill_existing(port: int) -> None:
+    """Kill any process already listening on the port whose command line matches.
+
+    Only terminates processes whose command line contains 'chatview' or
+    'server.py' to avoid killing unrelated processes on the same port.
+    """
     try:
         out = subprocess.check_output(
             ["lsof", "-ti", f":{port}"], text=True, stderr=subprocess.DEVNULL
@@ -363,7 +557,7 @@ def _kill_existing(port):
         if out:
             for pid in out.split("\n"):
                 pid = pid.strip()
-                if pid and pid != str(os.getpid()):
+                if pid and pid != str(os.getpid()) and _cmdline_matches(pid):
                     os.kill(int(pid), signal.SIGTERM)
             time.sleep(0.3)
             print(f"  Killed old process on port {port}")
@@ -378,6 +572,7 @@ def main():
 
     # Load cached index synchronously (fast -- just JSON read)
     from chatview import index as _idx
+
     if INDEX_CACHE.exists():
         try:
             with open(INDEX_CACHE) as f:

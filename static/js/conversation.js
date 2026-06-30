@@ -31,6 +31,7 @@ export async function loadSession(sessionId, jumpToIndex, pushHistory = true) {
   // Cancel any in-flight session load
   if (state._sessionAbort) state._sessionAbort.abort();
   state._sessionAbort = new AbortController();
+  const requestedId = sessionId;
 
   state.currentSessionId = sessionId;
   if (pushHistory) {
@@ -50,6 +51,8 @@ export async function loadSession(sessionId, jumpToIndex, pushHistory = true) {
   try {
     const resp = await fetch(`/api/session/${sessionId}`, { signal: state._sessionAbort.signal });
     if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+    // Race condition guard: if user switched sessions while loading, discard
+    if (state.currentSessionId !== requestedId || state._sessionAbort?.signal.aborted) return;
     const data = await resp.json();
     convTitle.textContent = data.title;
     const metaParts = [`${data.project} · ${formatDate(data.date)} · ${data.messages.length} messages`];

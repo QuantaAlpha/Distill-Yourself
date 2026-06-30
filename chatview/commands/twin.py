@@ -10,7 +10,10 @@ import uuid
 # ---------------------------------------------------------------------------
 
 _CM_VALID_TABLES = {
-    "evidence_events", "judgment_cards", "card_relations", "cognitive_traits",
+    "evidence_events",
+    "judgment_cards",
+    "card_relations",
+    "cognitive_traits",
 }
 
 # Maps CLI-friendly names to actual table names
@@ -28,7 +31,14 @@ _TWIN_RESOURCE_TABLE = {
 }
 
 _TWIN_REQUIRED_BY_RESOURCE = {
-    "events": ["session_id", "event_index", "task_type", "ai_action", "user_reaction", "lesson"],
+    "events": [
+        "session_id",
+        "event_index",
+        "task_type",
+        "ai_action",
+        "user_reaction",
+        "lesson",
+    ],
     "cards": ["applies_when", "judgment", "agent_action"],
     "traits": ["name", "category", "description"],
 }
@@ -36,7 +46,13 @@ _TWIN_REQUIRED_BY_RESOURCE = {
 # Searchable text columns per table
 _TWIN_SEARCH_COLS = {
     "evidence_events": ["ai_action", "user_reaction", "resolution", "lesson", "domain"],
-    "judgment_cards": ["applies_when", "judgment", "agent_action", "exceptions", "tags"],
+    "judgment_cards": [
+        "applies_when",
+        "judgment",
+        "agent_action",
+        "exceptions",
+        "tags",
+    ],
     "cognitive_traits": ["name", "category", "description"],
 }
 
@@ -47,6 +63,7 @@ _TWIN_MAX_OUTPUT_CHARS = 320_000  # ~80K tokens -- leave room for prompt + reaso
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _validate_twin_resource_data(resource: str, data: dict, partial: bool = False):
     if resource not in _TWIN_REQUIRED_BY_RESOURCE:
         raise ValueError(f"unknown resource: {resource}")
@@ -54,9 +71,13 @@ def _validate_twin_resource_data(resource: str, data: dict, partial: bool = Fals
         raise ValueError("data must be an object")
     if partial:
         return
-    missing = [k for k in _TWIN_REQUIRED_BY_RESOURCE[resource] if data.get(k) in (None, "")]
+    missing = [
+        k for k in _TWIN_REQUIRED_BY_RESOURCE[resource] if data.get(k) in (None, "")
+    ]
     if missing:
-        raise ValueError(f"missing required fields for {resource}: {', '.join(missing)}")
+        raise ValueError(
+            f"missing required fields for {resource}: {', '.join(missing)}"
+        )
 
 
 def _run_id_compatible(left: dict, right: dict, run_id: str = "") -> bool:
@@ -88,15 +109,26 @@ def _twin_link(_db, from_id: str, to_id: str, run_id: str = "", commit: bool = T
         if not card:
             raise ValueError(f"Card not found: {to_id}")
         if not _run_id_compatible(event, card, run_id):
-            raise ValueError(f"Cross-run event\u2192card link rejected: {from_id} \u2192 {to_id}")
+            raise ValueError(
+                f"Cross-run event\u2192card link rejected: {from_id} \u2192 {to_id}"
+            )
         effective_run = _effective_run_id(event, card, requested=run_id)
         _db.cm_upsert("evidence_events", from_id, {"card_id": to_id}, commit=commit)
         if effective_run:
-            count = _db.cm_count("evidence_events", where="run_id=? AND card_id=?", params=(effective_run, to_id))
+            count = _db.cm_count(
+                "evidence_events",
+                where="run_id=? AND card_id=?",
+                params=(effective_run, to_id),
+            )
         else:
             count = _db.cm_count("evidence_events", where="card_id=?", params=(to_id,))
         _db.cm_upsert("judgment_cards", to_id, {"evidence_count": count}, commit=commit)
-        return {"ok": True, "link": f"{from_id} \u2192 {to_id}", "type": "event\u2192card", "evidence_count": count}
+        return {
+            "ok": True,
+            "link": f"{from_id} \u2192 {to_id}",
+            "type": "event\u2192card",
+            "evidence_count": count,
+        }
 
     if from_id.startswith("jc_"):
         card = _db.cm_get("judgment_cards", from_id)
@@ -106,17 +138,31 @@ def _twin_link(_db, from_id: str, to_id: str, run_id: str = "", commit: bool = T
         if not trait:
             raise ValueError(f"Trait not found: {to_id}")
         if not _run_id_compatible(card, trait, run_id):
-            raise ValueError(f"Cross-run card\u2192trait link rejected: {from_id} \u2192 {to_id}")
+            raise ValueError(
+                f"Cross-run card\u2192trait link rejected: {from_id} \u2192 {to_id}"
+            )
         existing_ids = json.loads(trait.get("supporting_card_ids") or "[]")
         if from_id not in existing_ids:
             existing_ids.append(from_id)
-        _db.cm_upsert("cognitive_traits", to_id, {
-            "supporting_card_ids": json.dumps(existing_ids),
+        _db.cm_upsert(
+            "cognitive_traits",
+            to_id,
+            {
+                "supporting_card_ids": json.dumps(existing_ids),
+                "evidence_count": len(existing_ids),
+            },
+            commit=commit,
+        )
+        return {
+            "ok": True,
+            "link": f"{from_id} \u2192 {to_id}",
+            "type": "card\u2192trait",
             "evidence_count": len(existing_ids),
-        }, commit=commit)
-        return {"ok": True, "link": f"{from_id} \u2192 {to_id}", "type": "card\u2192trait", "evidence_count": len(existing_ids)}
+        }
 
-    raise ValueError("Cannot determine link type. Use ev_/p_ prefix for events, jc_ for cards.")
+    raise ValueError(
+        "Cannot determine link type. Use ev_/p_ prefix for events, jc_ for cards."
+    )
 
 
 def _twin_truncated_json(rows: list, table: str, total: int, limit: int):
@@ -138,8 +184,10 @@ def _twin_truncated_json(rows: list, table: str, total: int, limit: int):
     if len(included) < total:
         result["truncated"] = True
         result["shown_chars"] = char_count
-        result["hint"] = (f"Showing {len(included)} of {total} (char budget {_TWIN_MAX_OUTPUT_CHARS:,}). "
-                          f"Use twin-search {table} --q '...' or --domain/--tag to filter.")
+        result["hint"] = (
+            f"Showing {len(included)} of {total} (char budget {_TWIN_MAX_OUTPUT_CHARS:,}). "
+            f"Use twin-search {table} --q '...' or --domain/--tag to filter."
+        )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
@@ -147,9 +195,11 @@ def _twin_truncated_json(rows: list, table: str, total: int, limit: int):
 # Commands
 # ---------------------------------------------------------------------------
 
+
 def cmd_twin_stats(args):
     """Show Cognitive Handbook statistics."""
     from chatview import db as _db
+
     _db.init_db()
     stats = _db.get_twin_stats()
 
@@ -174,6 +224,7 @@ def cmd_twin_stats(args):
 def cmd_twin_events(args):
     """List evidence events from the evidence_events table."""
     from chatview import db as _db
+
     _db.init_db()
 
     where_parts, params = [], []
@@ -192,8 +243,13 @@ def cmd_twin_events(args):
 
     where = " AND ".join(where_parts) if where_parts else ""
     total = _db.cm_count("evidence_events", where=where, params=tuple(params))
-    rows = _db.cm_get_all("evidence_events", where=where, params=tuple(params),
-                          order="created_at DESC", limit=args.limit)
+    rows = _db.cm_get_all(
+        "evidence_events",
+        where=where,
+        params=tuple(params),
+        order="created_at DESC",
+        limit=args.limit,
+    )
 
     if getattr(args, "json", False):
         _twin_truncated_json(rows, "events", total, args.limit)
@@ -206,20 +262,25 @@ def cmd_twin_events(args):
     for r in rows:
         sid = (r.get("session_id") or "")[:12]
         lesson = (r.get("lesson") or "")[:50]
-        print(fmt.format(
-            (r.get("id") or "")[:16],
-            sid,
-            (r.get("task_type") or "")[:16],
-            (r.get("signal_type") or "")[:12],
-            lesson,
-        ))
+        print(
+            fmt.format(
+                (r.get("id") or "")[:16],
+                sid,
+                (r.get("task_type") or "")[:16],
+                (r.get("signal_type") or "")[:12],
+                lesson,
+            )
+        )
     if total > args.limit:
-        print(f"\n  (showing {args.limit} of {total} \u2014 use --limit N or twin-search events --q '...')")
+        print(
+            f"\n  (showing {args.limit} of {total} \u2014 use --limit N or twin-search events --q '...')"
+        )
 
 
 def cmd_twin_cards(args):
     """List judgment cards."""
     from chatview import db as _db
+
     _db.init_db()
 
     where_parts, params = [], []
@@ -240,8 +301,13 @@ def cmd_twin_cards(args):
     where = " AND ".join(where_parts) if where_parts else ""
     limit = getattr(args, "limit", 50)
     total = _db.cm_count("judgment_cards", where=where, params=tuple(params))
-    rows = _db.cm_get_all("judgment_cards", where=where, params=tuple(params),
-                          order="confidence DESC", limit=limit)
+    rows = _db.cm_get_all(
+        "judgment_cards",
+        where=where,
+        params=tuple(params),
+        order="confidence DESC",
+        limit=limit,
+    )
 
     if getattr(args, "json", False):
         _twin_truncated_json(rows, "cards", total, limit)
@@ -257,12 +323,15 @@ def cmd_twin_cards(args):
         when = (r.get("applies_when") or "")[:60]
         print(f"  [{rid}]{status_str}{conf_str}  {when}")
     if total > limit:
-        print(f"\n  (showing {limit} of {total} \u2014 use --limit N or twin-search cards --q '...')")
+        print(
+            f"\n  (showing {limit} of {total} \u2014 use --limit N or twin-search cards --q '...')"
+        )
 
 
 def cmd_twin_traits(args):
     """List cognitive traits."""
     from chatview import db as _db
+
     _db.init_db()
 
     where_parts, params = [], []
@@ -278,8 +347,13 @@ def cmd_twin_traits(args):
 
     where = " AND ".join(where_parts) if where_parts else ""
     total = _db.cm_count("cognitive_traits", where=where, params=tuple(params))
-    rows = _db.cm_get_all("cognitive_traits", where=where, params=tuple(params),
-                          order="strength DESC", limit=args.limit)
+    rows = _db.cm_get_all(
+        "cognitive_traits",
+        where=where,
+        params=tuple(params),
+        order="strength DESC",
+        limit=args.limit,
+    )
 
     if getattr(args, "json", False):
         _twin_truncated_json(rows, "traits", total, args.limit)
@@ -298,12 +372,15 @@ def cmd_twin_traits(args):
         print(f"    {desc}")
         print()
     if total > args.limit:
-        print(f"  (showing {args.limit} of {total} \u2014 use --limit N or twin-search traits --q '...')")
+        print(
+            f"  (showing {args.limit} of {total} \u2014 use --limit N or twin-search traits --q '...')"
+        )
 
 
 def cmd_twin_write(args):
     """Write/update/delete Cognitive Model entries from JSON stdin."""
     from chatview import db as _db
+
     _db.init_db()
 
     try:
@@ -315,8 +392,10 @@ def cmd_twin_write(args):
 
     table = payload.get("table", "")
     if table not in _CM_VALID_TABLES:
-        print(f"ERROR: invalid table '{table}'. Valid: {', '.join(sorted(_CM_VALID_TABLES))}",
-              file=sys.stderr)
+        print(
+            f"ERROR: invalid table '{table}'. Valid: {', '.join(sorted(_CM_VALID_TABLES))}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     operations = payload.get("operations", [])
@@ -337,11 +416,19 @@ def cmd_twin_write(args):
                     inserted += 1
                 elif action == "delete":
                     d = op.get("data", {})
-                    conn.execute("DELETE FROM card_relations WHERE from_id=? AND to_id=? AND relation=?",
-                                 (d.get("from_id",""), d.get("to_id",""), d.get("relation","")))
+                    conn.execute(
+                        "DELETE FROM card_relations WHERE from_id=? AND to_id=? AND relation=?",
+                        (
+                            d.get("from_id", ""),
+                            d.get("to_id", ""),
+                            d.get("relation", ""),
+                        ),
+                    )
                     deleted += 1
                 else:
-                    raise ValueError(f"card_relations supports insert/delete, got: {action}")
+                    raise ValueError(
+                        f"card_relations supports insert/delete, got: {action}"
+                    )
             elif action in ("insert", "update"):
                 item_id = op.get("id") or ("p_" + uuid.uuid4().hex[:8])
                 _db.cm_upsert(table, item_id, op.get("data", {}), commit=False)
@@ -369,6 +456,7 @@ def cmd_twin_write(args):
 def cmd_twin_compile(args):
     """Compile Runtime Pack from judgment cards + cognitive traits -> NL text."""
     from chatview import db as _db
+
     _db.init_db()
 
     run_id = getattr(args, "run_id", "") or ""
@@ -380,12 +468,12 @@ def cmd_twin_compile(args):
         params = (run_id,)
 
     # Select top cards by confidence x status weight
-    cards = _db.cm_get_all("judgment_cards",
-                           where=where, params=params,
-                           order="confidence DESC", limit=25)
-    traits = _db.cm_get_all("cognitive_traits",
-                            where=where, params=params,
-                            order="strength DESC", limit=15)
+    cards = _db.cm_get_all(
+        "judgment_cards", where=where, params=params, order="confidence DESC", limit=25
+    )
+    traits = _db.cm_get_all(
+        "cognitive_traits", where=where, params=params, order="strength DESC", limit=15
+    )
 
     if not cards and not traits:
         empty_msg = "No confirmed/emerging cards or traits to compile."
@@ -437,14 +525,18 @@ def cmd_twin_compile(args):
 # Twin CRUD tools -- get / search / add / edit / link / batch
 # ---------------------------------------------------------------------------
 
+
 def cmd_twin_get(args):
     """Get a single event/card/trait by ID."""
     from chatview import db as _db
+
     _db.init_db()
     table = _TWIN_RESOURCE_TABLE.get(args.resource)
     if not table:
-        print(f"ERROR: unknown resource '{args.resource}'. Use: events, cards, traits",
-              file=sys.stderr)
+        print(
+            f"ERROR: unknown resource '{args.resource}'. Use: events, cards, traits",
+            file=sys.stderr,
+        )
         sys.exit(1)
     row = _db.cm_get(table, args.id)
     if not row:
@@ -460,11 +552,14 @@ def cmd_twin_get(args):
 def cmd_twin_search(args):
     """Search events/cards/traits by keyword across text fields."""
     from chatview import db as _db
+
     _db.init_db()
     table = _TWIN_RESOURCE_TABLE.get(args.resource)
     if not table:
-        print(f"ERROR: unknown resource '{args.resource}'. Use: events, cards, traits",
-              file=sys.stderr)
+        print(
+            f"ERROR: unknown resource '{args.resource}'. Use: events, cards, traits",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     cols = _TWIN_SEARCH_COLS[table]
@@ -475,19 +570,23 @@ def cmd_twin_search(args):
     params = tuple(f"%{q}%" for _ in cols)
 
     total = _db.cm_count(table, where=where, params=params)
-    rows = _db.cm_get_all(table, where=where, params=params,
-                          order="rowid DESC", limit=args.limit)
+    rows = _db.cm_get_all(
+        table, where=where, params=params, order="rowid DESC", limit=args.limit
+    )
     _twin_truncated_json(rows, args.resource, total, args.limit)
 
 
 def cmd_twin_add(args):
     """Add a new event/card/trait. Reads JSON from stdin."""
     from chatview import db as _db
+
     _db.init_db()
     table = _TWIN_RESOURCE_TABLE.get(args.resource)
     if not table:
-        print(f"ERROR: unknown resource '{args.resource}'. Use: events, cards, traits",
-              file=sys.stderr)
+        print(
+            f"ERROR: unknown resource '{args.resource}'. Use: events, cards, traits",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     try:
@@ -509,35 +608,53 @@ def cmd_twin_add(args):
             # Take first significant phrase
             snippet = val[:30]
             where = f"{col} LIKE ?"
-            dupes = _db.cm_get_all(table, where=where, params=(f"%{snippet}%",), limit=3)
+            dupes = _db.cm_get_all(
+                table, where=where, params=(f"%{snippet}%",), limit=3
+            )
             for d in dupes:
                 hint_id = d.get("id", "")
                 if hint_id not in [h["id"] for h in hints]:
-                    hints.append({"id": hint_id, "match_field": col,
-                                  "preview": (d.get(col) or "")[:80]})
+                    hints.append(
+                        {
+                            "id": hint_id,
+                            "match_field": col,
+                            "preview": (d.get(col) or "")[:80],
+                        }
+                    )
 
     _db.cm_upsert(table, item_id, data)
     result = {"ok": True, "id": item_id, "resource": args.resource, "action": "added"}
     if hints:
         result["possible_duplicates"] = hints[:5]
-        result["hint"] = "Similar items found. Consider using twin-edit to merge instead."
+        result["hint"] = (
+            "Similar items found. Consider using twin-edit to merge instead."
+        )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def cmd_twin_edit(args):
     """Edit an existing event/card/trait. Reads full JSON from stdin, overwrites."""
     from chatview import db as _db
+
     _db.init_db()
     table = _TWIN_RESOURCE_TABLE.get(args.resource)
     if not table:
-        print(f"ERROR: unknown resource '{args.resource}'. Use: events, cards, traits",
-              file=sys.stderr)
+        print(
+            f"ERROR: unknown resource '{args.resource}'. Use: events, cards, traits",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Check exists
     existing = _db.cm_get(table, args.id)
     if not existing:
-        print(json.dumps({"error": f"Not found: {args.resource}/{args.id}. Use twin-add to create new."}))
+        print(
+            json.dumps(
+                {
+                    "error": f"Not found: {args.resource}/{args.id}. Use twin-add to create new."
+                }
+            )
+        )
         sys.exit(1)
 
     try:
@@ -547,17 +664,24 @@ def cmd_twin_edit(args):
         sys.exit(1)
 
     _db.cm_upsert(table, args.id, data)
-    print(json.dumps({"ok": True, "id": args.id, "resource": args.resource, "action": "updated"},
-                     ensure_ascii=False))
+    print(
+        json.dumps(
+            {"ok": True, "id": args.id, "resource": args.resource, "action": "updated"},
+            ensure_ascii=False,
+        )
+    )
 
 
 def cmd_twin_link(args):
     """Link an event to a card, or a card to a trait."""
     from chatview import db as _db
+
     _db.init_db()
 
     try:
-        result = _twin_link(_db, args.from_id, args.to_id, run_id=getattr(args, "run_id", "") or "")
+        result = _twin_link(
+            _db, args.from_id, args.to_id, run_id=getattr(args, "run_id", "") or ""
+        )
         print(json.dumps(result, ensure_ascii=False))
     except Exception as e:
         print(json.dumps({"error": str(e)}, ensure_ascii=False))
@@ -567,6 +691,7 @@ def cmd_twin_link(args):
 def cmd_twin_batch(args):
     """Execute multiple twin operations in one call. Reads JSON from stdin."""
     from chatview import db as _db
+
     _db.init_db()
 
     try:
@@ -597,7 +722,9 @@ def cmd_twin_batch(args):
                     data.setdefault("run_id", run_id)
                 _validate_twin_resource_data(resource, data, partial=False)
                 _db.cm_upsert(table, item_id, data, commit=False)
-                results.append({"index": i, "ok": True, "id": item_id, "action": "added"})
+                results.append(
+                    {"index": i, "ok": True, "id": item_id, "action": "added"}
+                )
 
             elif action == "edit":
                 if not table:
@@ -606,8 +733,14 @@ def cmd_twin_batch(args):
                 existing = _db.cm_get(table, item_id)
                 if not existing:
                     raise ValueError(f"not found: {item_id}")
-                if run_id and existing.get("run_id") and existing.get("run_id") != run_id:
-                    raise ValueError(f"cross-run edit rejected for {item_id}: existing run_id={existing.get('run_id')} request run_id={run_id}")
+                if (
+                    run_id
+                    and existing.get("run_id")
+                    and existing.get("run_id") != run_id
+                ):
+                    raise ValueError(
+                        f"cross-run edit rejected for {item_id}: existing run_id={existing.get('run_id')} request run_id={run_id}"
+                    )
                 data = dict(op.get("data", {}) or {})
                 if run_id:
                     data.setdefault("run_id", run_id)
@@ -615,7 +748,9 @@ def cmd_twin_batch(args):
                 merged.update({k: v for k, v in data.items() if v is not None})
                 _validate_twin_resource_data(resource, merged, partial=False)
                 _db.cm_upsert(table, item_id, data, commit=False)
-                results.append({"index": i, "ok": True, "id": item_id, "action": "updated"})
+                results.append(
+                    {"index": i, "ok": True, "id": item_id, "action": "updated"}
+                )
 
             elif action == "link":
                 link_result = _twin_link(
@@ -636,9 +771,20 @@ def cmd_twin_batch(args):
 
     ok_count = sum(1 for r in results if r.get("ok"))
     err_count = sum(1 for r in results if "error" in r)
-    print(json.dumps({"ok": err_count == 0, "total": len(operations),
-                      "succeeded": ok_count, "failed": err_count,
-                      "run_id": run_id, "results": results}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "ok": err_count == 0,
+                "total": len(operations),
+                "succeeded": ok_count,
+                "failed": err_count,
+                "run_id": run_id,
+                "results": results,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     if err_count:
         sys.exit(1)
 
@@ -658,7 +804,9 @@ def cmd_twin_candidates(args):
         action = op.get("action", "")
         try:
             if action in ("add", "edit"):
-                _validate_twin_resource_data(resource, op.get("data", {}) or {}, partial=(action == "edit"))
+                _validate_twin_resource_data(
+                    resource, op.get("data", {}) or {}, partial=(action == "edit")
+                )
             elif action == "link":
                 if not op.get("from") or not op.get("to"):
                     raise ValueError("link requires from and to")
@@ -669,7 +817,17 @@ def cmd_twin_candidates(args):
             results.append({"index": i, "error": str(e)})
 
     failed = sum(1 for r in results if "error" in r)
-    print(json.dumps({"ok": failed == 0, "total": len(operations), "failed": failed, "results": results},
-                     ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "ok": failed == 0,
+                "total": len(operations),
+                "failed": failed,
+                "results": results,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     if failed:
         sys.exit(1)

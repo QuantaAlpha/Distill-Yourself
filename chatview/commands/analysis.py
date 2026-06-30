@@ -17,6 +17,7 @@ from chatview.parsers.codex import _CODEX_TOOL_NAMES
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _init_index():
     """Build index silently (suppress print statements)."""
     old = sys.stdout
@@ -47,7 +48,9 @@ def _apply_filters(sessions: dict, args) -> dict:
             date_str = m.get("date", "")
             if date_str:
                 try:
-                    d = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                    d = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(
+                        tzinfo=None
+                    )
                     max_days = days_map.get(args.date, 9999)
                     if (now - d).total_seconds() > max_days * 86400:
                         continue
@@ -68,6 +71,7 @@ def _get_filtered(args) -> dict:
 def _get_filtered_db(args) -> list:
     """Return filtered sessions from SQLite DB as a list of dicts."""
     from chatview import db as _db
+
     _db.init_db()
     days_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
     max_days = days_map.get(getattr(args, "date", ""), 99999)
@@ -81,6 +85,7 @@ def _get_filtered_db(args) -> list:
 def _get_messages_db(args, role="user", limit=99999) -> list:
     """Return messages for filtered sessions from SQLite DB."""
     from chatview import db as _db
+
     sessions = _get_filtered_db(args)
     if not sessions:
         return []
@@ -88,13 +93,18 @@ def _get_messages_db(args, role="user", limit=99999) -> list:
     conn = _db.get_conn()
     # 会话数可能超过 SQLite 宿主参数上限，按 id 分批查询。每批的 ORDER BY/LIMIT 只对
     # 单批生效，因此合并后再做全局排序（ts 降序）并截断到 limit。
-    rows = _db.query_in_chunks(conn, """
+    rows = _db.query_in_chunks(
+        conn,
+        """
         SELECT m.text, m.ts, m.role, m.idx, s.project_name, s.source, s.id AS session_id,
                s.title
         FROM messages m JOIN sessions s ON m.session_id = s.id
         WHERE m.session_id IN ({placeholders}) AND m.role = ?
         ORDER BY m.ts DESC LIMIT ?
-    """, sids, extra_params=(role, limit))
+    """,
+        sids,
+        extra_params=(role, limit),
+    )
     result = [dict(r) for r in rows]
     result.sort(key=lambda r: r.get("ts") or "", reverse=True)
     return result[:limit]
@@ -104,19 +114,27 @@ def _get_messages_db(args, role="user", limit=99999) -> list:
 # Commands
 # ---------------------------------------------------------------------------
 
+
 def cmd_sessions(args):
     """List sessions matching filters."""
     db_sessions = _get_filtered_db(args)
     total = len(db_sessions)
-    items = db_sessions[:args.limit]
+    items = db_sessions[: args.limit]
 
     if args.json:
-        out = [{
-            "id": m.get("id", ""), "title": m.get("title", ""),
-            "project": m.get("project_name", ""), "source": m.get("source", "claude"),
-            "date": (m.get("date") or "")[:19], "messages": m.get("user_message_count", 0),
-            "fileSize": m.get("file_size", 0), "filePath": m.get("file_path", ""),
-        } for m in items]
+        out = [
+            {
+                "id": m.get("id", ""),
+                "title": m.get("title", ""),
+                "project": m.get("project_name", ""),
+                "source": m.get("source", "claude"),
+                "date": (m.get("date") or "")[:19],
+                "messages": m.get("user_message_count", 0),
+                "fileSize": m.get("file_size", 0),
+                "filePath": m.get("file_path", ""),
+            }
+            for m in items
+        ]
         print(json.dumps(out, ensure_ascii=False, indent=2))
     else:
         print(f"Found {total} sessions (showing {len(items)}):\n")
@@ -132,13 +150,14 @@ def cmd_sessions(args):
 def cmd_read(args):
     """Read a session in human-readable format."""
     from chatview import db as _db
+
     _db.init_db()
 
     session_id = args.session
     summary_mode = getattr(args, "summary", False)
 
     # Resolve session meta from DB (supports partial ID match)
-    meta = _db.get_session_meta(session_id)
+    meta = _db.get_session_meta(session_id) or _db.get_session_by_partial_id(session_id)
     if not meta:
         print(f"Session not found: {session_id}", file=sys.stderr)
         sys.exit(1)
@@ -170,7 +189,7 @@ def cmd_read(args):
 
         for priority, text in turns:
             if used + len(text) > max_chars:
-                text = text[:max(200, max_chars - used)] + "\n[...]"
+                text = text[: max(200, max_chars - used)] + "\n[...]"
             output.append(text)
             used += len(text)
             if used > max_chars:
@@ -232,7 +251,9 @@ def cmd_read(args):
     flush_tools()
 
     max_chars = 12000
-    header = f"# {title}\n# {project} | {date} | {len(data.get('messages', []))} messages"
+    header = (
+        f"# {title}\n# {project} | {date} | {len(data.get('messages', []))} messages"
+    )
     output = [header]
     used = len(header)
 
@@ -240,11 +261,13 @@ def cmd_read(args):
         if used + len(text) > max_chars:
             if priority == 2:
                 continue
-            text = text[:max(200, max_chars - used)] + "\n[...]"
+            text = text[: max(200, max_chars - used)] + "\n[...]"
         output.append(text)
         used += len(text)
         if used > max_chars and priority > 0:
-            output.append(f"\n[TRUNCATED — showing {used}/{sum(len(t) for _, t in turns)} chars, tools folded]")
+            output.append(
+                f"\n[TRUNCATED — showing {used}/{sum(len(t) for _, t in turns)} chars, tools folded]"
+            )
             break
 
     print("\n".join(output))
@@ -253,6 +276,7 @@ def cmd_read(args):
 def cmd_search(args):
     """Search user messages across sessions (via FTS)."""
     from chatview import db as _db
+
     _db.init_db()
 
     # Use FTS for the core search
@@ -267,13 +291,18 @@ def cmd_search(args):
         if args.source and args.source != "all":
             if (r.get("source") or "claude") != args.source:
                 continue
-        if args.project and args.project.lower() not in (r.get("project_name") or "").lower():
+        if (
+            args.project
+            and args.project.lower() not in (r.get("project_name") or "").lower()
+        ):
             continue
         if args.date and args.date != "all":
             date_str = r.get("ts") or ""
             if date_str:
                 try:
-                    d = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                    d = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(
+                        tzinfo=None
+                    )
                     if (now - d).days > days_map.get(args.date, 9999):
                         continue
                 except Exception:
@@ -282,22 +311,24 @@ def cmd_search(args):
         # Build output record
         text = r.get("text", "")
         snippet = text[:200] if text else ""
-        out.append({
-            "sessionId": r.get("session_id", ""),
-            "title": r.get("title", ""),
-            "project": r.get("project_name", ""),
-            "date": (r.get("ts") or "")[:19],
-            "messageIndex": r.get("idx", 0),
-            "snippet": snippet,
-            "matchType": r.get("role", "content"),
-            "score": 0,
-        })
+        out.append(
+            {
+                "sessionId": r.get("session_id", ""),
+                "title": r.get("title", ""),
+                "project": r.get("project_name", ""),
+                "date": (r.get("ts") or "")[:19],
+                "messageIndex": r.get("idx", 0),
+                "snippet": snippet,
+                "matchType": r.get("role", "content"),
+                "score": 0,
+            }
+        )
 
     if args.json:
-        print(json.dumps(out[:args.limit], ensure_ascii=False, indent=2))
+        print(json.dumps(out[: args.limit], ensure_ascii=False, indent=2))
     else:
         print(f"Found {len(out)} matches for '{args.query}':\n")
-        for r in out[:args.limit]:
+        for r in out[: args.limit]:
             date = r.get("date", "")[:10]
             print(f"  [{date}] {r.get('title', '')[:60]}")
             print(f"  {r.get('project', '')} · match: {r.get('matchType', '')}")
@@ -311,8 +342,11 @@ def cmd_queries(args):
     # Single session mode
     if args.session:
         from chatview import db as _db
+
         _db.init_db()
-        meta = _db.get_session_meta(args.session)
+        meta = _db.get_session_meta(args.session) or _db.get_session_by_partial_id(
+            args.session
+        )
         if not meta:
             print(f"Session not found: {args.session}", file=sys.stderr)
             sys.exit(1)
@@ -326,7 +360,7 @@ def cmd_queries(args):
             text = msg.get("text", "")
             if args.keyword and args.keyword.lower() not in text.lower():
                 continue
-            print(f"[{i+1}] {ts}")
+            print(f"[{i + 1}] {ts}")
             print(text[:500])
             print()
         return
@@ -344,14 +378,16 @@ def cmd_queries(args):
                 continue
             if args.keyword and args.keyword.lower() not in text.lower():
                 continue
-            all_queries.append({
-                "sessionId": row.get("session_id", ""),
-                "title": row.get("title", "")[:50],
-                "project": row.get("project_name", ""),
-                "source": row.get("source", "claude"),
-                "date": (row.get("ts") or "")[:16],
-                "text": text[:400],
-            })
+            all_queries.append(
+                {
+                    "sessionId": row.get("session_id", ""),
+                    "title": row.get("title", "")[:50],
+                    "project": row.get("project_name", ""),
+                    "source": row.get("source", "claude"),
+                    "date": (row.get("ts") or "")[:16],
+                    "text": text[:400],
+                }
+            )
     else:
         filtered = _get_filtered(args)
         items = sorted(filtered.values(), key=lambda m: m.get("date", ""), reverse=True)
@@ -369,24 +405,26 @@ def cmd_queries(args):
                     continue
                 if args.keyword and args.keyword.lower() not in text.lower():
                     continue
-                all_queries.append({
-                    "sessionId": sid,
-                    "title": title,
-                    "project": project,
-                    "source": source,
-                    "date": ut.get("ts", "")[:16],
-                    "text": text[:400],
-                })
+                all_queries.append(
+                    {
+                        "sessionId": sid,
+                        "title": title,
+                        "project": project,
+                        "source": source,
+                        "date": ut.get("ts", "")[:16],
+                        "text": text[:400],
+                    }
+                )
 
     all_queries.sort(key=lambda q: q.get("date", ""), reverse=True)
-    shown = all_queries[:args.limit]
+    shown = all_queries[: args.limit]
 
     if args.json:
         print(json.dumps(shown, ensure_ascii=False, indent=2))
     else:
         print(f"Found {len(all_queries)} user queries (showing {len(shown)}):\n")
         for q in shown:
-            text = q['text'][:150].replace('\n', ' ')
+            text = q["text"][:150].replace("\n", " ")
             print(f"  [{q['date']}] {q['project']} | {text}")
             print(f"    sid:{q['sessionId']}")
 
@@ -484,16 +522,28 @@ def _data_files(args):
                         if not isinstance(content, list):
                             continue
                         for block in content:
-                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                            if (
+                                isinstance(block, dict)
+                                and block.get("type") == "tool_use"
+                            ):
                                 name = block.get("name", "")
                                 inp = block.get("input", {})
                                 path = inp.get("file_path") or inp.get("path") or ""
                                 if path and not path.startswith("/tmp"):
                                     home = str(Path.home())
-                                    short = path.replace(home, "~") if path.startswith(home) else path
+                                    short = (
+                                        path.replace(home, "~")
+                                        if path.startswith(home)
+                                        else path
+                                    )
                                     if short not in file_freq:
-                                        file_freq[short] = {"count": 0, "sessions": set(),
-                                                            "edits": 0, "reads": 0, "writes": 0}
+                                        file_freq[short] = {
+                                            "count": 0,
+                                            "sessions": set(),
+                                            "edits": 0,
+                                            "reads": 0,
+                                            "writes": 0,
+                                        }
                                     file_freq[short]["count"] += 1
                                     file_freq[short]["sessions"].add(sid)
                                     if name in ("Read", "Glob", "Grep"):
@@ -511,16 +561,33 @@ def _data_files(args):
                             name = _CODEX_TOOL_NAMES.get(raw_name, raw_name)
                             args_str = payload.get("arguments", "{}")
                             try:
-                                tool_args = json.loads(args_str) if isinstance(args_str, str) else {}
+                                tool_args = (
+                                    json.loads(args_str)
+                                    if isinstance(args_str, str)
+                                    else {}
+                                )
                             except json.JSONDecodeError:
                                 tool_args = {}
-                            path = tool_args.get("file_path") or tool_args.get("path") or ""
+                            path = (
+                                tool_args.get("file_path")
+                                or tool_args.get("path")
+                                or ""
+                            )
                             if path and not path.startswith("/tmp"):
                                 home = str(Path.home())
-                                short = path.replace(home, "~") if path.startswith(home) else path
+                                short = (
+                                    path.replace(home, "~")
+                                    if path.startswith(home)
+                                    else path
+                                )
                                 if short not in file_freq:
-                                    file_freq[short] = {"count": 0, "sessions": set(),
-                                                        "edits": 0, "reads": 0, "writes": 0}
+                                    file_freq[short] = {
+                                        "count": 0,
+                                        "sessions": set(),
+                                        "edits": 0,
+                                        "reads": 0,
+                                        "writes": 0,
+                                    }
                                 file_freq[short]["count"] += 1
                                 file_freq[short]["sessions"].add(sid)
                                 if name in ("Read", "Glob", "Grep"):
@@ -532,20 +599,29 @@ def _data_files(args):
         except Exception:
             continue
 
-    sorted_files = sorted(file_freq.items(), key=lambda x: -(x[1]["edits"] + x[1]["writes"]))
-    return [{"path": fp, **{k: v if not isinstance(v, set) else len(v) for k, v in data.items()}}
-            for fp, data in sorted_files]
+    sorted_files = sorted(
+        file_freq.items(), key=lambda x: -(x[1]["edits"] + x[1]["writes"])
+    )
+    return [
+        {
+            "path": fp,
+            **{k: v if not isinstance(v, set) else len(v) for k, v in data.items()},
+        }
+        for fp, data in sorted_files
+    ]
 
 
 def cmd_files(args):
     """Show most-edited files across sessions."""
     files = _data_files(args)
-    shown = files[:args.limit]
+    shown = files[: args.limit]
     if args.json:
         print(json.dumps(shown, ensure_ascii=False, indent=2))
     else:
         print(f"Top edited files ({len(files)} total):\n")
         for data in shown:
             print(f"  {data['path']}")
-            print(f"    edits={data['edits']}  writes={data['writes']}  reads={data['reads']}  sessions={data['sessions']}")
+            print(
+                f"    edits={data['edits']}  writes={data['writes']}  reads={data['reads']}  sessions={data['sessions']}"
+            )
             print()

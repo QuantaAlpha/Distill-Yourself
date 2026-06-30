@@ -49,6 +49,7 @@ registerI18n({
     'insights.snippets.copied': '✓',
     'insights.snippets.code': '代码',
     'insights.loadFailed': '加载失败：{msg}',
+    'insights.retry': '重试',
   },
   en: {
     'insights.hotspots.title': 'File Hotspots',
@@ -88,6 +89,7 @@ registerI18n({
     'insights.snippets.copied': '✓',
     'insights.snippets.code': 'code',
     'insights.loadFailed': 'Failed: {msg}',
+    'insights.retry': 'Retry',
   },
 });
 
@@ -355,6 +357,12 @@ export async function loadInsightsTab(tab) {
     }
   } catch (err) {
     body.innerHTML = `<div style="padding:40px;text-align:center;color:#e57373">${t("insights.loadFailed", { msg: esc(err.message) })}</div>`;
+    if (window.showToast) {
+      window.showToast.error(t("insights.loadFailed", { msg: err.message }), 0, {
+        label: t("insights.retry"),
+        callback: () => loadInsightsTab(tab),
+      });
+    }
   }
 }
 

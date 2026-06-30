@@ -10,6 +10,13 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
+# Concurrency control (Issue 2.4)
+# ---------------------------------------------------------------------------
+_engine_semaphore = threading.Semaphore(3)  # Max 3 concurrent AI processes
+_twin_semaphore = threading.Semaphore(1)  # Prevent overlapping twin analyses
+
+
+# ---------------------------------------------------------------------------
 # AI Engine detection and execution
 #
 # Auto-detection prefers Claude Code, then Codex (see _detect_ai_engine).
@@ -18,6 +25,16 @@ from pathlib import Path
 # requested engine ("codex"/"claude") is never silently swapped.
 # ---------------------------------------------------------------------------
 _ai_engine_cache = None  # "codex" | "claude" | ""
+_ai_engine_cache_ts = 0.0  # time.time() when _ai_engine_cache was set
+_ENGINE_CACHE_TTL = 300  # seconds — re-check every 5 minutes
+_HEALTH_PROBE_TIMEOUT = 120  # seconds — 2 minutes for both codex and claude
+
+
+def _clear_ai_engine_cache():
+    """Clear the cached engine detection so the next call re-evaluates."""
+    global _ai_engine_cache, _ai_engine_cache_ts
+    _ai_engine_cache = None
+    _ai_engine_cache_ts = 0.0
 
 
 def _normalize_ai_engine(engine: str) -> str:
@@ -81,35 +98,92 @@ def _run_ai_command(cmd, *, prompt_input=None, timeout=300):
 
 
 def _detect_ai_engine():
-    """Auto-detect available AI CLI: Claude Code first, then Codex."""
-    global _ai_engine_cache
-    if _ai_engine_cache is not None:
+    """Auto-detect available AI CLI: Claude Code first, then Codex.
+
+    Result is cached for ``_ENGINE_CACHE_TTL`` seconds.  Callers that discover
+    a stale or failed engine should call ``_clear_ai_engine_cache()`` first.
+    """
+    global _ai_engine_cache, _ai_engine_cache_ts
+    now = time.time()
+    if _ai_engine_cache is not None and (now - _ai_engine_cache_ts) < _ENGINE_CACHE_TTL:
         return _ai_engine_cache
-    for name, cmd in [("claude", ["claude", "--version"]), ("codex", ["codex", "--version"])]:
+    _ai_engine_cache = None  # Force re-evaluation when TTL expired
+    for name, cmd in [
+        ("claude", ["claude", "--version"]),
+        ("codex", ["codex", "--version"]),
+    ]:
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=5)
             if result.returncode == 0:
+                if name == "claude":
+                    # Verify real API access: auth failure still exits 0 with
+                    # "Not logged in" in the response.  Run a quick probe.
+                    test = subprocess.run(
+                        [
+                            "claude",
+                            "-p",
+                            "--output-format",
+                            "stream-json",
+                            "--verbose",
+                            "--max-turns",
+                            "1",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=_HEALTH_PROBE_TIMEOUT,
+                        input="say ok",
+                    )
+                    test_out = (test.stdout or "") + (test.stderr or "")
+                    if "Not logged in" in test_out or "authentication_failed" in test_out or "Please run /login" in test_out:
+                        # Auth failed -- fall through to check codex
+                        continue
                 _ai_engine_cache = name
+                _ai_engine_cache_ts = time.time()
                 print(f"AI engine: {name}")
                 return _ai_engine_cache
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             continue
     _ai_engine_cache = ""
+    _ai_engine_cache_ts = time.time()
     return _ai_engine_cache
 
 
 def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto"):
     """Execute prompt via detected AI engine. Returns (stdout, stderr, returncode).
+
     Raises FileNotFoundError if no engine available.
     When auto-selected, falls back from Codex to Claude on Codex errors;
-    an explicitly requested engine is not swapped."""
+    an explicitly requested engine is not swapped.
+
+    Acquires ``_engine_semaphore`` with a 5-second timeout first.
+    """
+    if not _engine_semaphore.acquire(timeout=5):
+        raise TimeoutError(
+            "AI engine busy — all 3 slots occupied. Please wait and retry."
+        )
+    try:
+        return _run_ai_engine_unlocked(prompt, allow_write, timeout, engine_override)
+    finally:
+        _engine_semaphore.release()
+
+
+def _run_ai_engine_unlocked(
+    prompt, allow_write=False, timeout=300, engine_override="auto"
+):
+    """Unlocked inner implementation of _run_ai_engine (caller owns semaphore)."""
     engine_override = _normalize_ai_engine(engine_override)
     engine = engine_override if engine_override != "auto" else _detect_ai_engine()
     if engine == "codex":
         sandbox = "workspace-write" if allow_write else "read-only"
         stdout, stderr, rc = _run_ai_command(
-            ["codex", "--sandbox", sandbox, "--ask-for-approval", "never",
-             "exec", "--skip-git-repo-check", prompt],
+            [
+                "codex",
+                "--sandbox",
+                sandbox,
+                "exec",
+                "--skip-git-repo-check",
+                prompt,
+            ],
             timeout=timeout,
         )
         # Fallback: if codex failed and engine was auto-detected, try claude
@@ -130,8 +204,14 @@ def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto
     )
 
 
-def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_override="auto",
-                          proc_ref=None):
+def _run_ai_engine_stream(
+    prompt,
+    allow_write=False,
+    timeout=300,
+    engine_override="auto",
+    proc_ref=None,
+    for_twin=False,
+):
     """Execute prompt via detected AI engine, yielding SSE events as JSONL lines arrive.
 
     Yields dicts: {"type": "tool", "name": ..., "status": ...}
@@ -142,46 +222,173 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
     Auto-falls back from codex to claude on codex errors (e.g. usage limits)
     only when the engine was auto-selected.
 
+    Acquires ``_engine_semaphore`` with a 5-second timeout before spawning
+    the subprocess. If ``for_twin=True``, also acquires ``_twin_semaphore``
+    (max 1) to prevent overlapping twin analyses.
+
     Args:
         proc_ref: Optional mutable list (e.g. [None]) that receives the
             subprocess.Popen object once it is created. Used by callers that
             need to terminate the process from another thread.
+        for_twin: If True, also acquires the twin-specific semaphore.
     """
+    acquired_engine = False
+    acquired_twin = False
+    try:
+        if for_twin and not _twin_semaphore.acquire(timeout=5):
+            yield {
+                "type": "error",
+                "message": "A twin analysis is already running. Please wait or cancel it first.",
+            }
+            return
+        acquired_twin = for_twin
+        if not _engine_semaphore.acquire(timeout=5):
+            yield {
+                "type": "error",
+                "message": "AI engine busy — all 3 slots occupied. Please wait and retry.",
+            }
+            return
+        acquired_engine = True
+        yield from _run_ai_engine_stream_impl(
+            prompt, allow_write, timeout, engine_override, proc_ref
+        )
+    finally:
+        if acquired_twin:
+            _twin_semaphore.release()
+        if acquired_engine:
+            _engine_semaphore.release()
+
+
+def _analyze_codex_probe(stdout: str, returncode: int):
+    """Inspect a Codex health-probe result.
+
+    Returns ``(ok, message)``. ``ok`` is False when the probe surfaced an
+    error event (e.g. ``unexpected status 521``, usage limits) or a non-zero
+    exit code, in which case ``message`` carries a short human-readable reason.
+    """
+    if returncode not in (0, None):
+        return False, f"codex exited with code {returncode}"
+    for line in (stdout or "").strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if obj.get("type") in ("error", "turn.failed"):
+            msg = (
+                obj.get("message")
+                or (obj.get("error") or {}).get("message")
+                or "codex health check failed"
+            )
+            return False, str(msg)
+    return True, ""
+
+
+def _codex_health_check():
+    """Run a fast Codex health probe. Returns ``(ok, message)``.
+
+    Codex retries internally (5x WS + 5x HTTP) which can take 30-60s on
+    transient failures (e.g. status 521). A tiny prompt with a 5s timeout
+    surfaces such failures quickly instead of blocking the whole analysis.
+    """
+    try:
+        test = subprocess.run(
+            [
+                "codex",
+                "--sandbox",
+                "read-only",
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "echo ok",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_HEALTH_PROBE_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+        return _analyze_codex_probe(test.stdout, test.returncode)
+    except subprocess.TimeoutExpired:
+        return False, "codex health check timed out (likely network/auth issue)"
+    except (FileNotFoundError, OSError) as e:
+        return False, f"codex unavailable: {e}"
+
+
+def _run_ai_engine_stream_impl(
+    prompt, allow_write=False, timeout=300, engine_override="auto", proc_ref=None
+):
+    """Inner generator for _run_ai_engine_stream (caller owns semaphore)."""
     engine_override = _normalize_ai_engine(engine_override)
     engine = engine_override if engine_override != "auto" else _detect_ai_engine()
     if not engine:
         yield {"type": "error", "message": "No AI engine found"}
         return
 
-    # For codex with auto-detection: quick health check before committing.
-    # Codex retries internally (5x WS + 5x HTTP) which can take 30-60s.
-    # Instead, run a fast test with a tiny prompt + 5s timeout.
-    if engine == "codex" and engine_override == "auto":
-        try:
-            test = subprocess.run(
-                ["codex", "--sandbox", "read-only", "--ask-for-approval", "never",
-                 "exec", "--json", "--skip-git-repo-check", "echo ok"],
-                capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
-            )
-            # Check for error events in output
-            has_error = False
-            for line in test.stdout.strip().split("\n"):
-                try:
-                    obj = json.loads(line)
-                    if obj.get("type") in ("error", "turn.failed"):
-                        has_error = True
-                        break
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            if test.returncode != 0 or has_error:
-                raise RuntimeError("codex health check failed")
-        except (subprocess.TimeoutExpired, RuntimeError, FileNotFoundError, OSError):
-            yield {"type": "text", "content": "Codex unavailable, falling back to Claude...\n"}
-            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout, proc_ref)
+    # Codex health check — run for BOTH auto and explicit codex so a transient
+    # failure (status 521, usage limit) does not block for 30-60s on internal
+    # retries.  Auto mode silently falls back to claude; an explicitly chosen
+    # codex instead surfaces an actionable error with ``suggest_engine`` so the
+    # UI can offer a one-click switch to Claude.
+    if engine == "codex":
+        ok, reason = _codex_health_check()
+        if not ok:
+            if engine_override == "auto":
+                yield {
+                    "type": "text",
+                    "content": "Codex unavailable, falling back to Claude...\n",
+                }
+                yield from _run_engine_stream_inner(
+                    "claude", prompt, allow_write, timeout, proc_ref
+                )
+                return
+            # Explicit codex: do not silently swap — let the caller/UI decide.
+            yield {
+                "type": "error",
+                "message": f"codex: {reason}",
+                "suggest_engine": "claude",
+            }
             return
         # Codex passed health check — use it
-        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout, proc_ref)
+        yield from _run_engine_stream_inner(
+            "codex", prompt, allow_write, timeout, proc_ref
+        )
         return
+
+    # Claude auth probe — run for ALL claude uses (not just auto-detect) so
+    # a stale cache or user logout is caught before the actual call.
+    if engine == "claude":
+        try:
+            test = subprocess.run(
+                ["claude", "-p", "--output-format", "stream-json", "--verbose", "--max-turns", "1"],
+                capture_output=True,
+                text=True,
+                timeout=_HEALTH_PROBE_TIMEOUT,
+                input="say ok",
+            )
+            test_out = (test.stdout or "") + (test.stderr or "")
+            if "Not logged in" in test_out or "authentication_failed" in test_out or "Please run /login" in test_out:
+                raise RuntimeError("claude auth failed")
+        except (subprocess.TimeoutExpired, RuntimeError, FileNotFoundError, OSError):
+            _clear_ai_engine_cache()
+            if engine_override == "claude":
+                # Explicit claude: surface an actionable error with a switch hint
+                yield {
+                    "type": "error",
+                    "message": "Claude is not authenticated. Please run /login in Claude Code.",
+                    "suggest_engine": "codex",
+                }
+                return
+            # auto mode: silently fall back to codex
+            yield {
+                "type": "text",
+                "content": "Claude not authenticated, falling back to Codex...\n",
+            }
+            yield from _run_engine_stream_inner(
+                "codex", prompt, allow_write, timeout, proc_ref
+            )
+            return
 
     yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref)
 
@@ -195,21 +402,44 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None
     """
     if engine == "codex":
         sandbox = "workspace-write" if allow_write else "read-only"
-        cmd = ["codex", "--sandbox", sandbox, "--ask-for-approval", "never",
-               "exec", "--json", "--skip-git-repo-check", prompt]
+        cmd = [
+            "codex",
+            "--sandbox",
+            sandbox,
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            prompt,
+        ]
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1, stdin=subprocess.DEVNULL,
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            stdin=subprocess.DEVNULL,
             start_new_session=(os.name == "posix"),
         )
     else:  # claude
-        cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
-               "--allowedTools", "Bash,Read,Grep,Glob,Write,Edit,Agent"]
+        cmd = [
+            "claude",
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--allowedTools",
+            "Bash,Read,Grep,Glob,Write,Edit,Agent",
+        ]
         proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, bufsize=1,
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
             start_new_session=(os.name == "posix"),
         )
+
         # Write prompt in a thread to avoid blocking on large prompts
         # (macOS pipe buffer is ~64KB, prompt can be 100KB+)
         def _feed_stdin():
@@ -218,6 +448,7 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None
                 proc.stdin.close()
             except (BrokenPipeError, OSError):
                 pass
+
         threading.Thread(target=_feed_stdin, daemon=True).start()
 
     if proc_ref is not None:
@@ -225,17 +456,23 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None
 
     accumulated_text = ""
     stderr_tail = []
-    stderr_thread = threading.Thread(target=_drain_text_pipe, args=(proc.stderr, stderr_tail), daemon=True)
+    stderr_thread = threading.Thread(
+        target=_drain_text_pipe, args=(proc.stderr, stderr_tail), daemon=True
+    )
     stderr_thread.start()
     try:
         import select as _select
+
         deadline = time.time() + timeout
         while True:
             remaining = deadline - time.time()
             if remaining <= 0:
                 _kill_process_group(proc)
-                yield {"type": "timeout", "content": accumulated_text,
-                       "message": f"Timeout ({timeout // 60} min limit)"}
+                yield {
+                    "type": "timeout",
+                    "content": accumulated_text,
+                    "message": f"Timeout ({timeout // 60} min limit)",
+                }
                 return
             ready, _, _ = _select.select([proc.stdout], [], [], min(remaining, 1.0))
             if ready:
@@ -278,8 +515,38 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None
     if proc.returncode not in (0, None):
         stderr_text = "".join(stderr_tail).strip()
         detail = f": {stderr_text[:1000]}" if stderr_text else ""
-        yield {"type": "error", "message": f"{engine} exited with code {proc.returncode}{detail}"}
+        yield {
+            "type": "error",
+            "message": f"{engine} exited with code {proc.returncode}{detail}",
+        }
         return
+
+    # Auth-failure guard: Claude exits 0 even when not logged in.
+    # Check accumulated text for known auth patterns before declaring success.
+    if engine == "claude" and proc.returncode == 0:
+        _auth_patterns = ("Not logged in", "authentication_failed", "Please run /login")
+        if any(p in accumulated_text for p in _auth_patterns):
+            _clear_ai_engine_cache()
+            stderr_text = "".join(stderr_tail).strip()
+            detail = f": {stderr_text[:500]}" if stderr_text else ""
+            yield {
+                "type": "error",
+                "message": (
+                    f"Claude is not authenticated.{detail}"
+                    if detail
+                    else "Claude is not authenticated. Please run /login in Claude Code."
+                ),
+            }
+            return
+        # Also check stderr for auth patterns
+        stderr_text = "".join(stderr_tail)
+        if any(p in stderr_text for p in _auth_patterns):
+            _clear_ai_engine_cache()
+            yield {
+                "type": "error",
+                "message": "Claude is not authenticated. Please run /login in Claude Code.",
+            }
+            return
 
     yield {"type": "done", "content": accumulated_text}
 
@@ -296,10 +563,16 @@ def _select_cognitive_avatar(force=False, run_id="", lang="zh", cache_only=False
             that must not block on a multi-minute AI call in the request thread.
     """
     from chatview import db as _db
+
     _db.init_db()
 
     CACHE_TAB = "twin_avatar"
-    CACHE_SCOPE = {"source": "all", "date_range": "all", "project": run_id or "", "engine": "auto"}
+    CACHE_SCOPE = {
+        "source": "all",
+        "date_range": "all",
+        "project": run_id or "",
+        "engine": "auto",
+    }
 
     # Check if traits exist
     where = "status IN ('confirmed','emerging')"
@@ -307,9 +580,9 @@ def _select_cognitive_avatar(force=False, run_id="", lang="zh", cache_only=False
     if run_id:
         where += " AND run_id=?"
         params = (run_id,)
-    traits = _db.cm_get_all("cognitive_traits",
-                            where=where, params=params,
-                            order="strength DESC", limit=15)
+    traits = _db.cm_get_all(
+        "cognitive_traits", where=where, params=params, order="strength DESC", limit=15
+    )
     if not traits:
         return None
 
@@ -328,7 +601,14 @@ def _select_cognitive_avatar(force=False, run_id="", lang="zh", cache_only=False
         return None
 
     # Load cognitive models JSON (stripped for prompt)
-    models_path = Path(__file__).resolve().parent.parent / "static" / "assets" / "cognitive-avatars" / "v2" / "cognitive_models.json"
+    models_path = (
+        Path(__file__).resolve().parent.parent
+        / "static"
+        / "assets"
+        / "cognitive-avatars"
+        / "v2"
+        / "cognitive_models.json"
+    )
     try:
         with open(models_path, "r", encoding="utf-8") as f:
             models_data = json.load(f)
@@ -339,22 +619,30 @@ def _select_cognitive_avatar(force=False, run_id="", lang="zh", cache_only=False
     for m in models_data.get("models", []):
         binding = m.get("avatar_binding", {})
         primary = binding.get("primary_visual_persona", {})
-        compact_models.append({
-            "id": m["id"],
-            "axis": m.get("axis", ""),
-            "summary": m.get("summary", ""),
-            "signals": m.get("signals", []),
-            "thinking_mode": m.get("thinking_mode", []),
-            "persona_id": primary.get("persona_id", ""),
-        })
+        compact_models.append(
+            {
+                "id": m["id"],
+                "axis": m.get("axis", ""),
+                "summary": m.get("summary", ""),
+                "signals": m.get("signals", []),
+                "thinking_mode": m.get("thinking_mode", []),
+                "persona_id": primary.get("persona_id", ""),
+            }
+        )
 
-    traits_json = json.dumps([{
-        "name": t.get("name", ""),
-        "category": t.get("category", ""),
-        "description": t.get("description", ""),
-        "strength": t.get("strength", 0.65),
-        "status": t.get("status", ""),
-    } for t in traits], ensure_ascii=False)
+    traits_json = json.dumps(
+        [
+            {
+                "name": t.get("name", ""),
+                "category": t.get("category", ""),
+                "description": t.get("description", ""),
+                "strength": t.get("strength", 0.65),
+                "status": t.get("status", ""),
+            }
+            for t in traits
+        ],
+        ensure_ascii=False,
+    )
 
     models_json = json.dumps(compact_models, ensure_ascii=False)
 
@@ -416,17 +704,46 @@ user's trait combination (4-8 words, e.g. "Minimalist Architect", "Evidence-Driv
     if rc != 0 or not stdout:
         return None
 
-    # Parse AI response — extract JSON from output
+    # Parse AI response — robust JSON extraction
     text = stdout.strip()
-    # Try to find JSON in the output
-    json_start = text.find("{")
-    json_end = text.rfind("}") + 1
-    if json_start < 0 or json_end <= json_start:
+
+    def _extract_json(text: str) -> dict | None:
+        """Scan text for the first valid JSON object with expected keys."""
+        depth = 0
+        in_str = False
+        escape = False
+        start = -1
+        for i, ch in enumerate(text):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"' and not escape:
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    candidate = text[start : i + 1]
+                    try:
+                        obj = json.loads(candidate)
+                        if isinstance(obj, dict) and "selections" in obj:
+                            return obj
+                    except json.JSONDecodeError:
+                        pass
+                    start = -1
         return None
 
-    try:
-        result = json.loads(text[json_start:json_end])
-    except json.JSONDecodeError:
+    result = _extract_json(text)
+    if result is None:
         return None
 
     selections = result.get("selections", [])
@@ -442,21 +759,75 @@ user's trait combination (4-8 words, e.g. "Minimalist Architect", "Evidence-Driv
         return None
 
     full_model = full_lookup[model_id]
-    persona_id = full_model.get("avatar_binding", {}).get("primary_visual_persona", {}).get("persona_id", "")
+    persona_id = (
+        full_model.get("avatar_binding", {})
+        .get("primary_visual_persona", {})
+        .get("persona_id", "")
+    )
     selection = {
         "model_id": model_id,
         "model_name": full_model.get("name", ""),
         "persona_id": persona_id,
-        "persona_name": full_model.get("avatar_binding", {}).get("primary_visual_persona", {}).get("persona_name", ""),
+        "persona_name": full_model.get("avatar_binding", {})
+        .get("primary_visual_persona", {})
+        .get("persona_name", ""),
         "persona_title": result.get("persona_title", ""),
         "confidence": primary.get("confidence", 0),
         "rationale": primary.get("rationale", ""),
-        "runner_up_ids": [s["model_id"] for s in selections[1:] if s.get("model_id") in prompt_ids],
+        "runner_up_ids": [
+            s["model_id"] for s in selections[1:] if s.get("model_id") in prompt_ids
+        ],
     }
 
     # Persist to evolve_cache
-    _db.evolve_upsert(CACHE_TAB, **CACHE_SCOPE, data_json=json.dumps(selection, ensure_ascii=False))
+    _db.evolve_upsert(
+        CACHE_TAB, **CACHE_SCOPE, data_json=json.dumps(selection, ensure_ascii=False)
+    )
     return selection
+
+
+def _codex_tool_event(item: dict, status: str):
+    """Map a Codex non-command item into a normalized ``tool`` event.
+
+    Brings Codex tool-event granularity closer to Claude's by recognizing
+    file changes, web searches, and MCP tool calls in addition to Bash
+    commands. Returns None for item types that carry no useful tool signal.
+    """
+    it = item.get("type", "")
+    if it == "file_change":
+        changes = item.get("changes") or []
+        paths = []
+        kind = "Edit"
+        for ch in changes:
+            if isinstance(ch, dict):
+                if ch.get("path"):
+                    paths.append(ch["path"])
+                if ch.get("kind") in ("add", "create"):
+                    kind = "Write"
+        return {
+            "type": "tool",
+            "name": kind,
+            "status": status,
+            "detail": ", ".join(paths)[:200],
+        }
+    if it == "web_search":
+        return {
+            "type": "tool",
+            "name": "WebSearch",
+            "status": status,
+            "detail": str(item.get("query", ""))[:200],
+        }
+    if it == "mcp_tool_call":
+        server = item.get("server", "")
+        tool = item.get("tool", "")
+        detail = f"{server}.{tool}".strip(".")
+        return {
+            "type": "tool",
+            "name": "MCP",
+            "status": status,
+            "detail": detail[:200],
+        }
+    return None
 
 
 def _parse_stream_event(engine: str, line: str) -> dict:
@@ -471,34 +842,57 @@ def _parse_stream_event(engine: str, line: str) -> dict:
         # Tool execution started
         if evt_type == "item.started":
             item = obj.get("item", {})
-            if item.get("type") == "command_execution":
+            it = item.get("type")
+            if it == "command_execution":
                 cmd = item.get("command", "")
                 # Clean up shell wrapper
                 if cmd.startswith("/bin/"):
                     parts = cmd.split('"', 1)
                     cmd = parts[1].rstrip('"') if len(parts) > 1 else cmd
-                return {"type": "tool", "name": "Bash", "status": "running",
-                        "detail": cmd[:200]}
+                return {
+                    "type": "tool",
+                    "name": "Bash",
+                    "status": "running",
+                    "detail": cmd[:200],
+                }
+            return _codex_tool_event(item, "running")
         # Tool execution completed
         elif evt_type == "item.completed":
             item = obj.get("item", {})
-            if item.get("type") == "command_execution":
+            it = item.get("type")
+            if it == "command_execution":
                 output = item.get("aggregated_output", "")
-                return {"type": "tool", "name": "Bash", "status": "done",
-                        "detail": output or ""}
-            elif item.get("type") == "agent_message":
+                return {
+                    "type": "tool",
+                    "name": "Bash",
+                    "status": "done",
+                    "detail": output or "",
+                }
+            elif it == "agent_message":
                 text = item.get("text", "")
                 if text:
                     return {"type": "text", "content": text}
+            elif it == "reasoning":
+                text = item.get("text", "") or item.get("summary", "")
+                if text:
+                    return {"type": "text", "content": text}
+            else:
+                return _codex_tool_event(item, "done")
         # Codex error / turn failed (e.g. usage limit)
         elif evt_type in ("error", "turn.failed"):
             msg = obj.get("message", "") or obj.get("error", {}).get("message", "")
-            return {"type": "error", "message": f"codex: {msg}" if msg else "codex: unknown error"}
+            return {
+                "type": "error",
+                "message": f"codex: {msg}" if msg else "codex: unknown error",
+            }
         # Turn completed (usage stats)
         elif evt_type == "turn.completed":
             usage = obj.get("usage", {})
-            return {"type": "usage", "input_tokens": usage.get("input_tokens", 0),
-                    "output_tokens": usage.get("output_tokens", 0)}
+            return {
+                "type": "usage",
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            }
 
     elif engine == "claude":
         evt_type = obj.get("type", "")
@@ -516,7 +910,9 @@ def _parse_stream_event(engine: str, line: str) -> dict:
                 elif blk.get("type") == "tool_use":
                     # Flush pending text before tool
                     if pending_text:
-                        events.append({"type": "text", "content": "\n".join(pending_text)})
+                        events.append(
+                            {"type": "text", "content": "\n".join(pending_text)}
+                        )
                         pending_text = []
                     name = blk.get("name", "")
                     inp = blk.get("input", {})
@@ -533,8 +929,13 @@ def _parse_stream_event(engine: str, line: str) -> dict:
                         desc = inp.get("description", "")
                         prompt = inp.get("prompt", "")
                         detail = desc if desc else (prompt[:300] if prompt else "")
-                    event = {"type": "tool", "name": name, "status": "running",
-                             "detail": detail, "_tool_use_id": blk.get("id", "")}
+                    event = {
+                        "type": "tool",
+                        "name": name,
+                        "status": "running",
+                        "detail": detail,
+                        "_tool_use_id": blk.get("id", ""),
+                    }
                     if name == "Agent" and inp.get("prompt"):
                         event["prompt"] = inp["prompt"]
                     events.append(event)
@@ -555,12 +956,22 @@ def _parse_stream_event(engine: str, line: str) -> dict:
                         output = " ".join(
                             b.get("text", "") for b in output if isinstance(b, dict)
                         )
-                    events.append({"type": "tool", "name": "", "status": "done",
-                                   "detail": str(output),
-                                   "_tool_use_id": blk.get("tool_use_id", "")})
+                    events.append(
+                        {
+                            "type": "tool",
+                            "name": "",
+                            "status": "done",
+                            "detail": str(output),
+                            "_tool_use_id": blk.get("tool_use_id", ""),
+                        }
+                    )
             return events if events else None
         # Final result
         elif evt_type == "result":
+            # Check for explicit error flag (e.g. auth failure)
+            if obj.get("is_error") or obj.get("error"):
+                msg = obj.get("result", "") or obj.get("error", "")
+                return {"type": "error", "message": f"claude: {msg}"}
             result_text = obj.get("result", "")
             if result_text:
                 return {"type": "result", "content": result_text}

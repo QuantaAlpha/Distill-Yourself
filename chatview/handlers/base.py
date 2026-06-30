@@ -32,7 +32,13 @@ def _serve_file(handler, filepath: Path):
 
     data = filepath.read_bytes()
     handler.send_response(200)
-    ct = f"{mime}; charset=utf-8" if mime.startswith("text/") or mime.endswith("javascript") or mime.endswith("json") else mime
+    ct = (
+        f"{mime}; charset=utf-8"
+        if mime.startswith("text/")
+        or mime.endswith("javascript")
+        or mime.endswith("json")
+        else mime
+    )
     handler.send_header("Content-Type", ct)
     handler.send_header("Content-Length", len(data))
     # Local dev server: always revalidate so edits to html/js/css are picked
@@ -77,7 +83,11 @@ def _read_post_body(handler):
         _error(handler, 400, "Invalid Content-Length")
         return None
     if content_len < 0 or content_len > MAX_POST_BODY:
-        _error(handler, 413, f"Request body too large (max {MAX_POST_BODY // 1024 // 1024}MB)")
+        _error(
+            handler,
+            413,
+            f"Request body too large (max {MAX_POST_BODY // 1024 // 1024}MB)",
+        )
         return None
     return handler.rfile.read(content_len)
 

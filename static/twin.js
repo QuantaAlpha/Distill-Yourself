@@ -565,10 +565,49 @@
         "twin.empty.traitsData": "暂无数据。点击 Analyze 开始提取。",
         "twin.trait.supportCards": "🃏 支撑判断卡 ({n})",
         "twin.status.aiStarting": "AI 启动中…",
+        "twin.status.bgRunning": "后台分析仍在进行中…（切换页面不会中断）",
         "twin.bc.done": "分析完成 ✅",
         "twin.bc.failed": "分析失败，请检查错误并重试",
+        "twin.bc.interrupted": "分析已中断（可继续）",
         "twin.status.aiRunning": "AI 执行中… ({n} steps)",
         "twin.status.aiGenerating": "AI 分析生成中…",
+        "twin.analysis.failedTitle": "分析中断",
+        "twin.analysis.failedHint": "上游 AI 引擎返回错误。当前进度已保留，可以返回概览、重新分析，或从已完成阶段继续。",
+        "twin.analysis.viewOverview": "返回概览",
+        "twin.analysis.retry": "重新分析",
+        "twin.analysis.resume": "继续未完成阶段",
+        "twin.analysis.switchEngine": "改用 {engine} 重试",
+        "twin.progress.title": "分析进度",
+        "twin.progress.stage1": "证据事件提取",
+        "twin.progress.stage2": "判断卡蒸馏",
+        "twin.progress.stage3": "认知特质归纳",
+        "twin.progress.stage4": "Runtime 编译",
+        "twin.progress.stage5": "认知模型头像匹配",
+        "twin.progress.st.completed": "已完成",
+        "twin.progress.st.running": "进行中",
+        "twin.progress.st.failed": "失败",
+        "twin.progress.st.cancelled": "已取消",
+        "twin.progress.st.pending": "待处理",
+        "twin.progress.stats": "{events} 事件 · {cards} 判断卡 · {traits} 认知特质",
+        "twin.progress.runLabel": "Twin run_id：{id}",
+        "twin.progress.stageLine": "阶段 {n}/5：{name}",
+        "twin.progress.failedWith": "上次运行失败：{msg}",
+        "twin.progress.interrupted": "当前没有运行中的分析进程，以下为上一次运行的进度。",
+        "twin.progress.empty": "暂无进度记录。点击 Analyze 开始分析。",
+        "twin.progress.history.title": "历史记录（最近 5 次）",
+        "twin.progress.history.empty": "暂无历史运行记录。",
+        "twin.progress.history.current": "当前",
+        "twin.progress.rs.completed": "已完成",
+        "twin.progress.rs.partial": "部分完成",
+        "twin.progress.rs.failed": "失败",
+        "twin.progress.rs.cancelled": "已取消",
+        "twin.progress.rs.interrupted": "已中断",
+        "twin.progress.rs.running": "进行中",
+        "twin.progress.rs.empty": "无数据",
+        "twin.resume.prompt": "之前的分析在 {stages} 后中断。是否从中断处继续？",
+        "twin.resume.btn": "继续分析",
+        "twin.resume.fresh": "重新开始",
+        "twin.stream.idle": "连接似乎已空闲。分析可能已停滞。你可以继续等待，或返回后重试。",
         "twin.runtime.desc": "将判断卡与认知特质压缩成下一次会话可读取的上下文包。",
         "twin.sync.confirm": "将Distill Yourself同步到 CLAUDE.md？",
         "twin.sync.success": "同步完成：{cards} 判断卡 + {traits} 认知特质已写入",
@@ -685,10 +724,49 @@
         "twin.empty.traitsData": "No data. Click Analyze to start extracting.",
         "twin.trait.supportCards": "🃏 Supporting cards ({n})",
         "twin.status.aiStarting": "AI starting…",
+        "twin.status.bgRunning": "Analysis still running in the background… (switching tabs won't interrupt it)",
         "twin.bc.done": "Analysis complete ✅",
         "twin.bc.failed": "Analysis failed, please check the error and retry",
+        "twin.bc.interrupted": "Analysis interrupted (resumable)",
         "twin.status.aiRunning": "AI running… ({n} steps)",
         "twin.status.aiGenerating": "AI generating analysis…",
+        "twin.analysis.failedTitle": "Analysis interrupted",
+        "twin.analysis.failedHint": "The upstream AI engine returned an error. The current progress is preserved; you can return to overview, retry, or resume completed stages.",
+        "twin.analysis.viewOverview": "Back to overview",
+        "twin.analysis.retry": "Retry",
+        "twin.analysis.resume": "Resume incomplete stages",
+        "twin.analysis.switchEngine": "Retry with {engine}",
+        "twin.progress.title": "Analysis progress",
+        "twin.progress.stage1": "Evidence event extraction",
+        "twin.progress.stage2": "Judgment card distillation",
+        "twin.progress.stage3": "Cognitive trait generalization",
+        "twin.progress.stage4": "Runtime compile",
+        "twin.progress.stage5": "Cognitive avatar matching",
+        "twin.progress.st.completed": "Completed",
+        "twin.progress.st.running": "Running",
+        "twin.progress.st.failed": "Failed",
+        "twin.progress.st.cancelled": "Cancelled",
+        "twin.progress.st.pending": "Pending",
+        "twin.progress.stats": "{events} events · {cards} cards · {traits} traits",
+        "twin.progress.runLabel": "Twin run_id: {id}",
+        "twin.progress.stageLine": "Stage {n}/5: {name}",
+        "twin.progress.failedWith": "Last run failed: {msg}",
+        "twin.progress.interrupted": "No analysis is running right now. Showing the progress of the last run.",
+        "twin.progress.empty": "No progress recorded yet. Click Analyze to start.",
+        "twin.progress.history.title": "Recent runs (last 5)",
+        "twin.progress.history.empty": "No past runs yet.",
+        "twin.progress.history.current": "Current",
+        "twin.progress.rs.completed": "Completed",
+        "twin.progress.rs.partial": "Partial",
+        "twin.progress.rs.failed": "Failed",
+        "twin.progress.rs.cancelled": "Cancelled",
+        "twin.progress.rs.interrupted": "Interrupted",
+        "twin.progress.rs.running": "Running",
+        "twin.progress.rs.empty": "No data",
+        "twin.resume.prompt": "A previous analysis was interrupted after {stages}. Resume from where it left off?",
+        "twin.resume.btn": "Resume",
+        "twin.resume.fresh": "Start Fresh",
+        "twin.stream.idle": "Connection appears idle. The analysis may have stalled. You can wait longer or go back and retry.",
         "twin.runtime.desc": "Compresses judgment cards and cognitive traits into a context package readable by the next session.",
         "twin.sync.confirm": "Sync Distill Yourself to CLAUDE.md?",
         "twin.sync.success": "Sync complete: {cards} cards + {traits} traits written",
@@ -821,14 +899,96 @@
   let overviewData = null;
   let analysisAbort = null;
   let analysisRunning = false;
+  let hasAnalysisProgress = false;
   let eventsInited = false;
+  let _bgPollTimer = null; // polls /api/twin/progress to re-attach to a background run
+  let _statsPollTimer = null; // polls /api/twin/progress during a live SSE stream to refresh stats/stages
+  let _lastProgressRun = null; // last run dict from /api/twin/progress or /resume
+  let beforeUnloadBound = false;
+
+  // ── Page-refresh guard (Fix 1: survive page refresh) ──
+  if (!beforeUnloadBound) {
+    beforeUnloadBound = true;
+    window.addEventListener("beforeunload", (e) => {
+      if (analysisRunning) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    });
+  }
   let currentView = "overview"; // "overview" | "cards" | "card-detail" | "traits" | "trait-detail" | "analyzing"
   let _reloadCurrentView = null; // closure to re-fetch+re-render the active detail/list view (for locale change)
   let _activeRunId = "";
+  let _suggestedEngine = ""; // engine suggested by a failed run (e.g. "claude" when codex returns 521)
   try {
     const _storedRunId = localStorage.getItem("twin-active-run-id");
     if (_storedRunId) _activeRunId = _storedRunId;
   } catch (e) {}
+
+  // ── Progress snapshot cache (survive tab switch + full page refresh) ──
+  // The live tool-call DOM lives in #twin-stream-output and is preserved across
+  // in-app tab switches (the SPA only toggles .hidden). A full browser refresh
+  // destroys it, so we persist a lightweight snapshot (run_id / status / last
+  // error) to localStorage and rebuild an honest progress view on reload.
+  const PROGRESS_SNAPSHOT_KEY = "twin-progress-snapshot";
+  let _lastError = ""; // last analysis error message (persisted across reload)
+
+  function _isTerminalIncomplete(status) {
+    return status === "partial" || status === "interrupted" ||
+      status === "failed" || status === "cancelled";
+  }
+
+  function _saveProgressSnapshot(extra) {
+    try {
+      const run = _lastProgressRun || {};
+      const snap = Object.assign({
+        run_id: _activeRunId || run.run_id || "",
+        status: run.status || "",
+        stats: run.stats || {},
+        checkpoints: run.checkpoints || {},
+        error: _lastError || "",
+        ts: Date.now(),
+      }, extra || {});
+      localStorage.setItem(PROGRESS_SNAPSHOT_KEY, JSON.stringify(snap));
+    } catch (e) {}
+  }
+
+  function _loadProgressSnapshot() {
+    try {
+      const raw = localStorage.getItem(PROGRESS_SNAPSHOT_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function _clearProgressSnapshot() {
+    _lastError = "";
+    try { localStorage.removeItem(PROGRESS_SNAPSHOT_KEY); } catch (e) {}
+  }
+
+  /** Map a run status to an honest breadcrumb label key (never lie with "done"). */
+  function _breadcrumbKeyForStatus(status) {
+    if (status === "completed") return "twin.bc.done";
+    if (status === "failed" || status === "cancelled") return "twin.bc.failed";
+    if (status === "partial" || status === "interrupted") return "twin.bc.interrupted";
+    return "twin.progress.title";
+  }
+
+  /** True when the live stream container already holds meaningful rendered
+   * content (tool groups / text / banners / stage list / error actions), so a
+   * re-entry into the progress view must NOT wipe it. */
+  function _streamHasContent() {
+    const c = document.getElementById("twin-stream-output");
+    if (!c) return false;
+    return c.querySelector(
+      ".evolve-tool-group, .text-block, .twin-analysis-complete-banner, " +
+      ".twin-stream-error, .twin-analysis-error-actions, .twin-progress-stages"
+    ) != null;
+  }
+
+  function _hideResumePrompt() {
+    const container = document.getElementById("twin-resume-prompt");
+    if (container) { container.classList.add("hidden"); container.innerHTML = ""; }
+  }
 
   function _withRunId(url) {
     let u = url;
@@ -847,11 +1007,84 @@
     _registerTwinI18n();
     _applyTwinCssVars();
     if (!eventsInited) { bindEvents(); eventsInited = true; }
-    if (currentView === "analyzing") {
+    // Fix: if the viewing was set to "analyzing" on a previous page load, this
+    // tab was re-opened while showing analyzing. Since the in-memory
+    // analysisRunning flag is false (not persisted), show a proper completed /
+    // idle state instead of stale thinking dots. The background poll (below)
+    // will re-attach if the server-side stream is still live.
+    // Seed from the persisted snapshot so a full page refresh keeps the last
+    // known state (error / partial / completed) instead of resetting to default.
+    if (!_lastError) {
+      const snap = _loadProgressSnapshot();
+      if (snap) {
+        if (snap.error) _lastError = snap.error;
+        if (!_activeRunId && snap.run_id) _activeRunId = snap.run_id;
+        if (snap.status && !_lastProgressRun) {
+          _lastProgressRun = {
+            run_id: snap.run_id || _activeRunId || "",
+            status: snap.status,
+            stats: snap.stats || {},
+            checkpoints: snap.checkpoints || {},
+          };
+        }
+        if (snap.status && _isTerminalIncomplete(snap.status)) hasAnalysisProgress = true;
+      }
+    }
+    // If a live SSE stream is already running in THIS tab (in-app tab switch,
+    // DOM preserved), do not touch the rendered tool-call stream — just keep
+    // showing it. Only re-render when there is nothing live to preserve.
+    const _liveInTab = analysisRunning && _streamHasContent();
+    if (currentView === "analyzing" && !_liveInTab) {
       _showOnlyView("analysis");
-      _updateAnalyzeButton();
+      const _bcKey = analysisRunning ? "twin.bc.analyzing"
+        : _breadcrumbKeyForStatus(_lastProgressRun && _lastProgressRun.status);
+      setBreadcrumb([{ label: _tt(_bcKey) }]);
+      // Render whatever progress we already know about (likely none yet). The
+      // progress fetch below will refresh this with real checkpoints/stats and
+      // either re-attach (live) or downgrade to an interrupted/empty note.
+      _renderRunProgress(_lastProgressRun, analysisRunning);
+    } else if (_liveInTab) {
+      _showOnlyView("analysis");
+      setBreadcrumb([{ label: _tt("twin.bc.analyzing") }]);
+    }
+    _updateAnalyzeButton();
+    // ── Background re-attach (Group D): a prior analysis may still be running
+    // server-side even though this tab's SSE stream was dropped. Detect it and
+    // poll so the UI can rebuild progress without restarting from stage 1.
+    if (_liveInTab) {
+      // Already streaming live in this tab — nothing to re-attach or reset.
+      _updateProgressButton();
       return;
     }
+    fetch("/api/twin/progress")
+      .then(r => r.json())
+      .then((p) => {
+        _lastProgressRun = (p && p.run) || _lastProgressRun || null;
+        if (p && p.ok && p.running && !analysisRunning) {
+          if (p.run && p.run.run_id) {
+            _activeRunId = p.run.run_id;
+            try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+          }
+          hasAnalysisProgress = true;
+          _saveProgressSnapshot();
+          _attachBackgroundRun();
+          return true;
+        }
+        // No live process. If this tab was reopened while showing the analysis
+        // view, downgrade the stale "running" placeholder to a real (non-live)
+        // progress render so the user does not stare at frozen thinking dots.
+        if (currentView === "analyzing" && !analysisRunning) {
+          _renderRunProgress(_lastProgressRun, false);
+        }
+        _updateProgressButton();
+        return false;
+      })
+      .catch(() => false)
+      .then((attached) => { if (!attached) _initResume(); });
+    _updateAnalyzeButton();
+  };
+
+  function _initResume() {
     if (!_activeRunId) {
       // Resolve default run scope first, then load overview exactly once.
       fetch("/api/twin/resume", {
@@ -864,15 +1097,423 @@
           if (d && d.ok && d.run && d.run.run_id) {
             _activeRunId = d.run.run_id;
             try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+            // ── Auto-restore progress view if partial run exists (Fix 1) ──
+            if (d.run.status === "partial" || d.run.status === "interrupted") {
+              hasAnalysisProgress = true;
+              _updateProgressButton();
+            }
+            // ── Resume prompt (Issue 2.1) — but only if NOT still running ──
+            _resumePromptIfNotRunning(d.run);
           }
         })
         .catch(() => {})
         .finally(() => { loadOverview(); });
     } else {
-      loadOverview();
+      // Check if we have a partial run and show progress button
+      fetch("/api/twin/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: _getLang() }),
+      })
+        .then(r => r.json())
+        .then((d) => {
+          if (d && d.ok && d.run && (d.run.status === "partial" || d.run.status === "interrupted")) {
+            hasAnalysisProgress = true;
+            _updateProgressButton();
+            _resumePromptIfNotRunning(d.run);
+          }
+        })
+        .catch(() => {})
+        .finally(() => { loadOverview(); });
     }
-    _updateAnalyzeButton();
-  };
+  }
+
+  /** Show the resume prompt only after confirming the backend is NOT running.
+   * If a run is still live we instead re-attach to it (no misleading prompt). */
+  function _resumePromptIfNotRunning(runData) {
+    fetch("/api/twin/progress")
+      .then(r => r.json())
+      .then((p) => {
+        if (p && p.ok && p.running) {
+          // Still running — attach to the live run instead of prompting resume.
+          if (p.run) { _lastProgressRun = p.run; _activeRunId = p.run.run_id || _activeRunId; }
+          hasAnalysisProgress = true;
+          _updateProgressButton();
+          _saveProgressSnapshot({ status: "running", error: "" });
+          return;
+        }
+        _maybeShowResumePrompt(runData);
+      })
+      .catch(() => { _maybeShowResumePrompt(runData); });
+  }
+
+  /** Re-attach to a background analysis: show a progress banner + poll the
+   * server until the run finishes, then refresh the overview. Used when the
+   * SSE stream was dropped (tab switch / refresh) but the AI keeps running. */
+  function _attachBackgroundRun() {
+    currentView = "analyzing";
+    _showOnlyView("analysis");
+    setBreadcrumb([{ label: _tt("twin.bc.analyzing") }]);
+    _renderRunProgress(_lastProgressRun, true);
+    _updateProgressButton();
+    _startBackgroundPoll();
+  }
+
+  function _startBackgroundPoll() {
+    if (_bgPollTimer) return;
+    _bgPollTimer = setInterval(() => {
+      fetch("/api/twin/progress")
+        .then(r => r.json())
+        .then((p) => {
+          if (!p || !p.ok) return;
+          _lastProgressRun = p.run || _lastProgressRun;
+          if (!p.running) {
+            _stopBackgroundPoll();
+            const runStatus = p.run ? p.run.status : "";
+            const incomplete = _isTerminalIncomplete(runStatus);
+            hasAnalysisProgress = incomplete;
+            if (incomplete) {
+              // The run did NOT complete cleanly (failed / partial / cancelled).
+              // Honestly reflect that instead of pretending success.
+              _saveProgressSnapshot({ status: runStatus, error: _lastError });
+              if (currentView === "analyzing") {
+                setBreadcrumb([{ label: _tt(_breadcrumbKeyForStatus(runStatus)) }]);
+                _renderRunProgress(p.run || _lastProgressRun, false);
+                _appendBackToOverviewBtn();
+              }
+              _updateProgressButton();
+            } else {
+              // Clean server-side completion.
+              _clearProgressSnapshot();
+              if (currentView === "analyzing") {
+                const container = document.getElementById("twin-stream-output");
+                if (container && !container.querySelector(".twin-analysis-complete-banner")) {
+                  _hideThinking(container);
+                  const banner = document.createElement("div");
+                  banner.className = "twin-analysis-complete-banner";
+                  banner.innerHTML =
+                    '<span class="twin-analysis-complete-icon">&#10003;</span>' +
+                    '<span class="twin-analysis-complete-label">' + esc(_tt("twin.bc.done")) + '</span>' +
+                    '<button type="button" class="btn btn-ghost btn-sm" id="twin-poll-done-back-btn">' +
+                    esc(_tt("twin.analysis.viewOverview")) +
+                    '</button>';
+                  container.appendChild(banner);
+                  const backBtn = document.getElementById("twin-poll-done-back-btn");
+                  if (backBtn) backBtn.onclick = loadOverview;
+                }
+                setBreadcrumb([{ label: _tt("twin.bc.done") }]);
+                setTimeout(() => {
+                  if (currentView === "analyzing") { loadOverview(); }
+                }, 3000);
+              } else {
+                loadOverview();
+              }
+            }
+          } else if (currentView === "analyzing") {
+            // Still running — refresh the live progress view so newly completed
+            // stages + growing stats render in real time.
+            _renderRunProgress(p.run || _lastProgressRun, true);
+            _saveProgressSnapshot({ status: "running", error: "" });
+          }
+        })
+        .catch(() => {});
+    }, 1500);
+  }
+
+  function _stopBackgroundPoll() {
+    if (_bgPollTimer) { clearInterval(_bgPollTimer); _bgPollTimer = null; }
+  }
+
+  /** During a LIVE SSE stream (owned by this tab) poll /api/twin/progress so the
+   * run summary (events/cards/traits counters + per-stage status) ticks in real
+   * time next to the tool-call stream — the backend writes rows to the DB as it
+   * goes, so this reflects true progress, not the stale start-of-run values. */
+  function _startStatsPoll() {
+    if (_statsPollTimer) return;
+    _statsPollTimer = setInterval(() => {
+      if (!analysisRunning) { _stopStatsPoll(); return; }
+      fetch("/api/twin/progress")
+        .then(r => r.json())
+        .then((p) => {
+          if (!p || !p.ok || !p.run) return;
+          _lastProgressRun = p.run;
+          if (analysisRunning && currentView === "analyzing") {
+            _updateProgressSummary(p.run);
+            _renderRunHistory();
+          }
+          _saveProgressSnapshot({ status: "running", error: "" });
+        })
+        .catch(() => {});
+    }, 1500);
+  }
+
+  function _stopStatsPoll() {
+    if (_statsPollTimer) { clearInterval(_statsPollTimer); _statsPollTimer = null; }
+  }
+
+  /** Render a real progress view from a /api/twin/progress or /api/twin/resume
+   * run dict (checkpoints + stats), instead of bare thinking dots. Used by the
+   * background re-attach / reopen / "view progress" paths so a reopened tab
+   * actually shows what the backend has produced.
+   *
+   * @param {object|null} run  { run_id, status, stats, checkpoints }
+   * @param {boolean} live      true when an analysis process is still running
+   */
+  function _currentStageNum(checkpoints) {
+    // First stage (1-5) that is not yet completed — the stage "in flight".
+    for (let i = 1; i <= 5; i++) {
+      if ((checkpoints["" + i] || "pending") !== "completed") return i;
+    }
+    return 5;
+  }
+
+  /** Build the run-summary inner HTML (run header + stats line + stage list).
+   * Shared by the full re-render (_renderRunProgress) and the in-place live
+   * updater (_updateProgressSummary) so both views stay consistent. */
+  function _progressSummaryHtml(run, live) {
+    const checkpoints = (run && run.checkpoints) || {};
+    const stats = (run && run.stats) || {};
+    const stageNums = ["1", "2", "3", "4", "5"];
+    const hasAny = Object.keys(checkpoints).length > 0 ||
+      (stats.events || stats.cards || stats.traits);
+    const runId = (run && run.run_id) || _activeRunId || "";
+    let html = "";
+    // Run header — mirrors the analyze view ("Twin run_id: ... / Stage n/5 ...")
+    if (runId) {
+      const stageNo = _currentStageNum(checkpoints);
+      const stageName = _tt("twin.progress.stage" + stageNo);
+      html += '<div class="twin-progress-head">' +
+        '<span class="twin-progress-runid">' + esc(_tt("twin.progress.runLabel", { id: runId })) + '</span>' +
+        '<span class="twin-progress-stageline">' +
+        esc(_tt("twin.progress.stageLine", { n: stageNo, name: stageName })) + '</span>' +
+        '</div>';
+    }
+    // Honest terminal notes only when NOT live (a live run must never show a
+    // "failed/interrupted" banner above its still-growing stream).
+    if (!live && run && run.status === "failed") {
+      html += '<div class="twin-progress-note twin-progress-note-error">' +
+        esc(_lastError ? _tt("twin.progress.failedWith", { msg: _lastError }) : _tt("twin.analysis.failedHint")) +
+        '</div>';
+    } else if (!live && run && (run.status === "partial" || run.status === "interrupted" || run.status === "cancelled")) {
+      html += '<div class="twin-progress-note">' + esc(_tt("twin.progress.interrupted")) + '</div>';
+    }
+    if (hasAny) {
+      html += '<div class="twin-progress-stats">' +
+        esc(_tt("twin.progress.stats", {
+          events: stats.events || 0,
+          cards: stats.cards || 0,
+          traits: stats.traits || 0,
+        })) + '</div>';
+      html += '<ul class="twin-progress-stages">';
+      stageNums.forEach((n) => {
+        const st = checkpoints[n] || "pending";
+        const stKey = "twin.progress.st." + (
+          ["completed", "running", "failed", "cancelled"].includes(st) ? st : "pending"
+        );
+        html += '<li class="twin-progress-stage st-' + esc(st) + '">' +
+          '<span class="twin-progress-stage-name">' + esc(_tt("twin.progress.stage" + n)) + '</span>' +
+          '<span class="twin-progress-stage-status">' + esc(_tt(stKey)) + '</span>' +
+          '</li>';
+      });
+      html += '</ul>';
+    }
+    return { html, hasAny };
+  }
+
+  /** Update (or insert) the run-summary block at the TOP of the live stream
+   * container WITHOUT touching the tool-call cards below it. This is what keeps
+   * events/cards/traits + stage status ticking in real time during a live run
+   * (缺陷①: previously the poll path short-circuited and froze the summary). */
+  function _updateProgressSummary(run) {
+    const container = document.getElementById("twin-stream-output");
+    if (!container) return;
+    const runId = (run && run.run_id) || _activeRunId || "";
+    const built = _progressSummaryHtml(run, true);
+    if (!built.hasAny && !runId) return;
+    let summary = container.querySelector(".twin-progress-summary");
+    if (!summary) {
+      summary = document.createElement("div");
+      summary.className = "twin-progress-summary";
+      container.insertBefore(summary, container.firstChild);
+    }
+    summary.innerHTML = built.html;
+  }
+
+  function _renderRunProgress(run, live) {
+    const progress = show("twin-analysis-progress");
+    if (!progress) return;
+    // Never wipe a live, content-rich stream (in-app tab switch keeps the DOM):
+    // the rendered tool-call records must persist and keep growing. Instead of
+    // returning early (which froze the stats), refresh the summary in place.
+    if (live && _streamHasContent()) { _updateProgressSummary(run); _renderRunHistory(); return; }
+    const built = _progressSummaryHtml(run, live);
+    let inner = '<div class="twin-stream-container" id="twin-stream-output">';
+    inner += '<div class="twin-progress-summary">' + built.html + '</div>';
+    if (live) {
+      inner += '<div class="evolve-thinking">' +
+        '<span class="evolve-thinking-dot"></span>' +
+        '<span class="evolve-thinking-dot"></span>' +
+        '<span class="evolve-thinking-dot"></span>' +
+        '<span class="evolve-thinking-label">' + esc(_tt("twin.status.bgRunning")) + '</span>' +
+        '</div>';
+    } else if (!built.hasAny) {
+      inner += '<div class="twin-progress-note">' + esc(_tt("twin.progress.empty")) + '</div>';
+    }
+    inner += '</div>';
+    progress.innerHTML = inner;
+    // History list lives below the stream summary; re-append after the rebuild.
+    _renderRunHistory();
+  }
+
+  /** Map a run-level status to its localized label key for the history list. */
+  function _runStatusKey(status) {
+    const known = [
+      "completed", "partial", "failed", "cancelled",
+      "interrupted", "running", "empty",
+    ];
+    return "twin.progress.rs." + (known.includes(status) ? status : "empty");
+  }
+
+  /** Format an ISO-ish timestamp for compact display; falls back to raw text. */
+  function _fmtRunTs(ts) {
+    if (!ts) return "";
+    try {
+      // DB timestamps are UTC isoformat without a trailing 'Z'; normalize so
+      // the browser interprets them as UTC before converting to local time.
+      let iso = String(ts);
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(iso) && !/[zZ+]/.test(iso.slice(10))) {
+        iso += "Z";
+      }
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return String(ts);
+      const lang = _getLang();
+      return d.toLocaleString(lang === "en" ? "en-US" : "zh-CN", {
+        month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit",
+      });
+    } catch (e) { return String(ts); }
+  }
+
+  /** Build a single history row's inner HTML. */
+  function _runHistoryItemHtml(run) {
+    const stats = run.stats || {};
+    const runId = run.run_id || "";
+    const shortId = runId.length > 16 ? runId.slice(0, 16) + "…" : runId;
+    const isCurrent = !!_activeRunId && runId === _activeRunId;
+    const resumable = ["partial", "interrupted", "failed", "cancelled"].includes(run.status);
+    let html = '<span class="twin-run-badge rs-' + esc(run.status || "empty") + '">' +
+      esc(_tt(_runStatusKey(run.status))) + '</span>';
+    html += '<span class="twin-run-id" title="' + esc(runId) + '">' + esc(shortId) + '</span>';
+    html += '<span class="twin-run-stats">' + esc(_tt("twin.progress.stats", {
+      events: stats.events || 0, cards: stats.cards || 0, traits: stats.traits || 0,
+    })) + '</span>';
+    html += '<span class="twin-run-time">' + esc(_fmtRunTs(run.ts)) + '</span>';
+    if (isCurrent) {
+      html += '<span class="twin-run-current">' + esc(_tt("twin.progress.history.current")) + '</span>';
+    }
+    return { html, resumable, isCurrent, runId };
+  }
+
+  /** Fetch + render the recent-runs history list BELOW the progress stream.
+   * Newest first, max 5. The list lives in its own container so refreshing it
+   * never disturbs a live SSE stream rendered in #twin-stream-output. */
+  function _renderRunHistory() {
+    const progress = document.getElementById("twin-analysis-progress");
+    if (!progress) return;
+    fetch("/api/twin/runs")
+      .then(r => r.json())
+      .then((p) => {
+        const runs = (p && p.ok && Array.isArray(p.runs)) ? p.runs : [];
+        let box = document.getElementById("twin-run-history");
+        if (!box) {
+          box = document.createElement("div");
+          box.id = "twin-run-history";
+          box.className = "twin-run-history";
+          progress.appendChild(box);
+        } else if (box.parentNode !== progress) {
+          progress.appendChild(box);
+        }
+        let html = '<div class="twin-run-history-title">' +
+          esc(_tt("twin.progress.history.title")) + '</div>';
+        if (!runs.length) {
+          html += '<div class="twin-run-history-empty">' +
+            esc(_tt("twin.progress.history.empty")) + '</div>';
+          box.innerHTML = html;
+          return;
+        }
+        html += '<ul class="twin-run-history-list">';
+        const built = [];
+        runs.forEach((run) => {
+          const it = _runHistoryItemHtml(run);
+          built.push(it);
+          html += '<li class="twin-run-item' +
+            (it.isCurrent ? " is-current" : "") +
+            (it.resumable ? " is-resumable" : "") +
+            '" data-run-id="' + esc(it.runId) + '"' +
+            (it.resumable ? ' role="button" tabindex="0"' : "") +
+            '>' + it.html + '</li>';
+        });
+        html += '</ul>';
+        box.innerHTML = html;
+        // Resumable rows can be clicked to continue that exact run.
+        box.querySelectorAll(".twin-run-item.is-resumable").forEach((el) => {
+          const rid = el.getAttribute("data-run-id");
+          if (!rid) return;
+          const go = () => { if (!analysisRunning) _startAnalysisWithResume(rid); };
+          el.onclick = go;
+          el.onkeydown = (e) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
+          };
+        });
+      })
+      .catch(() => {});
+  }
+
+  /** Show a resume prompt if a partial checkpoint exists (Issue 2.1) */
+  function _maybeShowResumePrompt(runData) {
+    // Never show the "interrupted, resume?" prompt while a run is genuinely
+    // live — that message would be wrong and confusing.
+    if (analysisRunning) return;
+    const checkpoints = runData.checkpoints;
+    if (!checkpoints) return;
+    const completedStages = Object.values(checkpoints).filter(v => v === "completed").length;
+    const totalStages = Object.keys(checkpoints).length;
+    // Only prompt if at least one stage completed but not all are done,
+    // and the run status is not already "completed"
+    if (completedStages > 0 && completedStages < totalStages && runData.status !== "completed") {
+      const completedStr = Object.entries(checkpoints)
+        .filter(([, v]) => v === "completed")
+        .map(([k]) => `Stage ${k}`)
+        .join(", ");
+      const msg = _tt("twin.resume.prompt", { stages: completedStr });
+      const container = document.getElementById("twin-resume-prompt");
+      if (!container) return;
+      container.classList.remove("hidden");
+      container.innerHTML = `<div class="twin-resume-banner">
+        <span class="twin-resume-msg">${esc(msg)}</span>
+        <button type="button" class="btn btn-primary btn-sm" id="twin-resume-btn">${esc(_tt("twin.resume.btn"))}</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="twin-fresh-btn">${esc(_tt("twin.resume.fresh"))}</button>
+      </div>`;
+      const resumeBtn = document.getElementById("twin-resume-btn");
+      const freshBtn = document.getElementById("twin-fresh-btn");
+      if (resumeBtn) resumeBtn.onclick = () => {
+        container.classList.add("hidden");
+        _startAnalysisWithResume(runData.run_id);
+      };
+      if (freshBtn) freshBtn.onclick = () => {
+        container.classList.add("hidden");
+        // Clear the active run ID so a new analysis starts fresh
+        _activeRunId = "";
+        try { localStorage.removeItem("twin-active-run-id"); } catch (e) {}
+      };
+    }
+  }
+
+  function _startAnalysisWithResume(runId) {
+    _activeRunId = runId;
+    try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+    startAnalysis(true);
+  }
 
   // Re-render UI-shell strings on language change without interrupting a running analysis.
   let _localeListenerBound = false;
@@ -898,11 +1539,16 @@
     const btnAnalyze = document.getElementById("twin-btn-analyze");
     const btnSync = document.getElementById("twin-btn-sync");
     const btnProgress = document.getElementById("twin-btn-progress");
+    const btnExport = document.getElementById("twin-btn-export");
     if (btnAnalyze) btnAnalyze.onclick = () => {
       if (analysisRunning && analysisAbort) { _stopAnalysis(); } else { startAnalysis(); }
     };
     if (btnSync) btnSync.onclick = startSync;
     if (btnProgress) btnProgress.onclick = toggleProgressView;
+    if (btnExport) btnExport.onclick = () => {
+      // Dynamic import of export module
+      import('./js/export.js').then(mod => mod.exportTwinData()).catch(e => console.error(e));
+    };
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape" || !isPersonaOptionsOpen()) return;
       e.preventDefault();
@@ -911,16 +1557,58 @@
     }, true);
   }
 
-  /** Toggle between analysis progress view and overview */
   function toggleProgressView() {
     if (currentView === "analyzing") {
       loadOverview();
-    } else {
-      currentView = "analyzing";
-      _showOnlyView("analysis");
+      _updateProgressButton();
+      return;
+    }
+    currentView = "analyzing";
+    _showOnlyView("analysis");
+    if (analysisRunning) {
+      // Live stream owned by this tab — keep the existing rendered tool-call
+      // DOM intact and just show it.
       setBreadcrumb([{ label: _tt("twin.bc.analyzing") }]);
+      if (!_streamHasContent()) _renderRunProgress(_lastProgressRun, true);
+    } else {
+      // Not running here. Re-check the backend in case a background run is
+      // still live (started elsewhere / before a refresh); otherwise show the
+      // last known progress honestly (failed / partial / completed).
+      const status = _lastProgressRun && _lastProgressRun.status;
+      setBreadcrumb([{ label: _tt(_breadcrumbKeyForStatus(status)) }]);
+      _renderRunProgress(_lastProgressRun, false);
+      _appendBackToOverviewBtn();
+      fetch("/api/twin/progress")
+        .then(r => r.json())
+        .then((p) => {
+          if (p && p.ok && p.running) {
+            if (p.run && p.run.run_id) { _activeRunId = p.run.run_id; }
+            _lastProgressRun = p.run || _lastProgressRun;
+            hasAnalysisProgress = true;
+            _attachBackgroundRun();
+          } else if (p && p.run) {
+            _lastProgressRun = p.run;
+            setBreadcrumb([{ label: _tt(_breadcrumbKeyForStatus(p.run.status)) }]);
+            _renderRunProgress(p.run, false);
+            _appendBackToOverviewBtn();
+            _saveProgressSnapshot();
+          }
+        })
+        .catch(() => {});
     }
     _updateProgressButton();
+  }
+
+  /** Append a styled "Back to overview" button to the progress stream once. */
+  function _appendBackToOverviewBtn() {
+    const progress = document.getElementById("twin-stream-output");
+    if (!progress || progress.querySelector(".twin-progress-back-btn")) return;
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "btn btn-ghost btn-sm twin-progress-back-btn";
+    backBtn.textContent = _tt("twin.analysis.viewOverview");
+    backBtn.onclick = loadOverview;
+    progress.appendChild(backBtn);
   }
 
   /** Show only the specified sub-view, hide all others */
@@ -956,7 +1644,7 @@
   function _updateProgressButton() {
     const btnProgress = document.getElementById("twin-btn-progress");
     if (!btnProgress) return;
-    if (analysisRunning) {
+    if (analysisRunning || hasAnalysisProgress) {
       btnProgress.classList.remove("hidden");
       btnProgress.textContent = currentView === "analyzing" ? _tt("twin.btn.viewOverview") : _tt("twin.btn.viewProgress");
     } else {
@@ -966,6 +1654,8 @@
 
   function _stopAnalysis() {
     if (analysisAbort) analysisAbort.abort();
+    _stopBackgroundPoll();
+    _stopStatsPoll();
     if (_activeRunId) {
       fetch("/api/twin/cancel", {
         method: "POST",
@@ -985,6 +1675,7 @@
   function _restoreOverviewAfterStoppedAnalysis() {
     const progress = document.getElementById("twin-analysis-progress");
     if (progress) progress.innerHTML = "";
+    hasAnalysisProgress = false;
     if (overviewData) {
       renderOverview(overviewData);
     } else {
@@ -1001,7 +1692,7 @@
         overviewData = data;
         renderOverview(data);
       })
-      .catch(() => renderOverviewEmpty());
+      .catch(() => { renderOverviewEmpty(); if (window.showToast) window.showToast.error('Failed to load overview', 0, { label: 'Retry', callback: () => loadOverview() }); });
   }
 
   function _confColor(conf) {
@@ -1273,7 +1964,7 @@
     fetch(_withRunId(url))
       .then(r => r.json())
       .then(data => renderEventsList(data.events || [], signalFilter))
-      .catch(e => console.error("Failed to load events:", e));
+      .catch(e => { console.error("Failed to load events:", e); if (window.showToast) window.showToast.error('Failed to load events', 0, { label: 'Retry', callback: () => loadEventsList(signalFilter) }); });
   }
 
   function renderEventsList(items, activeFilter) {
@@ -1337,7 +2028,7 @@
     fetch(_withRunId("/api/twin/cards?limit=200"))
       .then(r => r.json())
       .then(data => renderCards(data.cards || []))
-      .catch(e => console.error("Failed to load cards:", e));
+      .catch(e => { console.error("Failed to load cards:", e); if (window.showToast) window.showToast.error('Failed to load cards', 0, { label: 'Retry', callback: () => loadCards() }); });
   }
 
   function renderCards(items) {
@@ -1392,7 +2083,7 @@
     fetch(`/api/twin/card/${cardId}?lang=${encodeURIComponent(_getLang())}`)
       .then(r => r.json())
       .then(data => renderCardDetail(data))
-      .catch(e => console.error("Failed to load card detail:", e));
+      .catch(e => { console.error("Failed to load card detail:", e); if (window.showToast) window.showToast.error('Failed to load card detail', 0, { label: 'Retry', callback: () => loadCardDetail(cardId) }); });
   }
 
   function renderCardDetail(data) {
@@ -1475,7 +2166,7 @@
     fetch(_withRunId(url))
       .then(r => r.json())
       .then(data => renderTraits(data.traits || [], category))
-      .catch(e => console.error("Failed to load traits:", e));
+      .catch(e => { console.error("Failed to load traits:", e); if (window.showToast) window.showToast.error('Failed to load traits', 0, { label: 'Retry', callback: () => loadTraits(category) }); });
   }
 
   function renderTraits(items, category) {
@@ -1530,7 +2221,7 @@
     fetch(`/api/twin/trait/${traitId}?lang=${encodeURIComponent(_getLang())}`)
       .then(r => r.json())
       .then(data => renderTraitDetail(data))
-      .catch(e => console.error("Failed to load trait detail:", e));
+      .catch(e => { console.error("Failed to load trait detail:", e); if (window.showToast) window.showToast.error('Failed to load trait detail', 0, { label: 'Retry', callback: () => loadTraitDetail(traitId) }); });
   }
 
   function renderTraitDetail(data) {
@@ -1588,9 +2279,12 @@
   // ── Analysis (SSE streaming with rich UI — mirrors evolve.js) ──
   // ══════════════════════════════════════════════════════════════════
 
-  function startAnalysis() {
+  function startAnalysis(resumeMode, engineOverride) {
     if (analysisRunning) return; // prevent double-start
+    _stopBackgroundPoll(); // a direct SSE stream supersedes background polling
+    _suggestedEngine = "";
     analysisRunning = true;
+    hasAnalysisProgress = true;
     _updateAnalyzeButton();
 
     const updatedEl = document.getElementById("twin-last-analyzed");
@@ -1624,6 +2318,48 @@
       toolGroupTotal: 0,
       toolGroupCollapseTimer: null,
       failed: false,
+      // Fix: SSE idle watchdog — if no event received for 30s, warn the user
+      // so they know the backend may have hung or the connection was dropped.
+      _watchdogTimer: null,
+      _lastEventTime: Date.now(),
+    };
+
+    // Kick off the watchdog that fires if no SSE event is seen for 30 seconds.
+    function _resetIdleWatchdog() {
+      streamState._lastEventTime = Date.now();
+      if (streamState._watchdogTimer) {
+        clearTimeout(streamState._watchdogTimer);
+        streamState._watchdogTimer = null;
+      }
+      streamState._watchdogTimer = setTimeout(() => {
+        const elapsed = Date.now() - streamState._lastEventTime;
+        if (elapsed >= 30000) {
+          // Only warn once and only if the stream hasn't ended yet
+          if (analysisRunning && !streamState.failed) {
+            const container = document.getElementById("twin-stream-output");
+            if (container && !container.querySelector(".twin-stream-idle-warning")) {
+              const warn = document.createElement("div");
+              warn.className = "twin-stream-idle-warning";
+              warn.textContent = _tt("twin.stream.idle");
+              container.appendChild(warn);
+              _autoScroll();
+            }
+          }
+        }
+      }, 32000);
+    }
+
+    // Start the watchdog immediately (before any SSE event arrives)
+    _resetIdleWatchdog();
+    // Poll the backend for real-time stats/stage status alongside the SSE
+    // tool stream so events/cards/traits counters stay live (缺陷①/③).
+    _startStatsPoll();
+
+    // Reset watchdog on every SSE event
+    const _origHandleFn = evt => _handleStreamEvent(evt, streamState);
+    const _wrappedHandleFn = function(evt) {
+      _resetIdleWatchdog();
+      _origHandleFn(evt);
     };
 
     // Abort previous if any
@@ -1631,45 +2367,141 @@
     const abortCtrl = new AbortController();
     analysisAbort = abortCtrl;
 
+    const body = { lang: _getLang(), engine: engineOverride || _getEngine() };
+    if (resumeMode) {
+      body.resume = true;
+      if (_activeRunId) body.run_id = _activeRunId;
+    }
+
     fetch("/api/twin/analyze", {
       method: "POST",
       signal: abortCtrl.signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lang: _getLang(), engine: _getEngine() }),
+      body: JSON.stringify(body),
     })
-      .then((response) => window.readSseStream(response, evt => _handleStreamEvent(evt, streamState)))
-      .then(() => _finishAnalysis(streamState, streamState.failed))
+      .then((response) => window.readSseStream(response, _wrappedHandleFn))
+      .then(() => {
+        // Clear watchdog since the stream ended normally
+        if (streamState._watchdogTimer) { clearTimeout(streamState._watchdogTimer); streamState._watchdogTimer = null; }
+        _finishAnalysis(streamState, streamState.failed);
+      })
       .catch((e) => {
+        // Clear watchdog
+        if (streamState._watchdogTimer) { clearTimeout(streamState._watchdogTimer); streamState._watchdogTimer = null; }
         if (e.name === "AbortError") {
           if (analysisAbort === abortCtrl) { analysisRunning = false; _updateAnalyzeButton(); }
           return;
         }
-        const container = document.getElementById("twin-stream-output");
-        if (container) {
-          _hideThinking(container);
-          const errDiv = document.createElement("div");
-          errDiv.className = "twin-stream-error";
-          errDiv.textContent = `❌ ${String(e)}`;
-          container.appendChild(errDiv);
-        }
+        _appendAnalysisError(String(e));
         _finishAnalysis(streamState, true);
       })
-      .finally(() => { if (analysisAbort === abortCtrl) analysisAbort = null; });
+      .finally(() => {
+        if (streamState._watchdogTimer) { clearTimeout(streamState._watchdogTimer); streamState._watchdogTimer = null; }
+        if (analysisAbort === abortCtrl) analysisAbort = null;
+      });
   }
 
   function _finishAnalysis(state, failed = false) {
     analysisRunning = false;
+    _stopStatsPoll();
+    // Fix: hasAnalysisProgress should only be true for partial/incomplete runs.
+    // A fully completed run should NOT show "view progress" (no SSE data to view).
+    if (failed) {
+      hasAnalysisProgress = true;
+      // Persist the failure so it survives tab switches / reloads.
+      _saveProgressSnapshot({ status: "failed", error: _lastError });
+    } else {
+      hasAnalysisProgress = false;
+      // A clean completion has no recoverable progress; drop the snapshot.
+      _clearProgressSnapshot();
+    }
     _finalizeToolGroup(state);
     _updateAnalyzeButton();
     const updatedEl = document.getElementById("twin-last-analyzed");
     if (updatedEl && !failed) { updatedEl.textContent = _tt("twin.status.updated", { time: new Date().toLocaleTimeString() }); }
+    // Send browser notification on completion
+    if (!failed && typeof window.sendBrowserNotification === 'function') {
+      window.sendBrowserNotification(
+        _tt("notify.twinDone"),
+        _tt("notify.analysisDone", { label: 'Twin' })
+      );
+    }
     // If user is still watching the analysis, switch to overview
     if (currentView === "analyzing" && !failed) {
       setBreadcrumb([{ label: _tt("twin.bc.done") }]);
-      setTimeout(() => loadOverview(), 1500);
+      // Replace the thinking dots with a complete banner
+      const container = document.getElementById("twin-stream-output");
+      if (container) {
+        const existingComplete = container.querySelector(".twin-analysis-complete-banner");
+        if (!existingComplete) {
+          const banner = document.createElement("div");
+          banner.className = "twin-analysis-complete-banner";
+          banner.innerHTML =
+            '<span class="twin-analysis-complete-icon">&#10003;</span>' +
+            '<span class="twin-analysis-complete-label">' + esc(_tt("twin.bc.done")) + '</span>' +
+            '<button type="button" class="btn btn-ghost btn-sm" id="twin-finish-back-btn">' +
+            esc(_tt("twin.analysis.viewOverview")) +
+            '</button>';
+          container.appendChild(banner);
+          const backBtn = document.getElementById("twin-finish-back-btn");
+          if (backBtn) backBtn.onclick = loadOverview;
+        }
+      }
+      // Auto-transition after a short delay (only if user hasn't clicked anything)
+      setTimeout(() => {
+        if (currentView === "analyzing") {
+          loadOverview();
+        }
+      }, 3000);
     } else if (currentView === "analyzing" && failed) {
-      setBreadcrumb([{ label: _tt("twin.bc.failed") }]);
+      _markAnalysisFailed(state);
     }
+  }
+
+  function _markAnalysisFailed(state) {
+    if (state) state.failed = true;
+    setBreadcrumb([{ label: _tt("twin.bc.failed") }]);
+    _appendAnalysisErrorActions();
+    _updateProgressButton();
+  }
+
+  function _appendAnalysisError(message) {
+    const container = document.getElementById("twin-stream-output");
+    if (!container) return;
+    _hideThinking(container);
+    const errDiv = document.createElement("div");
+    errDiv.className = "twin-stream-error";
+    errDiv.innerHTML = `❌ ${esc(message || "Unknown error")}`;
+    container.appendChild(errDiv);
+  }
+
+  function _appendAnalysisErrorActions() {
+    const container = document.getElementById("twin-stream-output");
+    if (!container || container.querySelector(".twin-analysis-error-actions")) return;
+    const actions = document.createElement("div");
+    actions.className = "twin-analysis-error-actions";
+    const switchBtn = _suggestedEngine
+      ? `<button type="button" class="btn-text" data-action="switch">${esc(_tt("twin.analysis.switchEngine", { engine: _suggestedEngine }))}</button>`
+      : "";
+    actions.innerHTML = `
+      <div class="twin-analysis-error-title">${esc(_tt("twin.analysis.failedTitle"))}</div>
+      <div class="twin-analysis-error-hint">${esc(_tt("twin.analysis.failedHint"))}</div>
+      <div class="twin-analysis-error-buttons">
+        <button type="button" class="btn-text" data-action="overview">${esc(_tt("twin.analysis.viewOverview"))}</button>
+        ${switchBtn}
+        <button type="button" class="btn-text" data-action="retry">${esc(_tt("twin.analysis.retry"))}</button>
+        <button type="button" class="btn-text" data-action="resume">${esc(_tt("twin.analysis.resume"))}</button>
+      </div>`;
+    actions.onclick = (e) => {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+      const action = btn.getAttribute("data-action");
+      if (action === "overview") loadOverview();
+      else if (action === "retry") startAnalysis(false);
+      else if (action === "switch") startAnalysis(true, _suggestedEngine);
+      else if (action === "resume") _startAnalysisWithResume(_activeRunId);
+    };
+    container.appendChild(actions);
   }
 
   /** Handle a single SSE event — renders tool cards, text blocks, thinking dots */
@@ -1822,12 +2654,11 @@
 
       case "error":
         state.failed = true;
+        if (evt.suggest_engine) _suggestedEngine = evt.suggest_engine;
+        _lastError = evt.message || "Unknown error";
+        _saveProgressSnapshot({ status: "failed", error: _lastError });
         _finalizeToolGroup(state);
-        _hideThinking(container);
-        const errDiv = document.createElement("div");
-        errDiv.className = "twin-stream-error";
-        errDiv.innerHTML = `❌ ${esc(evt.message || "Unknown error")}`;
-        container.appendChild(errDiv);
+        _appendAnalysisError(evt.message || "Unknown error");
         if (updatedEl) {
           updatedEl.textContent = _tt("twin.status.error", { msg: evt.message || "" });
           updatedEl.classList.remove("loading");
@@ -1902,7 +2733,7 @@
     fetch(_withRunId("/api/twin/runtime-preview"))
       .then(r => r.json())
       .then(data => renderRuntimePreview(data, options))
-      .catch(e => console.error("Failed to load runtime preview:", e));
+      .catch(e => { console.error("Failed to load runtime preview:", e); if (window.showToast) window.showToast.error('Failed to load runtime preview', 0, { label: 'Retry', callback: () => loadRuntimePreview(options) }); });
   }
 
   function renderRuntimeMarkdown(text) {

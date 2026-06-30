@@ -11,6 +11,31 @@
 #twin-actions { display: flex; align-items: center; gap: 12px; }
 #twin-last-analyzed { font-size: 12px; color: var(--text-muted); }
 #twin-body { flex: 1; overflow-y: auto; overflow-anchor: none; padding: 20px; }
+/* Resume banner (Fix 1: prominent, not easily dismissed) */
+#twin-resume-prompt { margin-bottom: 16px; }
+.twin-resume-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--accent-dim, #e8f0fe);
+  border: 1.5px solid var(--accent, #5856d6);
+  border-radius: var(--radius, 8px);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text, #1a1a1a);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  flex-wrap: wrap;
+}
+.twin-resume-msg {
+  flex: 1;
+  min-width: 200px;
+  line-height: 1.5;
+}
+.twin-resume-banner .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 #twin-persona-card {
   display: grid;
   grid-template-columns: 128px minmax(0, 1fr);
@@ -826,3 +851,254 @@
 .twin-stream-container .text-block { padding: 8px 4px; font-size: 13px; line-height: 1.6; color: var(--text); }
 .twin-stream-container .text-block pre { white-space: pre-wrap; font-size: 12px; color: var(--text-muted); margin: 0; }
 .twin-stream-error { color: #ef4444; padding: 8px 4px; font-size: 13px; }
+.twin-analysis-error-actions { margin: 12px 4px; padding: 14px; border: 1px solid rgba(239,68,68,.35); border-radius: 12px; background: rgba(239,68,68,.08); }
+.twin-analysis-error-title { font-weight: 700; color: #ef4444; margin-bottom: 6px; }
+.twin-analysis-error-hint { color: var(--text-muted); font-size: 13px; line-height: 1.5; margin-bottom: 12px; }
+.twin-analysis-error-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Analysis complete banner (shown when SSE source is gone but user revisits progress) */
+.twin-analysis-complete-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  margin: 8px 4px;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: 12px;
+  background: rgba(34, 197, 94, 0.08);
+}
+.twin-analysis-complete-icon {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #16a34a;
+  color: white;
+  font-size: 16px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.twin-analysis-complete-label {
+  flex: 1;
+  font-weight: 700;
+  font-size: 14px;
+  color: #166534;
+}
+
+/* Stream idle warning */
+.twin-stream-idle-warning {
+  margin: 10px 4px;
+  padding: 12px 14px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.08);
+  color: #92400e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Run progress view (re-attach / reopen / view-progress paths) */
+.twin-progress-note {
+  margin: 8px 4px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  background: var(--bg-subtle, #f8fafc);
+  color: var(--text-muted, #64748b);
+  font-size: 13px;
+  line-height: 1.5;
+}
+/* Progress run header — mirrors the live analyze view (run_id + Stage n/5). */
+.twin-progress-head {
+  margin: 4px 4px 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-surface, #fff);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,.04));
+}
+.twin-progress-runid {
+  display: block;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #475569);
+  letter-spacing: .01em;
+}
+.twin-progress-stageline {
+  display: block;
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text, #1e293b);
+}
+.twin-progress-note-error {
+  margin: 8px 4px 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(229, 62, 62, .35);
+  border-radius: 10px;
+  background: rgba(229, 62, 62, .08);
+  color: #c53030;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.twin-progress-stats {
+  margin: 4px 4px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #1e293b);
+}
+.twin-progress-stages {
+  list-style: none;
+  margin: 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.twin-progress-stage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  background: var(--bg, #fff);
+}
+.twin-progress-stage-name {
+  font-size: 13px;
+  color: var(--text, #1e293b);
+}
+.twin-progress-stage-status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--bg-subtle, #f1f5f9);
+  color: var(--text-muted, #64748b);
+}
+.twin-progress-stage.st-completed { border-color: rgba(34, 197, 94, 0.35); }
+.twin-progress-stage.st-completed .twin-progress-stage-status {
+  background: rgba(34, 197, 94, 0.12);
+  color: #166534;
+}
+.twin-progress-stage.st-running { border-color: rgba(59, 130, 246, 0.35); }
+.twin-progress-stage.st-running .twin-progress-stage-status {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+.twin-progress-stage.st-failed { border-color: rgba(239, 68, 68, 0.35); }
+.twin-progress-stage.st-failed .twin-progress-stage-status {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+.twin-progress-stage.st-cancelled .twin-progress-stage-status {
+  background: rgba(245, 158, 11, 0.12);
+  color: #92400e;
+}
+.twin-progress-back-btn {
+  margin: 14px 4px 4px;
+}
+/* Live run summary block sits ABOVE the tool-call stream and is refreshed in
+   place during polling so the tool cards below it are never wiped. */
+.twin-progress-summary {
+  display: block;
+}
+
+/* ── Recent runs history (below the progress stream) ───────────────────────
+   Newest first, max 5. Resumable rows are clickable to continue that run. */
+.twin-run-history {
+  margin: 22px 4px 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border, #e2e8f0);
+}
+.twin-run-history-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, #475569);
+  margin-bottom: 10px;
+}
+.twin-run-history-empty {
+  font-size: 13px;
+  color: var(--text-muted, #94a3b8);
+  padding: 6px 2px;
+}
+.twin-run-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.twin-run-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  background: var(--bg-surface, #fff);
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.twin-run-item.is-current {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.04);
+}
+.twin-run-item.is-resumable {
+  cursor: pointer;
+}
+.twin-run-item.is-resumable:hover {
+  border-color: var(--accent, #3b82f6);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,.06));
+}
+.twin-run-item.is-resumable:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 2px;
+}
+.twin-run-badge {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg-subtle, #f1f5f9);
+  color: var(--text-muted, #64748b);
+}
+.twin-run-badge.rs-completed { background: rgba(34, 197, 94, 0.12); color: #166534; }
+.twin-run-badge.rs-partial,
+.twin-run-badge.rs-interrupted { background: rgba(245, 158, 11, 0.14); color: #92400e; }
+.twin-run-badge.rs-running { background: rgba(59, 130, 246, 0.12); color: #1d4ed8; }
+.twin-run-badge.rs-failed { background: rgba(239, 68, 68, 0.12); color: #b91c1c; }
+.twin-run-badge.rs-cancelled { background: rgba(148, 163, 184, 0.18); color: #475569; }
+.twin-run-id {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  color: var(--text-secondary, #475569);
+}
+.twin-run-stats {
+  flex: 1 1 auto;
+  min-width: 120px;
+  font-size: 12px;
+  color: var(--text, #1e293b);
+}
+.twin-run-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-muted, #94a3b8);
+}
+.twin-run-current {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}

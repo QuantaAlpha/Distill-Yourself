@@ -38,8 +38,9 @@ function _ensureContainer() {
  * @param {string} message - The message text
  * @param {string} [type='info'] - 'success' | 'error' | 'warning' | 'info'
  * @param {number} [duration=3000] - Auto-dismiss time in ms; 0 = persistent
+ * @param {object} [action] - Optional action button { label, callback }
  */
-export function showToast(message, type = 'info', duration = 3000) {
+export function showToast(message, type = 'info', duration = 3000, action) {
   const container = _ensureContainer();
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
@@ -49,6 +50,7 @@ export function showToast(message, type = 'info', duration = 3000) {
   toast.innerHTML = `
     <span class="toast-icon" aria-hidden="true">${icon}</span>
     <span class="toast-message"></span>
+    ${action ? '<button type="button" class="toast-action-btn">' + action.label + '</button>' : ''}
     <button type="button" class="toast-close-btn" aria-label="Close">×</button>
   `;
   // Use textContent for message to prevent XSS
@@ -71,6 +73,17 @@ export function showToast(message, type = 'info', duration = 3000) {
   }
 
   closeBtn.addEventListener('click', dismiss);
+
+  // Action button
+  if (action) {
+    const actionBtn = toast.querySelector('.toast-action-btn');
+    if (actionBtn) {
+      actionBtn.addEventListener('click', () => {
+        dismiss();
+        action.callback();
+      });
+    }
+  }
 
   // Enter animation — trigger on next frame so transition applies
   requestAnimationFrame(() => {

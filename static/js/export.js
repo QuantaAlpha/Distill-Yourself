@@ -1,8 +1,8 @@
 /**
- * Export functionality — exportMarkdown, copyConversation.
+ * Export functionality — exportMarkdown, copyConversation, exportJson, exportTwinData.
  *
  * Usage:
- *   import { exportMarkdown, copyConversation } from './export.js';
+ *   import { exportMarkdown, copyConversation, exportJson, exportTwinData } from './export.js';
  */
 
 import { state } from './state.js';
@@ -47,6 +47,61 @@ export function exportMarkdown() {
   a.download = `${title.substring(0, 60).replace(/[\/\\?%*:|"<>]/g, "_")}.md`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── JSON Export ──────────────────────────────────────────────────
+export function exportJson() {
+  if (!state.currentMessages.length || !state.currentSessionId) return;
+
+  const title = dom.convTitle.textContent || "Untitled";
+  const meta = dom.convMeta.textContent || "";
+
+  const data = {
+    id: state.currentSessionId,
+    title,
+    meta,
+    messages: state.currentMessages,
+    exportedAt: new Date().toISOString(),
+  };
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${title.substring(0, 60).replace(/[\/\\?%*:|"<>]/g, "_")}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Twin Data Export ─────────────────────────────────────────────
+export async function exportTwinData() {
+  try {
+    const [cardsRes, traitsRes, eventsRes] = await Promise.all([
+      fetch("/api/twin/cards?limit=500"),
+      fetch("/api/twin/traits?limit=500"),
+      fetch("/api/twin/events?limit=500"),
+    ]);
+    const cardsData = await cardsRes.json();
+    const traitsData = await traitsRes.json();
+    const eventsData = await eventsRes.json();
+
+    const data = {
+      exportedAt: new Date().toISOString(),
+      cards: cardsData.cards || [],
+      traits: traitsData.traits || [],
+      events: eventsData.events || [],
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `twin-data-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    if (window.showToast) window.showToast.error('Export failed: ' + e.message);
+  }
 }
 
 // ── Copy Conversation (User + Assistant text only) ─────────────
