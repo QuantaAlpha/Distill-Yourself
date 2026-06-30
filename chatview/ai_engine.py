@@ -131,7 +131,7 @@ def _run_ai_engine(prompt, allow_write=False, timeout=300, engine_override="auto
 
 
 def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_override="auto",
-                          proc_ref=None):
+                          proc_ref=None, on_proc_start=None):
     """Execute prompt via detected AI engine, yielding SSE events as JSONL lines arrive.
 
     Yields dicts: {"type": "tool", "name": ..., "status": ...}
@@ -146,6 +146,12 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
         proc_ref: Optional mutable list (e.g. [None]) that receives the
             subprocess.Popen object once it is created. Used by callers that
             need to terminate the process from another thread.
+        on_proc_start: Optional callback invoked synchronously with the
+            subprocess.Popen object the instant it is created (before the
+            first blocking read). Lets callers register the process for
+            cancellation without waiting for the first streamed event — which
+            matters on the codex→claude fallback path, where the proc is only
+            created after an initial text event is yielded.
     """
     engine_override = _normalize_ai_engine(engine_override)
     engine = engine_override if engine_override != "auto" else _detect_ai_engine()
@@ -177,21 +183,24 @@ def _run_ai_engine_stream(prompt, allow_write=False, timeout=300, engine_overrid
                 raise RuntimeError("codex health check failed")
         except (subprocess.TimeoutExpired, RuntimeError, FileNotFoundError, OSError):
             yield {"type": "text", "content": "Codex unavailable, falling back to Claude...\n"}
-            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout, proc_ref)
+            yield from _run_engine_stream_inner("claude", prompt, allow_write, timeout, proc_ref, on_proc_start)
             return
         # Codex passed health check — use it
-        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout, proc_ref)
+        yield from _run_engine_stream_inner("codex", prompt, allow_write, timeout, proc_ref, on_proc_start)
         return
 
-    yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref)
+    yield from _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref, on_proc_start)
 
 
-def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None):
+def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None,
+                             on_proc_start=None):
     """Core streaming loop for a single engine. Yields event dicts.
 
     Args:
         proc_ref: Optional mutable list. If provided, proc_ref[0] is set to
             the subprocess.Popen object immediately after it is created.
+        on_proc_start: Optional callback invoked with the Popen object the
+            instant it is created (before the first blocking read).
     """
     if engine == "codex":
         sandbox = "workspace-write" if allow_write else "read-only"
@@ -222,6 +231,8 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None
 
     if proc_ref is not None:
         proc_ref[0] = proc
+    if on_proc_start is not None:
+        on_proc_start(proc)
 
     accumulated_text = ""
     stderr_tail = []
@@ -284,7 +295,7 @@ def _run_engine_stream_inner(engine, prompt, allow_write, timeout, proc_ref=None
     yield {"type": "done", "content": accumulated_text}
 
 
-def _select_cognitive_avatar(force=False, run_id="", lang="zh", cache_only=False):
+def _select_cognitive_avatar(force=False, run_id="", lang="zh", cache_only=False, engine="auto"):
     """Select cognitive avatar via AI. Returns selection dict or None.
 
     Checks evolve_cache for existing selection; if stale or missing, calls AI
@@ -409,7 +420,8 @@ user's trait combination (4-8 words, e.g. "Minimalist Architect", "Evidence-Driv
 {{"persona_title": "个性化类型名称", "selections": [{{"model_id": "cm_XXX", "confidence": 0.9, "rationale": "一句话理由"}}, {{"model_id": "cm_XXX", "confidence": 0.7, "rationale": "一句话理由"}}, {{"model_id": "cm_XXX", "confidence": 0.5, "rationale": "一句话理由"}}]}}"""
 
     try:
-        stdout, stderr, rc = _run_ai_engine(prompt, allow_write=False, timeout=120)
+        stdout, stderr, rc = _run_ai_engine(prompt, allow_write=False, timeout=120,
+                                            engine_override=engine)
     except FileNotFoundError:
         return None
 

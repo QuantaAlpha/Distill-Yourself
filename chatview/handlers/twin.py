@@ -104,23 +104,20 @@ def _run_twin_ai_stage(handler, prompt: str, stage_label: str, proc_ref=None,
             object once the AI engine process is started.
         engine: The AI engine to use ("auto" | "codex" | "claude").
     """
-    stream = _run_ai_engine_stream(prompt, allow_write=True, timeout=600,
-                                   engine_override=engine, proc_ref=proc_ref)
-    try:
-        # Prime the generator so the proc is created, then register it globally
-        # (the generator creates the proc before its first yield)
-        try:
-            first_evt = next(stream)
-        except StopIteration:
-            return True
-        if proc_ref is not None and proc_ref[0] is not None:
+    def _on_proc_start(proc):
+        # Register the live subprocess for cancellation the instant it is
+        # created — not after the first streamed event — so /api/twin/cancel can
+        # terminate it even during the codex→claude fallback's pre-stream gap,
+        # where the proc is born after an initial text event has been yielded.
+        if proc is not None and proc.poll() is None:
             with _analyze_lock:
                 global _active_analyze_proc
-                _active_analyze_proc = proc_ref[0]
-        _sse_event(handler, first_evt)
-        if first_evt.get("type") == "error":
-            return False
+                _active_analyze_proc = proc
 
+    stream = _run_ai_engine_stream(prompt, allow_write=True, timeout=600,
+                                   engine_override=engine, proc_ref=proc_ref,
+                                   on_proc_start=_on_proc_start)
+    try:
         for evt in stream:
             _sse_event(handler, evt)
             if evt.get("type") == "error":
@@ -242,7 +239,7 @@ def _handle_twin_analyze(handler):
         stage5_msg = "\n\nStage 5/5: Matching cognitive model avatar...\n" if en else "\n\nStage 5/5: 匹配认知模型头像...\n"
         _sse_event(handler, {"type": "text", "content": stage5_msg})
         try:
-            avatar = _select_cognitive_avatar(force=True, run_id=run_id, lang=lang)
+            avatar = _select_cognitive_avatar(force=True, run_id=run_id, lang=lang, engine=engine)
             if avatar:
                 match_prefix = "Match result" if en else "匹配结果"
                 _sse_event(handler, {"type": "text", "content": f"{match_prefix}: {avatar.get('model_name','')} ({avatar.get('persona_id','')})"})

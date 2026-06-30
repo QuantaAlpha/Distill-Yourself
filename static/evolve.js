@@ -298,6 +298,7 @@
       s.date || "7d",
       s.project || "",
       s.engine || "auto",
+      s.lang || evolveScopeLang || "zh",
     ].join("::");
   }
 
