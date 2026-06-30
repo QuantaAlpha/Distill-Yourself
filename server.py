@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Server core (ChatViewerHandler, main, PORT, etc.)
 # ---------------------------------------------------------------------------
 from chatview.server import *  # noqa: F401,F403
-from chatview.server import main, ChatViewerHandler, PORT, STATIC_DIR
+from chatview.server import main, ChatViewerHandler, PORT, STATIC_DIR  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Index state & functions (used by analyze.py, tests)

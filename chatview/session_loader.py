@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 
 from chatview import index as _idx
 

@@ -8,7 +8,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from chatview.commands.analysis import _get_filtered, _get_filtered_db, _get_messages_db
+from chatview.commands.analysis import _get_filtered_db, _get_messages_db
 from chatview.commands.corrections import (
     _data_corrections, _data_decisions, _data_errors, _data_highlights,
 )

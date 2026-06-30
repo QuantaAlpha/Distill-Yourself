@@ -3,9 +3,7 @@
 import json
 import os
 import re
-import sys
 from collections import defaultdict
-from pathlib import Path
 
 from chatview.ai_engine import _normalize_error
 from chatview.commands.analysis import _get_filtered, _get_filtered_db, _get_messages_db

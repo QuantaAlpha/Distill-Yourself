@@ -14,8 +14,7 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 from chatview.handlers.base import (
-    _json_response, _error, _serve_file, _start_sse, _sse_event,
-    _read_post_body, log_message,
+    _json_response, _error, _serve_file,
 )
 from chatview.handlers.data import (
     _get_projects, _get_sessions, _get_timeline, _get_stats,
@@ -30,12 +29,9 @@ from chatview.handlers.twin import (
     _handle_evolve_sync, _handle_twin_analyze, _handle_twin_sync,
 )
 from chatview.index import (
-    PROJECTS_DIR, CACHE_DIR, INDEX_CACHE,
-    INDEX_STALE_CHECK_INTERVAL,
+    INDEX_CACHE,
     _cached,
-    _index_refresh_lock, _index_refresh_running,
     build_index, schedule_index_refresh_if_stale,
-    _index_refresh_worker,
 )
 from chatview.session_loader import load_session
 from chatview.search import search_sessions

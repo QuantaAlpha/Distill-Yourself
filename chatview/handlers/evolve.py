@@ -12,7 +12,7 @@ from chatview.ai_engine import (
     _run_ai_engine,
     _run_ai_engine_stream,
 )
-from chatview.handlers.base import _json_response, _error, _sse_event, _start_sse
+from chatview.handlers.base import _sse_event, _start_sse
 from chatview import index as _idx
 
 # Tab classification (moved from class attrs)
