@@ -31,4 +31,5 @@ DESIGN.md
 *.jsonl
 __pycache__/
 *.pyc
+.tmp/
 bench.py

@@ -196,7 +196,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
                     pass
             _json_response(
                 self,
-                {"engines": engines, "default": engines[0] if engines else "claude"},
+                {"engines": ["auto"] + engines, "default": "auto"},
             )
         elif path == "/api/refresh":
             build_index()
@@ -541,6 +541,7 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             _handle_twin_sync(self)
         elif parsed.path == "/api/session/rename":
             from chatview.handlers.base import _read_post_body
+            from chatview import db as _db
 
             raw = _read_post_body(self)
             if raw is None:
