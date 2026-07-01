@@ -919,11 +919,16 @@
   }
   let currentView = "overview"; // "overview" | "cards" | "card-detail" | "traits" | "trait-detail" | "analyzing"
   let _reloadCurrentView = null; // closure to re-fetch+re-render the active detail/list view (for locale change)
+  const TWIN_ACTIVE_RUN_KEY = "twin-active-run-id";
+  const TWIN_VIEW_RUN_KEY = "twin-view-run-id";
   let _activeRunId = "";
+  let _viewRunId = "";
   let _suggestedEngine = ""; // engine suggested by a failed run (e.g. "claude" when codex returns 521)
   try {
-    const _storedRunId = localStorage.getItem("twin-active-run-id");
+    const _storedRunId = localStorage.getItem(TWIN_ACTIVE_RUN_KEY);
     if (_storedRunId) _activeRunId = _storedRunId;
+    const _storedViewRunId = localStorage.getItem(TWIN_VIEW_RUN_KEY);
+    if (_storedViewRunId) _viewRunId = _storedViewRunId;
   } catch (e) {}
 
   // ── Progress snapshot cache (survive tab switch + full page refresh) ──
@@ -974,7 +979,7 @@
         _lastProgressRun = Object.assign({}, data.run, extra || {});
         _activeRunId = _lastProgressRun.run_id || _activeRunId;
         if (_activeRunId) {
-          try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+          try { localStorage.setItem(TWIN_ACTIVE_RUN_KEY, _activeRunId); } catch (e) {}
         }
         _saveProgressSnapshot(_lastProgressRun);
         return _lastProgressRun;
@@ -1008,16 +1013,30 @@
     if (container) { container.classList.add("hidden"); container.innerHTML = ""; }
   }
 
-  function _withRunId(url) {
+  function _setViewRunId(runId) {
+    _viewRunId = runId || "";
+    try {
+      if (_viewRunId) localStorage.setItem(TWIN_VIEW_RUN_KEY, _viewRunId);
+      else localStorage.removeItem(TWIN_VIEW_RUN_KEY);
+    } catch (e) {}
+  }
+
+  function _runScopedUrl(url, runId) {
     let u = url;
-    if (_activeRunId) {
+    if (runId) {
       const sep = u.includes("?") ? "&" : "?";
-      u += sep + "run_id=" + encodeURIComponent(_activeRunId);
+      u += sep + "run_id=" + encodeURIComponent(runId);
     }
     const lang = _getLang();
     const sep = u.includes("?") ? "&" : "?";
     u += sep + "lang=" + encodeURIComponent(lang);
     return u;
+  }
+
+  function _withRunId(url, options) {
+    const opts = options || {};
+    const includeViewRun = opts.includeViewRun !== false;
+    return _runScopedUrl(url, includeViewRun ? _viewRunId : "");
   }
 
   // ── Init ──
@@ -1081,7 +1100,7 @@
         if (p && p.ok && p.running && !analysisRunning) {
           if (p.run && p.run.run_id) {
             _activeRunId = p.run.run_id;
-            try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+            try { localStorage.setItem(TWIN_ACTIVE_RUN_KEY, _activeRunId); } catch (e) {}
           }
           hasAnalysisProgress = true;
           _saveProgressSnapshot();
@@ -1113,8 +1132,7 @@
       .then(r => r.json())
       .then((d) => {
         if (d && d.ok && d.run && d.run.run_id) {
-          _activeRunId = d.run.run_id;
-          try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+          _lastProgressRun = d.run;
           if (d.run.status === "partial" || d.run.status === "interrupted") {
             hasAnalysisProgress = true;
             _updateProgressButton();
@@ -1123,7 +1141,7 @@
         } else {
           _activeRunId = "";
           hasAnalysisProgress = false;
-          try { localStorage.removeItem("twin-active-run-id"); } catch (e) {}
+          try { localStorage.removeItem(TWIN_ACTIVE_RUN_KEY); } catch (e) {}
         }
       })
       .catch(() => { /* network error: keep the stored id, do NOT clear */ })
@@ -1201,14 +1219,14 @@
                     '</button>';
                   container.appendChild(banner);
                   const backBtn = document.getElementById("twin-poll-done-back-btn");
-                  if (backBtn) backBtn.onclick = loadOverview;
+                  if (backBtn) backBtn.onclick = _loadDefaultOverview;
                 }
                 setBreadcrumb([{ label: _tt("twin.bc.done") }]);
                 setTimeout(() => {
-                  if (currentView === "analyzing") { loadOverview(); }
+                  if (currentView === "analyzing") { _loadDefaultOverview(); }
                 }, 3000);
               } else {
-                loadOverview();
+                _loadDefaultOverview();
               }
             }
           } else if (currentView === "analyzing") {
@@ -1408,7 +1426,7 @@
     const stats = run.stats || {};
     const runId = run.run_id || "";
     const shortId = runId.length > 16 ? runId.slice(0, 16) + "…" : runId;
-    const isCurrent = !!_activeRunId && runId === _activeRunId;
+    const isCurrent = !!runId && runId === (_viewRunId || _activeRunId);
     const resumable = ["partial", "interrupted", "failed", "cancelled"].includes(run.status);
     let html = '<span class="twin-run-badge rs-' + esc(run.status || "empty") + '">' +
       esc(_tt(_runStatusKey(run.status))) + '</span>';
@@ -1419,6 +1437,10 @@
     html += '<span class="twin-run-time">' + esc(_fmtRunTs(run.ts)) + '</span>';
     if (isCurrent) {
       html += '<span class="twin-run-current">' + esc(_tt("twin.progress.history.current")) + '</span>';
+    }
+    if (resumable) {
+      html += '<button type="button" class="btn btn-ghost btn-sm twin-run-resume" data-run-id="' +
+        esc(runId) + '">' + esc(_tt("twin.resume.btn")) + '</button>';
     }
     return { html, resumable, isCurrent, runId };
   }
@@ -1459,21 +1481,62 @@
             (it.isCurrent ? " is-current" : "") +
             (it.resumable ? " is-resumable" : "") +
             '" data-run-id="' + esc(it.runId) + '"' +
-            (it.resumable ? ' role="button" tabindex="0"' : "") +
+            ' role="button" tabindex="0"' +
             '>' + it.html + '</li>';
         });
         html += '</ul>';
         box.innerHTML = html;
-        // Resumable rows can be clicked to continue that exact run.
-        box.querySelectorAll(".twin-run-item.is-resumable").forEach((el) => {
+        // Rows switch the progress panel to that run. Resume is an explicit button.
+        box.querySelectorAll(".twin-run-item").forEach((el) => {
           const rid = el.getAttribute("data-run-id");
           if (!rid) return;
-          const go = () => { if (!analysisRunning) _startAnalysisWithResume(rid); };
+          const go = () => { _selectTwinRunForViewing(rid); };
           el.onclick = go;
           el.onkeydown = (e) => {
             if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
           };
         });
+        box.querySelectorAll(".twin-run-resume").forEach((btn) => {
+          const rid = btn.getAttribute("data-run-id");
+          if (!rid) return;
+          btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!analysisRunning) _startAnalysisWithResume(rid);
+          };
+        });
+      })
+      .catch(() => {});
+  }
+
+  function _loadDefaultOverview() {
+    _setViewRunId("");
+    loadOverview();
+  }
+
+  function _selectTwinRunForViewing(runId) {
+    if (!runId) return;
+    _setViewRunId(runId);
+    currentView = "analyzing";
+    hasAnalysisProgress = true;
+    _showOnlyView("analysis");
+    setBreadcrumb([{ label: _tt("twin.progress.title") }]);
+    _renderRunProgress({ run_id: runId, status: "empty", stats: {}, checkpoints: {} }, false);
+    _appendBackToOverviewBtn();
+    fetch(_runScopedUrl("/api/twin/progress", runId))
+      .then(r => r.json())
+      .then((p) => {
+        if (!p || !p.ok || !p.run) return;
+        _lastProgressRun = p.run;
+        const live = !!p.running;
+        if (live && p.run.run_id) {
+          _activeRunId = p.run.run_id;
+          try { localStorage.setItem(TWIN_ACTIVE_RUN_KEY, _activeRunId); } catch (e) {}
+        }
+        setBreadcrumb([{ label: _tt(_breadcrumbKeyForStatus(p.run.status)) }]);
+        _renderRunProgress(p.run, live);
+        if (!live) _appendBackToOverviewBtn();
+        _updateProgressButton();
       })
       .catch(() => {});
   }
@@ -1513,14 +1576,15 @@
         container.classList.add("hidden");
         // Clear the active run ID so a new analysis starts fresh
         _activeRunId = "";
-        try { localStorage.removeItem("twin-active-run-id"); } catch (e) {}
+        try { localStorage.removeItem(TWIN_ACTIVE_RUN_KEY); } catch (e) {}
       };
     }
   }
 
   function _startAnalysisWithResume(runId) {
     _activeRunId = runId;
-    try { localStorage.setItem("twin-active-run-id", _activeRunId); } catch (e) {}
+    _setViewRunId(runId);
+    try { localStorage.setItem(TWIN_ACTIVE_RUN_KEY, _activeRunId); } catch (e) {}
     startAnalysis(true);
   }
 
@@ -1571,7 +1635,7 @@
 
   function toggleProgressView() {
     if (currentView === "analyzing") {
-      loadOverview();
+      _loadDefaultOverview();
       _updateProgressButton();
       return;
     }
@@ -1583,18 +1647,25 @@
       setBreadcrumb([{ label: _tt("twin.bc.analyzing") }]);
       if (!_streamHasContent()) _renderRunProgress(_lastProgressRun, true);
     } else {
-      // Not running here. Re-check the backend in case a background run is
-      // still live (started elsewhere / before a refresh); otherwise show the
-      // last known progress honestly (failed / partial / completed).
-      const status = _lastProgressRun && _lastProgressRun.status;
+      // Not running here. Re-check the selected run first so a browser
+      // refresh preserves the user's history selection instead of jumping to
+      // whichever run is latest in the backend.
+      const selectedRunId = _viewRunId || "";
+      const initialRun = selectedRunId
+        ? { run_id: selectedRunId, status: "empty", stats: {}, checkpoints: {} }
+        : _lastProgressRun;
+      const status = initialRun && initialRun.status;
       setBreadcrumb([{ label: _tt(_breadcrumbKeyForStatus(status)) }]);
-      _renderRunProgress(_lastProgressRun, false);
+      _renderRunProgress(initialRun, false);
       _appendBackToOverviewBtn();
-      fetch("/api/twin/progress")
+      fetch(_runScopedUrl("/api/twin/progress", selectedRunId))
         .then(r => r.json())
         .then((p) => {
           if (p && p.ok && p.running) {
-            if (p.run && p.run.run_id) { _activeRunId = p.run.run_id; }
+            if (p.run && p.run.run_id) {
+              _activeRunId = p.run.run_id;
+              try { localStorage.setItem(TWIN_ACTIVE_RUN_KEY, _activeRunId); } catch (e) {}
+            }
             _lastProgressRun = p.run || _lastProgressRun;
             hasAnalysisProgress = true;
             _attachBackgroundRun();
@@ -1619,7 +1690,7 @@
     backBtn.type = "button";
     backBtn.className = "btn btn-ghost btn-sm twin-progress-back-btn";
     backBtn.textContent = _tt("twin.analysis.viewOverview");
-    backBtn.onclick = loadOverview;
+    backBtn.onclick = _loadDefaultOverview;
     progress.appendChild(backBtn);
   }
 
@@ -1694,24 +1765,19 @@
     if (updatedEl) { updatedEl.textContent = _tt("twin.status.stopped"); updatedEl.classList.remove("loading"); }
   }
 
-  function _restoreOverviewAfterStoppedAnalysis() {
-    const progress = document.getElementById("twin-analysis-progress");
-    if (progress) progress.innerHTML = "";
-    hasAnalysisProgress = false;
-    if (overviewData) {
-      renderOverview(overviewData);
-    } else {
-      loadOverview();
-    }
-  }
-
   // ── Overview: Vertical Pipeline Layout ──
   function loadOverview() {
     _reloadCurrentView = null;
-    fetch(_withRunId("/api/twin/overview"))
+    const url = "/api/twin/overview";
+    fetch(_withRunId(url, { includeViewRun: false }))
       .then(r => r.json())
       .then((data) => {
         overviewData = data;
+        if (data && data.run_id) {
+          if (!_viewRunId) _setViewRunId(data.run_id);
+        } else {
+          _setViewRunId("");
+        }
         renderOverview(data);
       })
       .catch(() => { renderOverviewEmpty(); if (window.showToast) window.showToast.error('Failed to load overview', 0, { label: 'Retry', callback: () => loadOverview() }); });
@@ -2304,6 +2370,7 @@
   function startAnalysis(resumeMode, engineOverride) {
     if (analysisRunning) return; // prevent double-start
     _stopBackgroundPoll(); // a direct SSE stream supersedes background polling
+    if (!resumeMode) _setViewRunId("");
     _suggestedEngine = "";
     analysisRunning = true;
     hasAnalysisProgress = true;
@@ -2471,13 +2538,13 @@
             '</button>';
           container.appendChild(banner);
           const backBtn = document.getElementById("twin-finish-back-btn");
-          if (backBtn) backBtn.onclick = loadOverview;
+          if (backBtn) backBtn.onclick = _loadDefaultOverview;
         }
       }
       // Auto-transition after a short delay (only if user hasn't clicked anything)
       setTimeout(() => {
         if (currentView === "analyzing") {
-          loadOverview();
+          _loadDefaultOverview();
         }
       }, 3000);
     } else if (currentView === "analyzing" && failed) {
@@ -2523,7 +2590,7 @@
       const btn = e.target.closest("[data-action]");
       if (!btn) return;
       const action = btn.getAttribute("data-action");
-      if (action === "overview") loadOverview();
+      if (action === "overview") _loadDefaultOverview();
       else if (action === "retry") startAnalysis(false);
       else if (action === "switch") startAnalysis(true, _suggestedEngine);
       else if (action === "resume") _startAnalysisWithResume(_activeRunId);
@@ -2638,8 +2705,9 @@
           const runIdMatch = /Twin run_id:\s*(\S+)/.exec(evt.content);
           if (runIdMatch) {
             _activeRunId = runIdMatch[1];
+            _setViewRunId(_activeRunId);
             try {
-              localStorage.setItem("twin-active-run-id", _activeRunId);
+              localStorage.setItem(TWIN_ACTIVE_RUN_KEY, _activeRunId);
             } catch (e) {}
           }
         }

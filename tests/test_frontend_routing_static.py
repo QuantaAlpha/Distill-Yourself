@@ -161,19 +161,24 @@ class TestFrontendRoutingStatic(unittest.TestCase):
 
         self.assertIn("saveChatToStorage();", init_new_body)
 
-    def test_analysis_history_has_rename_delete_and_default_titles(self):
+    def test_analysis_history_has_rename_delete_and_smart_default_titles(self):
         evolve_page = read_static("js/evolve-page.js")
         chat_css = read_static("css/chat.css")
 
         self.assertIn("function _deriveGlobalChatTitle(chat)", evolve_page)
-        self.assertIn("function _isDefaultGlobalChatTitle(title)", evolve_page)
+        self.assertIn("function _extractMeaningfulTitle(text)", evolve_page)
+        self.assertIn("function _formatGlobalChatMeta(chat)", evolve_page)
+        self.assertIn("chat.updatedAt = new Date().toISOString();", evolve_page)
         self.assertIn("export function renameGlobalChat(chatId)", evolve_page)
         self.assertIn("export function deleteGlobalChat(chatId)", evolve_page)
         self.assertIn("export function resetGlobalChatTitle(chatId)", evolve_page)
         self.assertIn('li.addEventListener("contextmenu"', evolve_page)
         self.assertIn('data-action="rename"', evolve_page)
         self.assertIn('data-action="delete"', evolve_page)
+        self.assertIn('chat-meta', evolve_page)
         self.assertIn(".chat-history-menu", chat_css)
+        self.assertIn(".chat-meta", chat_css)
+        self.assertIn(".session-item.active .chat-history-more", chat_css)
 
 
 if __name__ == "__main__":

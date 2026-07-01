@@ -9,6 +9,9 @@ from typing import Optional
 from . import core as _core
 from .core import get_conn
 
+_LEGACY_EVOLVE_TABS = ("profile", "memory", "rules", "signals", "patterns")
+_legacy_evolve_scanned_dirs = set()
+
 
 def _utc_now() -> str:
     return datetime.utcnow().isoformat()
@@ -113,6 +116,28 @@ def _legacy_evolve_cache_latest(tab: str) -> Optional[dict]:
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             continue
     return None
+
+
+def migrate_all_legacy_evolve_cache(force: bool = False) -> int:
+    """Eagerly migrate legacy `.cache/evolve/*.json` files into SQLite.
+
+    Older builds only persisted evolve results on disk. Newer code reads from
+    SQLite first, so migrate the newest legacy payload for each tab once per
+    cache directory to keep previously generated Profile/Memory/Rules/Signals/
+    Patterns data visible without waiting for a per-tab read fallback.
+    """
+    cache_dir = _legacy_evolve_cache_dir().resolve()
+    if not force and cache_dir in _legacy_evolve_scanned_dirs:
+        return 0
+
+    migrated = 0
+    for tab in _LEGACY_EVOLVE_TABS:
+        row = _legacy_evolve_cache_latest(tab)
+        if row:
+            migrated += 1
+
+    _legacy_evolve_scanned_dirs.add(cache_dir)
+    return migrated
 
 
 def evolve_upsert(

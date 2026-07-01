@@ -211,9 +211,12 @@ class ChatViewerHandler(SimpleHTTPRequestHandler):
             _handle_twin_runs(self)
         elif path == "/api/twin/overview":
             overview = {}
-            run_id = params.get("run_id", [None])[0]
-            # When run_id is given, scope counts/items to that run; else global.
+            requested_run_id = params.get("run_id", [None])[0]
+            run_id = requested_run_id or _db.get_latest_completed_run_id()
+            # When a run is explicit, or a completed run exists, scope to it.
+            # Otherwise fall back to legacy global aggregation.
             _ow = ("run_id=?", (run_id,)) if run_id else ("", ())
+            overview["run_id"] = run_id
             try:
                 card_count = _db.cm_count("judgment_cards", where=_ow[0], params=_ow[1])
                 card_items = _db.cm_get_all(

@@ -161,6 +161,35 @@ class TestSchemaMigration(unittest.TestCase):
             [{"title": "Legacy profile"}],
         )
 
+    def test_init_db_eagerly_migrates_all_legacy_evolve_tabs(self):
+        from pathlib import Path
+        from chatview.db import core as _dbcore
+        from chatview import db as _db
+
+        legacy_dir = Path(self._tmpdir) / "evolve"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        fixtures = {
+            "profile": {"categories": [{"title": "Legacy profile"}]},
+            "memory": {"nodes": [{"id": "legacy-node"}], "links": []},
+            "rules": {"rules": [{"title": "Legacy rule"}]},
+            "signals": {"events": [{"id": "legacy-signal"}], "timeline": []},
+            "patterns": {"bubbles": [{"id": "legacy-pattern"}], "cards": []},
+        }
+        for tab, payload in fixtures.items():
+            with open(
+                legacy_dir / f"{tab}.legacy-test.json", "w", encoding="utf-8"
+            ) as f:
+                f.write(__import__("json").dumps(payload, ensure_ascii=False))
+
+        # Simulate a fresh process/connection so eager migration runs again.
+        _dbcore._local = threading.local()
+        _db.init_db()
+
+        for tab, payload in fixtures.items():
+            row = _db.evolve_get(tab, "all", "7d", "", "legacy")
+            self.assertIsNotNone(row, tab)
+            self.assertEqual(row["data"], payload)
+
 
 # ---------------------------------------------------------------------------
 # Session lifecycle tests

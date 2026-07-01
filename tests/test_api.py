@@ -780,6 +780,21 @@ class TestTwinRunScopingReads(APITestCase):
         self.assertEqual(allb["traits"]["count"], 3)
         self.assertEqual(allb["events"]["count"], 3)
 
+    def test_overview_without_run_id_prefers_latest_completed_run_when_available(self):
+        from chatview import db as _db
+
+        for stage in range(1, 6):
+            _db.save_checkpoint(self.RUN_A, stage, "completed")
+        for stage in range(1, 3):
+            _db.save_checkpoint(self.RUN_B, stage, "completed")
+        _db.save_checkpoint(self.RUN_B, 3, "cancelled")
+
+        _, body = self._get("/api/twin/overview")
+        self.assertEqual(body["cards"]["count"], 2)
+        self.assertEqual(body["traits"]["count"], 2)
+        self.assertEqual(body["events"]["count"], 2)
+        self.assertEqual(body["run_id"], self.RUN_A)
+
     def test_runtime_preview_scoped_by_run_id(self):
         _, body = self._get(f"/api/twin/runtime-preview?run_id={self.RUN_A}")
         self.assertEqual(body["card_count"], 2)

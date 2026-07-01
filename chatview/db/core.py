@@ -461,6 +461,12 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_traits_run ON cognitive_traits(run_id)"
     )
     conn.commit()
+    try:
+        from . import evolve as _evolve
+
+        _evolve.migrate_all_legacy_evolve_cache()
+    except Exception:
+        pass
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str):

@@ -55,6 +55,7 @@ registerI18n({
     "global.renamePrompt": "重命名分析",
     "global.deleteConfirm": "删除“{title}”？",
     "global.stopBeforeDelete": "请先停止当前分析，再删除它。",
+    "global.moreActions": "更多操作",
     "global.send": "发送",
     "global.stop": "■ 停止",
     "global.emptyResponse": "（空响应）",
@@ -88,6 +89,7 @@ registerI18n({
     "global.renamePrompt": "Rename analysis",
     "global.deleteConfirm": "Delete “{title}”?",
     "global.stopBeforeDelete": "Stop the current analysis before deleting it.",
+    "global.moreActions": "More actions",
     "global.send": "Send",
     "global.stop": "Stop",
     "global.emptyResponse": "(empty response)",
@@ -460,6 +462,45 @@ function _shortenTitle(text, maxLen = 44) {
   return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "…" : cleaned;
 }
 
+function _extractMeaningfulTitle(text) {
+  if (!text) return "";
+  const lines = String(text)
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^#+\s*/, "")
+        .replace(/^\s*[-*•]+\s+/, "")
+        .replace(/^\s*\d+[\.)]\s+/, "")
+        .replace(/^#ai\b[\s:：-]*/i, "")
+        .replace(/^\/[a-z0-9_-]+\b[\s:：-]*/i, "")
+        .replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, "")
+        .trim(),
+    )
+    .filter(Boolean);
+
+  const isMeaningful = (line) => {
+    if (!line) return false;
+    if (!/[A-Za-z0-9\u4e00-\u9fff]/.test(line)) return false;
+    if (/^(#?ai|refresh|retry|continue|stop|help)$/i.test(line)) return false;
+    if (/^[^\w\u4e00-\u9fff]+$/.test(line)) return false;
+    const alphaNumCount = (line.match(/[A-Za-z0-9\u4e00-\u9fff]/g) || [])
+      .length;
+    if (alphaNumCount < 4 && !/[\u4e00-\u9fff]{2,}/.test(line)) return false;
+    return true;
+  };
+
+  for (const line of lines) {
+    if (isMeaningful(line)) return _shortenTitle(line);
+  }
+
+  const normalized = String(text)
+    .replace(/\s+/g, " ")
+    .replace(/^#ai\b[\s:：-]*/i, "")
+    .trim();
+  return isMeaningful(normalized) ? _shortenTitle(normalized) : "";
+}
+
 function _formatChatTime(value) {
   const d = value ? new Date(value) : new Date();
   if (Number.isNaN(d.getTime())) return "";
@@ -471,12 +512,46 @@ function _formatChatTime(value) {
   });
 }
 
+function _formatGlobalChatMessageCount(count) {
+  if (getLang() === "zh") return `${count} 条消息`;
+  return `${count} message${count === 1 ? "" : "s"}`;
+}
+
+function _getGlobalChatActivityTime(chat) {
+  return chat.updatedAt || chat.createdAt || "";
+}
+
+function _formatGlobalChatMeta(chat) {
+  const parts = [];
+  const timeLabel = _formatChatTime(_getGlobalChatActivityTime(chat));
+  if (timeLabel) {
+    parts.push(
+      getLang() === "zh" ? `更新于 ${timeLabel}` : `Updated ${timeLabel}`,
+    );
+  }
+  parts.push(_formatGlobalChatMessageCount((chat.messages || []).length));
+  return parts.join(" · ");
+}
+
+function _sortGlobalChatsByActivity() {
+  state.globalChatHistory.sort((a, b) => {
+    const bt = new Date(_getGlobalChatActivityTime(b) || 0).getTime();
+    const at = new Date(_getGlobalChatActivityTime(a) || 0).getTime();
+    return bt - at;
+  });
+}
+
+function _touchGlobalChat(chat) {
+  if (!chat) return;
+  chat.updatedAt = new Date().toISOString();
+}
+
 function _deriveGlobalChatTitle(chat) {
-  const firstUser = (chat.messages || []).find(
-    (m) => m.role === "user" && m.content,
-  );
-  const fromPrompt = firstUser ? _shortenTitle(firstUser.content) : "";
-  if (fromPrompt) return fromPrompt;
+  for (const msg of chat.messages || []) {
+    if (msg.role !== "user" || !msg.content) continue;
+    const fromPrompt = _extractMeaningfulTitle(msg.content);
+    if (fromPrompt) return fromPrompt;
+  }
   const suffix = _formatChatTime(chat.createdAt);
   return suffix ? `${t("global.newChat")} · ${suffix}` : t("global.newChat");
 }
@@ -687,12 +762,14 @@ export function _stopGlobalAi() {
 
 export function initNewGlobalChat() {
   const now = Date.now();
+  const isoNow = new Date(now).toISOString();
   state.currentGlobalChatId = "gchat-" + now;
   state.globalChatHistory.unshift({
     id: state.currentGlobalChatId,
     title: "",
     renamed: false,
-    createdAt: new Date(now).toISOString(),
+    createdAt: isoNow,
+    updatedAt: isoNow,
     messages: [],
   });
   persistActiveChatId();
@@ -715,10 +792,12 @@ export function saveGlobalChatMessage(role, content) {
   );
   if (chat) {
     chat.messages.push({ role, content });
+    _touchGlobalChat(chat);
     if (role === "user" && !chat.renamed) {
       chat.title = _deriveGlobalChatTitle(chat);
-      renderGlobalChatSidebar();
     }
+    _sortGlobalChatsByActivity();
+    renderGlobalChatSidebar();
   }
 }
 
@@ -726,13 +805,15 @@ export function renderGlobalChatSidebar() {
   const list = $("#chat-history-list");
   if (!list) return;
   list.innerHTML = "";
+  _sortGlobalChatsByActivity();
   state.globalChatHistory.forEach((chat) => {
     const li = document.createElement("li");
     li.className =
       "session-item" + (chat.id === state.currentGlobalChatId ? " active" : "");
     const title = _getGlobalChatTitle(chat);
-    li.innerHTML = `<div class="chat-history-row"><div class="session-title">${esc(title)}</div><button class="chat-history-more" title="More">⋯</button></div>
-      <div class="session-date">${chat.messages.length} messages</div>`;
+    const meta = _formatGlobalChatMeta(chat);
+    li.innerHTML = `<div class="chat-history-row"><div class="session-title">${esc(title)}</div><button class="chat-history-more" title="${esc(t("global.moreActions"))}" aria-label="${esc(t("global.moreActions"))}">⋯</button></div>
+      <div class="session-date chat-meta">${esc(meta)}</div>`;
     li.addEventListener("click", () => loadGlobalChatHistory(chat.id));
     li.addEventListener("contextmenu", (e) => _showChatHistoryMenu(e, chat.id));
     const more = li.querySelector(".chat-history-more");
@@ -914,7 +995,18 @@ export function loadChatFromStorage() {
     if (sc) state.sessionChatCache = JSON.parse(sc);
     const gc = localStorage.getItem("chatview-global-chats");
     if (gc) {
-      state.globalChatHistory = JSON.parse(gc);
+      const now = new Date().toISOString();
+      state.globalChatHistory = JSON.parse(gc)
+        .filter((chat) => chat && chat.id)
+        .map((chat) => ({
+          ...chat,
+          title: chat.title || "",
+          renamed: Boolean(chat.renamed),
+          createdAt: chat.createdAt || chat.updatedAt || now,
+          updatedAt: chat.updatedAt || chat.createdAt || now,
+          messages: Array.isArray(chat.messages) ? chat.messages : [],
+        }));
+      _sortGlobalChatsByActivity();
       renderGlobalChatSidebar();
     }
     const activeChatId = localStorage.getItem("chatview-ai-active-chat-id");

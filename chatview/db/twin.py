@@ -408,6 +408,24 @@ def get_latest_checkpoint() -> Optional[dict]:
     return {"run_id": row["run_id"], "stages": get_checkpoint(row["run_id"])}
 
 
+def get_latest_completed_run_id() -> Optional[str]:
+    """Return the newest run_id whose five-stage checkpoint fully completed."""
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT run_id,
+               MAX(COALESCE(completed_at, started_at, '1970-01-01')) AS ts
+        FROM twin_checkpoints
+        WHERE run_id IS NOT NULL AND run_id != ''
+        GROUP BY run_id
+        HAVING SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) >= 5
+        ORDER BY ts DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    return row["run_id"] if row else None
+
+
 def list_recent_run_ids(limit: int = 5) -> list:
     """Return the most recent distinct twin run_ids, newest first.
 

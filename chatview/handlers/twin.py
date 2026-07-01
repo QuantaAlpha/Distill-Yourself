@@ -1182,11 +1182,25 @@ def _handle_twin_progress(handler):
     the latest run + per-stage checkpoint map, so the UI can rebuild progress
     without restarting from stage 1.
     """
+    requested_run_id = ""
+    try:
+        from urllib.parse import parse_qs, urlparse
+
+        qs = parse_qs(urlparse(getattr(handler, "path", "")).query)
+        requested_run_id = (qs.get("run_id") or [""])[0] or ""
+    except Exception:
+        requested_run_id = ""
+
     with _analyze_lock:
         active_run_id = _active_analyze_run_id
         running = _is_twin_analysis_running_locked()
 
-    if running and active_run_id:
+    if requested_run_id:
+        run = _twin_run_info_for(requested_run_id)
+        if running and active_run_id == requested_run_id:
+            run["status"] = "running"
+        running = running and active_run_id == requested_run_id
+    elif running and active_run_id:
         # Prefer the active run over "latest" persisted data; a new run may not
         # have written rows yet, while an older completed run still exists.
         run = _twin_run_info_for(active_run_id)

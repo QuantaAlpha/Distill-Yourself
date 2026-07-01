@@ -1,4 +1,38 @@
 /* ---- Digital Twin ---- */
+:root {
+  --twin-progress-surface: var(--bg-secondary, #f8fafc);
+  --twin-progress-row: var(--bg-surface, #ffffff);
+  --twin-progress-success: #166534;
+  --twin-progress-success-bg: rgba(34, 197, 94, 0.14);
+  --twin-progress-success-border: rgba(34, 197, 94, 0.38);
+  --twin-progress-running: #1d4ed8;
+  --twin-progress-running-bg: rgba(59, 130, 246, 0.14);
+  --twin-progress-running-border: rgba(59, 130, 246, 0.38);
+  --twin-progress-danger: #b91c1c;
+  --twin-progress-danger-bg: rgba(239, 68, 68, 0.14);
+  --twin-progress-danger-border: rgba(239, 68, 68, 0.36);
+  --twin-progress-warn: #92400e;
+  --twin-progress-warn-bg: rgba(245, 158, 11, 0.16);
+  --twin-progress-neutral: #475569;
+  --twin-progress-neutral-bg: rgba(148, 163, 184, 0.18);
+}
+html[data-theme="dark"] {
+  --twin-progress-surface: rgba(15, 23, 42, 0.72);
+  --twin-progress-row: rgba(15, 23, 42, 0.88);
+  --twin-progress-success: #86efac;
+  --twin-progress-success-bg: rgba(34, 197, 94, 0.16);
+  --twin-progress-success-border: rgba(134, 239, 172, 0.42);
+  --twin-progress-running: #93c5fd;
+  --twin-progress-running-bg: rgba(59, 130, 246, 0.18);
+  --twin-progress-running-border: rgba(147, 197, 253, 0.44);
+  --twin-progress-danger: #fca5a5;
+  --twin-progress-danger-bg: rgba(239, 68, 68, 0.18);
+  --twin-progress-danger-border: rgba(252, 165, 165, 0.42);
+  --twin-progress-warn: #fcd34d;
+  --twin-progress-warn-bg: rgba(245, 158, 11, 0.18);
+  --twin-progress-neutral: #cbd5e1;
+  --twin-progress-neutral-bg: rgba(148, 163, 184, 0.22);
+}
 #twin-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 #twin-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--border-light); }
 #twin-breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; }
@@ -916,7 +950,7 @@
   padding: 12px 14px;
   border: 1px solid var(--border, #e2e8f0);
   border-radius: var(--radius-sm, 8px);
-  background: var(--bg-surface, #fff);
+  background: var(--twin-progress-row);
   box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,.04));
 }
 .twin-progress-runid {
@@ -968,7 +1002,7 @@
   padding: 10px 14px;
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 10px;
-  background: var(--bg, #fff);
+  background: var(--twin-progress-row);
 }
 .twin-progress-stage-name {
   font-size: 13px;
@@ -982,24 +1016,24 @@
   background: var(--bg-subtle, #f1f5f9);
   color: var(--text-muted, #64748b);
 }
-.twin-progress-stage.st-completed { border-color: rgba(34, 197, 94, 0.35); }
+.twin-progress-stage.st-completed { border-color: var(--twin-progress-success-border); }
 .twin-progress-stage.st-completed .twin-progress-stage-status {
-  background: rgba(34, 197, 94, 0.12);
-  color: #166534;
+  background: var(--twin-progress-success-bg);
+  color: var(--twin-progress-success);
 }
-.twin-progress-stage.st-running { border-color: rgba(59, 130, 246, 0.35); }
+.twin-progress-stage.st-running { border-color: var(--twin-progress-running-border); }
 .twin-progress-stage.st-running .twin-progress-stage-status {
-  background: rgba(59, 130, 246, 0.12);
-  color: #1d4ed8;
+  background: var(--twin-progress-running-bg);
+  color: var(--twin-progress-running);
 }
-.twin-progress-stage.st-failed { border-color: rgba(239, 68, 68, 0.35); }
+.twin-progress-stage.st-failed { border-color: var(--twin-progress-danger-border); }
 .twin-progress-stage.st-failed .twin-progress-stage-status {
-  background: rgba(239, 68, 68, 0.12);
-  color: #b91c1c;
+  background: var(--twin-progress-danger-bg);
+  color: var(--twin-progress-danger);
 }
 .twin-progress-stage.st-cancelled .twin-progress-stage-status {
-  background: rgba(245, 158, 11, 0.12);
-  color: #92400e;
+  background: var(--twin-progress-warn-bg);
+  color: var(--twin-progress-warn);
 }
 .twin-progress-back-btn {
   margin: 14px 4px 4px;
@@ -1012,11 +1046,11 @@
   padding: 12px 14px;
   border: 1px solid var(--border-light, #e2e8f0);
   border-radius: 12px;
-  background: var(--bg-secondary, #f8fafc);
+  background: var(--twin-progress-surface);
 }
 
 /* ── Recent runs history (below the progress stream) ───────────────────────
-   Newest first, max 5. Resumable rows are clickable to continue that run. */
+   Newest first, max 5. Rows view history; resume uses an explicit button. */
 .twin-run-history {
   margin: 22px 4px 4px;
   padding-top: 16px;
@@ -1049,21 +1083,19 @@
   padding: 10px 14px;
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 10px;
-  background: var(--bg-surface, #fff);
+  background: var(--twin-progress-row);
   transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
-}
-.twin-run-item.is-current {
-  border-color: rgba(59, 130, 246, 0.45);
-  background: rgba(59, 130, 246, 0.04);
-}
-.twin-run-item.is-resumable {
   cursor: pointer;
 }
-.twin-run-item.is-resumable:hover {
+.twin-run-item.is-current {
+  border-color: var(--twin-progress-running-border);
+  background: var(--twin-progress-running-bg);
+}
+.twin-run-item:hover {
   border-color: var(--accent, #3b82f6);
   box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,.06));
 }
-.twin-run-item.is-resumable:focus-visible {
+.twin-run-item:focus-visible {
   outline: 2px solid var(--accent, #3b82f6);
   outline-offset: 2px;
 }
@@ -1076,12 +1108,12 @@
   background: var(--bg-subtle, #f1f5f9);
   color: var(--text-muted, #64748b);
 }
-.twin-run-badge.rs-completed { background: rgba(34, 197, 94, 0.12); color: #166534; }
+.twin-run-badge.rs-completed { background: var(--twin-progress-success-bg); color: var(--twin-progress-success); }
 .twin-run-badge.rs-partial,
-.twin-run-badge.rs-interrupted { background: rgba(245, 158, 11, 0.14); color: #92400e; }
-.twin-run-badge.rs-running { background: rgba(59, 130, 246, 0.12); color: #1d4ed8; }
-.twin-run-badge.rs-failed { background: rgba(239, 68, 68, 0.12); color: #b91c1c; }
-.twin-run-badge.rs-cancelled { background: rgba(148, 163, 184, 0.18); color: #475569; }
+.twin-run-badge.rs-interrupted { background: var(--twin-progress-warn-bg); color: var(--twin-progress-warn); }
+.twin-run-badge.rs-running { background: var(--twin-progress-running-bg); color: var(--twin-progress-running); }
+.twin-run-badge.rs-failed { background: var(--twin-progress-danger-bg); color: var(--twin-progress-danger); }
+.twin-run-badge.rs-cancelled { background: var(--twin-progress-neutral-bg); color: var(--twin-progress-neutral); }
 .twin-run-id {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px;
@@ -1104,6 +1136,10 @@
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.12);
-  color: #1d4ed8;
+  background: var(--twin-progress-running-bg);
+  color: var(--twin-progress-running);
+}
+.twin-run-resume {
+  flex: none;
+  margin-left: auto;
 }

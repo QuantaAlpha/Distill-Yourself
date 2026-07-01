@@ -52,6 +52,16 @@ class TestFrontendStreamingStatic(unittest.TestCase):
         )
         self.assertIn('key.startsWith(prefix + "::")', script)
 
+    def test_evolve_cache_migrates_legacy_lang_scoped_keys(self):
+        script = read_static("evolve.js")
+
+        self.assertIn("function _migrateLegacyLangScopedCache()", script)
+        self.assertIn('key.split("::").length < 6', script)
+        self.assertIn(
+            "const legacyKey = getLegacyScopeCacheKey(tab, targetScope);", script
+        )
+        self.assertIn("_migrateLegacyLangScopedCache();", script)
+
     def test_evolve_preloaded_inactive_panels_stay_hidden(self):
         script = read_static("evolve.js")
         ensure_body = script[
@@ -94,18 +104,18 @@ class TestFrontendStreamingStatic(unittest.TestCase):
         self.assertIn("_syncEvolveChrome(tab, scope)", stop_body)
         self.assertIn("if (evolveStreamAborts[tab] === abortCtrl)", stream_body)
 
-    def test_twin_stop_restores_overview_and_clears_analysis_progress(self):
+    def test_twin_stop_preserves_progress_snapshot_and_does_not_clear_details(self):
         script = read_static("twin.js")
         stop_body = script[
-            script.index("function _stopAnalysis()") : script.index(
-                "// ── Overview", script.index("function _stopAnalysis()")
+            script.index("async function _stopAnalysis()") : script.index(
+                "// ── Overview", script.index("async function _stopAnalysis()")
             )
         ]
 
-        self.assertIn("_restoreOverviewAfterStoppedAnalysis()", stop_body)
-        self.assertIn('progress.innerHTML = ""', script)
-        self.assertIn("renderOverview(overviewData)", script)
-        self.assertIn("loadOverview()", script)
+        self.assertIn("_refreshAuthoritativeProgressSnapshot", stop_body)
+        self.assertIn("_renderRunProgress(run, false)", stop_body)
+        self.assertNotIn("_restoreOverviewAfterStoppedAnalysis()", stop_body)
+        self.assertNotIn('progress.innerHTML = ""', stop_body)
 
     def test_evolve_stream_handles_timeout_usage_and_persists_errors(self):
         script = read_static("evolve.js")
@@ -121,6 +131,38 @@ class TestFrontendStreamingStatic(unittest.TestCase):
         # error/timeout must persist to cache so the failure survives re-render
         # (otherwise the panel silently resets to "Not analyzed yet")
         self.assertIn("setCachedTab(tab, { _error:", handler_body)
+
+    def test_twin_history_click_views_run_and_resume_is_explicit(self):
+        script = read_static("twin.js")
+        history_body = script[
+            script.index("function _renderRunHistory()") : script.index(
+                "/** Show a resume prompt",
+                script.index("function _renderRunHistory()"),
+            )
+        ]
+
+        self.assertIn("_selectTwinRunForViewing(rid)", history_body)
+        self.assertIn("twin-run-resume", history_body)
+        self.assertIn("_startAnalysisWithResume(rid)", history_body)
+        self.assertNotIn("const go = () => { if (!analysisRunning) _startAnalysisWithResume(rid); };", history_body)
+
+    def test_twin_separates_viewed_run_from_running_run_and_default_overview(self):
+        script = read_static("twin.js")
+
+        self.assertIn("let _viewRunId", script)
+        self.assertIn("TWIN_VIEW_RUN_KEY", script)
+        self.assertIn("function _runScopedUrl(url, runId)", script)
+        self.assertIn("_withRunId(url, { includeViewRun: false })", script)
+        self.assertIn("function _loadDefaultOverview()", script)
+        self.assertIn("function _selectTwinRunForViewing(runId)", script)
+
+    def test_twin_progress_css_uses_theme_tokens_and_dark_overrides(self):
+        css = read_static("css/twin.css")
+
+        self.assertIn("--twin-progress-success", css)
+        self.assertIn("--twin-progress-running", css)
+        self.assertIn('--twin-progress-surface', css)
+        self.assertIn('html[data-theme="dark"]', css)
 
     def test_evolve_no_cache_is_not_rendered_as_failure(self):
         script = read_static("evolve.js")
