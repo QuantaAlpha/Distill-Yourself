@@ -2475,20 +2475,27 @@
       failed: false,
       // Fix: SSE idle watchdog — if no event received for 30s, warn the user
       // so they know the backend may have hung or the connection was dropped.
+      // Grace: the first event gets a longer timeout (90s) because AI engine
+      // cold-start (Claude auth probe, Codex health check) can take 30-60s.
       _watchdogTimer: null,
       _lastEventTime: Date.now(),
+      _firstEventReceived: false,
     };
 
-    // Kick off the watchdog that fires if no SSE event is seen for 30 seconds.
+    const IDLE_TIMEOUT_INITIAL = 90000;  // 90s grace for engine cold-start
+    const IDLE_TIMEOUT_NORMAL  = 30000;  // 30s after first event
+
+    // Kick off the watchdog that fires if no SSE event is seen within the timeout.
     function _resetIdleWatchdog() {
       streamState._lastEventTime = Date.now();
       if (streamState._watchdogTimer) {
         clearTimeout(streamState._watchdogTimer);
         streamState._watchdogTimer = null;
       }
+      const timeout = streamState._firstEventReceived ? IDLE_TIMEOUT_NORMAL : IDLE_TIMEOUT_INITIAL;
       streamState._watchdogTimer = setTimeout(() => {
         const elapsed = Date.now() - streamState._lastEventTime;
-        if (elapsed >= 30000) {
+        if (elapsed >= timeout) {
           // Only warn once and only if the stream hasn't ended yet
           if (analysisRunning && !streamState.failed) {
             const container = document.getElementById("twin-stream-output");
@@ -2501,7 +2508,7 @@
             }
           }
         }
-      }, 32000);
+      }, timeout + 2000);
     }
 
     // Start the watchdog immediately (before any SSE event arrives)
@@ -2513,6 +2520,7 @@
     // Reset watchdog on every SSE event
     const _origHandleFn = evt => _handleStreamEvent(evt, streamState);
     const _wrappedHandleFn = function(evt) {
+      streamState._firstEventReceived = true;
       _resetIdleWatchdog();
       _origHandleFn(evt);
     };
