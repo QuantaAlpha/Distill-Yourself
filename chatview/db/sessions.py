@@ -21,6 +21,17 @@ def upsert_session(meta: dict, user_texts: list, assistant_snippets: list):
     conn = get_conn()
     sid = meta["id"]
 
+    # Remove old title FTS entry BEFORE the REPLACE (which changes rowid).
+    # Use FTS5 external-content delete command with old values for correctness.
+    old_row = conn.execute(
+        "SELECT rowid, title, project_name FROM sessions WHERE id=?", (sid,)
+    ).fetchone()
+    if old_row:
+        conn.execute(
+            "INSERT INTO sessions_fts(sessions_fts, rowid, title, project_name) VALUES('delete', ?,?,?)",
+            (old_row["rowid"], old_row["title"] or "", old_row["project_name"] or ""),
+        )
+
     conn.execute(
         """INSERT OR REPLACE INTO sessions
            (id, title, date, last_date, file_path, file_size, file_mtime,
@@ -42,6 +53,14 @@ def upsert_session(meta: dict, user_texts: list, assistant_snippets: list):
             meta.get("source", "claude"),
             sid,  # for COALESCE subquery to preserve existing starred value
         ),
+    )
+    # Insert new title FTS entry after the session row exists.
+    session_rowid = conn.execute(
+        "SELECT rowid FROM sessions WHERE id=?", (sid,)
+    ).fetchone()["rowid"]
+    conn.execute(
+        "INSERT INTO sessions_fts(rowid, title, project_name) VALUES (?,?,?)",
+        (session_rowid, meta.get("title", ""), meta.get("projectName", "")),
     )
 
     # Delete old messages (cascades FTS via triggers would need manual rebuild;
@@ -104,6 +123,7 @@ def rebuild_fts():
     """Rebuild the FTS index from scratch."""
     conn = get_conn()
     conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+    conn.execute("INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild')")
     conn.commit()
 
 
@@ -129,6 +149,13 @@ def prune_stale_sessions(valid_file_paths) -> int:
         chunk = msg_ids[i : i + 900]
         ph = ",".join("?" * len(chunk))
         conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({ph})", chunk)
+    stale_rowids = [r["rowid"] for r in query_in_chunks(
+        conn, "SELECT rowid FROM sessions WHERE id IN ({placeholders})", stale_ids
+    )]
+    for i in range(0, len(stale_rowids), 900):
+        chunk = stale_rowids[i : i + 900]
+        ph = ",".join("?" * len(chunk))
+        conn.execute(f"DELETE FROM sessions_fts WHERE rowid IN ({ph})", chunk)
 
     for table in (
         "messages",
@@ -263,6 +290,28 @@ def search_fts(query: str, limit=50) -> list:
     """
     try:
         rows = conn.execute(like_sql, [f"%{query}%", limit]).fetchall()
+        return [dict(r) for r in rows]
+    except sqlite3.OperationalError:
+        return []
+
+
+def search_title_fts(query: str, limit=50) -> list:
+    """Full-text search on session titles and project names."""
+    conn = get_conn()
+    fts_sql = """
+        SELECT s.id AS session_id, s.title, s.project_name, s.date, s.source,
+               bm25(sessions_fts, 0.7, 1.8) AS rank
+        FROM sessions_fts
+        JOIN sessions s ON sessions_fts.rowid = s.rowid
+        WHERE sessions_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+    """
+    safe_query = _sanitize_fts_query(query)
+    if not safe_query:
+        return []
+    try:
+        rows = conn.execute(fts_sql, [safe_query, limit]).fetchall()
         return [dict(r) for r in rows]
     except sqlite3.OperationalError:
         return []

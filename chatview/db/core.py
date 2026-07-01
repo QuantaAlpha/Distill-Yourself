@@ -243,6 +243,13 @@ def init_db():
             content_rowid=id
         );
 
+        CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+            title,
+            project_name,
+            content=sessions,
+            content_rowid=rowid
+        );
+
         CREATE TABLE IF NOT EXISTS aggregates (
             key        TEXT PRIMARY KEY,
             value      TEXT,
@@ -460,6 +467,7 @@ def init_db():
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_traits_run ON cognitive_traits(run_id)"
     )
+    _ensure_sessions_fts(conn)
     conn.commit()
     try:
         from . import evolve as _evolve
@@ -533,3 +541,15 @@ def _migrate_evidence_run_unique(conn: sqlite3.Connection):
         FROM evidence_events_legacy
     """)
     conn.execute("DROP TABLE evidence_events_legacy")
+
+
+def _ensure_sessions_fts(conn: sqlite3.Connection):
+    """Populate the title FTS table when migrating an existing cache DB."""
+    session_count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    if session_count == 0:
+        return
+    # For external-content FTS5 tables, COUNT(*) can read from the content
+    # table even when the FTS shadow index is empty. Check docsize instead.
+    indexed_count = conn.execute("SELECT COUNT(*) FROM sessions_fts_docsize").fetchone()[0]
+    if indexed_count == 0:
+        conn.execute("INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild')")

@@ -140,6 +140,37 @@ class TestSchemaMigration(unittest.TestCase):
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(evidence_events)")}
         self.assertIn("idx_evidence_run", indexes)
 
+    def test_init_db_backfills_title_fts_for_existing_sessions(self):
+        conn = db.get_conn()
+        conn.executescript("""
+            CREATE TABLE sessions (
+                id          TEXT PRIMARY KEY,
+                title       TEXT,
+                date        TEXT,
+                last_date   TEXT,
+                file_path   TEXT UNIQUE,
+                file_size   INTEGER,
+                file_mtime  REAL,
+                user_message_count INTEGER,
+                preview     TEXT,
+                project     TEXT,
+                project_name TEXT,
+                source      TEXT
+            );
+        """)
+        conn.execute(
+            """INSERT INTO sessions
+               (id, title, date, last_date, file_path, project_name, source)
+               VALUES (?,?,?,?,?,?,?)""",
+            ("legacy-pr-session", "Review PR title from legacy cache", "2026-07-01", "2026-07-01", "/tmp/legacy-pr.jsonl", "test", "claude"),
+        )
+        conn.commit()
+
+        db.init_db()
+
+        rows = db.search_title_fts("PR")
+        self.assertTrue(any(r["session_id"] == "legacy-pr-session" for r in rows))
+
     def test_evolve_get_shared_migrates_legacy_file_into_sqlite(self):
         from pathlib import Path
         from chatview import db as _db
@@ -363,6 +394,65 @@ class TestSearchFTSEdgeCases(BaseTestCase):
         result = db.search_fts("")
         self.assertIsInstance(result, list)
         # The LIKE fallback with '%%' matches everything; main point: no crash
+
+
+    def test_title_fts_reupsert_removes_stale_terms(self):
+        """Re-upserting a session with a new title must not leave old FTS terms."""
+        meta_a = {**_META, "id": "reupsert-sess", "title": "AlphaProject", "filePath": "/tmp/reupsert.jsonl"}
+        meta_b = {**_META, "id": "reupsert-sess", "title": "BetaProject", "filePath": "/tmp/reupsert.jsonl"}
+
+        db.upsert_session(meta_a, [], [])
+        hits_a = db.search_title_fts("AlphaProject")
+        self.assertEqual(len(hits_a), 1)
+
+        db.upsert_session(meta_b, [], [])
+        hits_old = db.search_title_fts("AlphaProject")
+        hits_new = db.search_title_fts("BetaProject")
+        self.assertEqual(len(hits_old), 0, "Old title should not match after re-upsert")
+        self.assertEqual(len(hits_new), 1)
+
+    def test_search_sessions_prioritizes_content_matches_over_fuzzy_title_noise(self):
+        """Content FTS matches should not be buried by fuzzy title fallback noise."""
+        from chatview import index as _idx
+        from chatview.search import search_sessions
+
+        noisy_meta = {
+            **_META,
+            "id": "noise-proj-title",
+            "title": "/Users/example/Desktop/proj/no-match",
+            "date": "2026-07-01T10:00:00Z",
+            "lastDate": "2026-07-01T10:00:00Z",
+            "filePath": "/tmp/noise-proj-title.jsonl",
+        }
+        pr_meta = {
+            **_META,
+            "id": "real-pr-session",
+            "title": "Review new PR",
+            "date": "2026-06-01T10:00:00Z",
+            "lastDate": "2026-06-01T10:00:00Z",
+            "filePath": "/tmp/real-pr-session.jsonl",
+        }
+        db.upsert_session(noisy_meta, [{"idx": 0, "text": "No relevant acronym here", "ts": "2026-07-01T10:00:00Z"}], [])
+        db.upsert_session(pr_meta, [{"idx": 0, "text": "Please review PR 16 carefully", "ts": "2026-06-01T10:00:00Z"}], [])
+
+        with _idx._index_lock:
+            old_index = _idx._index
+            _idx._index = {
+                "projects": {},
+                "sessions": {
+                    noisy_meta["id"]: noisy_meta,
+                    pr_meta["id"]: pr_meta,
+                },
+                "_file_mtimes": {},
+            }
+        try:
+            results = search_sessions("PR", refresh_on_empty=False)
+        finally:
+            with _idx._index_lock:
+                _idx._index = old_index
+
+        self.assertGreaterEqual(len(results), 1)
+        self.assertEqual(results[0]["sessionId"], "real-pr-session")
 
 
 if __name__ == "__main__":

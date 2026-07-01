@@ -38,31 +38,59 @@ def search_sessions(query: str, refresh_on_empty: bool = True) -> list:
 
     results = []
     seen = set()  # (session_id, idx) dedup
+    query_lower = query.lower()
 
     # 1) FTS5 search on message content (fast, indexed)
-    fts_rows = _db.search_fts(query, limit=100)
+    fts_rows = _db.search_fts(query, limit=150)
     for row in fts_rows:
         key = (row["session_id"], row["idx"])
         if key in seen:
             continue
         seen.add(key)
         text = row.get("text", "")
-        results.append(
-            {
-                "sessionId": row["session_id"],
-                "title": row.get("title", "Untitled"),
-                "project": row.get("project_name", ""),
-                "date": row.get("ts", ""),
-                "messageIndex": row["idx"],
-                "snippet": _make_snippet(text, query.lower()),
-                "timestamp": row.get("ts", ""),
-                "matchType": "content",
-                "score": 0.9,
-            }
-        )
+        results.append({
+            "sessionId": row["session_id"],
+            "title": row.get("title", "Untitled"),
+            "project": row.get("project_name", ""),
+            "date": row.get("ts", ""),
+            "messageIndex": row["idx"],
+            "snippet": _make_snippet(text, query.lower()),
+            "timestamp": row.get("ts", ""),
+            "matchType": "content",
+            "score": 1.0,
+        })
 
-    # 2) Title fuzzy match (still in-memory, but lightweight — one string per session)
-    query_lower = query.lower()
+    # 2) FTS5 search on titles/projects.
+    title_rows = _db.search_title_fts(query, limit=150)
+    for row in title_rows:
+        sid = row["session_id"]
+        title = row.get("title") or "Untitled"
+        project = row.get("project_name", "")
+        if (sid, 0) in seen:
+            continue
+        seen.add((sid, 0))
+        results.append({
+            "sessionId": sid,
+            "title": title,
+            "project": project,
+            "date": row.get("date", ""),
+            "messageIndex": 0,
+            "snippet": title,
+            "timestamp": row.get("date", ""),
+            "matchType": "title",
+            "score": 1.0,
+        })
+
+    # 3) Lower-priority fuzzy title fallback for queries FTS does not handle well.
+    _append_fuzzy_title_matches(results, seen, query_lower)
+
+    results.sort(key=lambda r: (r.get("score", 0), r.get("date", "")), reverse=True)
+    if not results and refresh_on_empty:
+        schedule_index_refresh_if_stale(reason="search-empty")
+    return results[:100]
+
+
+def _append_fuzzy_title_matches(results: list, seen: set, query_lower: str):
     tokens = _tokenize_query(query_lower)
     with _idx._index_lock:
         sessions = dict(_idx._index.get("sessions", {}))
@@ -71,24 +99,17 @@ def search_sessions(query: str, refresh_on_empty: bool = True) -> list:
         matched, score = _fuzzy_match(title.lower(), query_lower, tokens)
         if matched and (sid, 0) not in seen:
             seen.add((sid, 0))
-            results.append(
-                {
-                    "sessionId": sid,
-                    "title": title,
-                    "project": meta.get("projectName", ""),
-                    "date": meta.get("date", ""),
-                    "messageIndex": 0,
-                    "snippet": title,
-                    "timestamp": meta.get("date", ""),
-                    "matchType": "title",
-                    "score": score,
-                }
-            )
-
-    results.sort(key=lambda r: (-r.get("score", 0), r.get("date", "")), reverse=False)
-    if not results and refresh_on_empty:
-        schedule_index_refresh_if_stale(reason="search-empty")
-    return results[:100]
+            results.append({
+                "sessionId": sid,
+                "title": title,
+                "project": meta.get("projectName", ""),
+                "date": meta.get("date", ""),
+                "messageIndex": 0,
+                "snippet": title,
+                "timestamp": meta.get("date", ""),
+                "matchType": "title",
+                "score": min(score, 0.7),
+            })
 
 
 def _make_snippet(text: str, query: str, tokens: list = None, ctx: int = 80) -> str:

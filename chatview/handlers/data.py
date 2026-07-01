@@ -565,6 +565,13 @@ def _delete_session(session_id: str) -> dict:
             ph = ",".join("?" * len(chunk))
             conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({ph})", chunk)
 
+        # Delete sessions_fts rows
+        session_rowid = conn.execute(
+            "SELECT rowid FROM sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        if session_rowid:
+            conn.execute("DELETE FROM sessions_fts WHERE rowid=?", (session_rowid["rowid"],))
+
         # Delete messages
         conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
 
