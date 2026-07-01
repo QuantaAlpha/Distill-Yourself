@@ -508,7 +508,8 @@
       container.insertBefore(summary, container.firstChild);
     }
     summary.classList.toggle("is-live", !!live);
-    summary.innerHTML = _progressSummaryHtml(tab, progressState, live);
+    const html = _progressSummaryHtml(tab, progressState, live);
+    if (summary.innerHTML !== html) summary.innerHTML = html;
   }
 
   function _isTransientEvolveError(error) {
@@ -676,37 +677,44 @@
   }
 
   /** Update per-tab status indicators (spinner/checkmark/error in tab buttons) */
+  const _tabStatusCache = {};
   function _updateTabStatusIndicators() {
     const scope = getEvolveScope();
     EVOLVE_TABS.forEach((tab) => {
-      const btn = document.querySelector(`.evolve-tab[data-tab="${tab}"]`);
-      if (!btn) return;
-      // Remove existing status indicator
-      const existing = btn.querySelector(".evolve-tab-status");
-      if (existing) existing.remove();
-      // Add status indicator
-      const status = document.createElement("span");
-      status.className = "evolve-tab-status";
+      // Compute desired status key for dirty check
+      let statusKey = "";
       if (_isTabBusy(tab, scope)) {
-        status.textContent = "⏳";
-        status.title = _getLang() === "en" ? "Loading..." : "加载中…";
-        status.classList.add("loading");
+        statusKey = "loading";
       } else {
         const cached = getCachedTab(tab, scope);
         if (cached && cached.data && cached.data._error) {
-          if (cached.data._error === "no_cache") {
-            // "no_cache" is an empty state, not an error — no indicator
-            // Fall through — status.textContent is empty, won't be appended
-          } else {
-            status.textContent = "⚠️";
-            status.title = cached.data._error;
-            status.classList.add("error");
-          }
+          statusKey = cached.data._error === "no_cache" ? "" : "error";
         } else if (cached) {
-          status.textContent = "✓";
-          status.title = _getLang() === "en" ? "Cached" : "已缓存";
-          status.classList.add("cached");
+          statusKey = "cached";
         }
+      }
+      if (_tabStatusCache[tab] === statusKey) return;
+      _tabStatusCache[tab] = statusKey;
+
+      const btn = document.querySelector(`.evolve-tab[data-tab="${tab}"]`);
+      if (!btn) return;
+      const existing = btn.querySelector(".evolve-tab-status");
+      if (existing) existing.remove();
+      const status = document.createElement("span");
+      status.className = "evolve-tab-status";
+      if (statusKey === "loading") {
+        status.textContent = "⏳";
+        status.title = _getLang() === "en" ? "Loading..." : "加载中…";
+        status.classList.add("loading");
+      } else if (statusKey === "error") {
+        status.textContent = "⚠️";
+        const cached = getCachedTab(tab, scope);
+        status.title = cached?.data?._error || "";
+        status.classList.add("error");
+      } else if (statusKey === "cached") {
+        status.textContent = "✓";
+        status.title = _getLang() === "en" ? "Cached" : "已缓存";
+        status.classList.add("cached");
       }
       if (status.textContent) btn.appendChild(status);
     });
@@ -932,10 +940,24 @@
   }
 
   // ── Overview bar ──
+  let _overviewBarKey = "";
   function updateEvolveOverviewBar() {
     const bar = $("#evolve-overview-bar");
     if (!bar) return;
     const scope = getEvolveScope();
+    // Dirty check — only rebuild when counts, active tab, or last-scan change
+    const counts = EVOLVE_TABS.map((tab) => {
+      const cached = getCachedTab(tab, scope);
+      return cached ? getTabItemCount(tab, cached.data) : 0;
+    });
+    const anyUpdated = EVOLVE_TABS.map((t) => getCachedTab(t, scope)?.updatedAt)
+      .filter(Boolean)
+      .sort()
+      .pop();
+    const key = `${evolveActiveTab}|${counts.join(",")}|${anyUpdated || ""}`;
+    if (key === _overviewBarKey) return;
+    _overviewBarKey = key;
+
     const icons = {
       profile: "🧬",
       memory: "🧠",
@@ -944,20 +966,13 @@
       patterns: "🔄",
     };
     bar.innerHTML = "";
-    EVOLVE_TABS.forEach((tab) => {
-      const cached = getCachedTab(tab, scope);
-      const count = cached ? getTabItemCount(tab, cached.data) : 0;
+    EVOLVE_TABS.forEach((tab, i) => {
       const div = document.createElement("div");
       div.className = `evolve-stat-card${tab === evolveActiveTab ? " active" : ""}`;
-      div.innerHTML = `<span class="evolve-stat-icon">${icons[tab]}</span><span class="evolve-stat-count">${count}</span><span class="evolve-stat-label">${_tt("evolve.tab." + tab)}</span>`;
+      div.innerHTML = `<span class="evolve-stat-icon">${icons[tab]}</span><span class="evolve-stat-count">${counts[i]}</span><span class="evolve-stat-label">${_tt("evolve.tab." + tab)}</span>`;
       div.onclick = () => switchEvolveTab(tab);
       bar.appendChild(div);
     });
-    // Last scan info
-    const anyUpdated = EVOLVE_TABS.map((t) => getCachedTab(t, scope)?.updatedAt)
-      .filter(Boolean)
-      .sort()
-      .pop();
     if (anyUpdated) {
       const span = document.createElement("span");
       span.className = "evolve-last-scan";
@@ -1294,14 +1309,14 @@
           runningCards.length
         ) {
           const item = runningCards.shift();
-          item.card.classList.remove("running");
+          item.card.classList.remove("running", "expanded");
           item.card.classList.add("done");
           const outputEl = item.card.querySelector(".tool-card-output");
           if (outputEl) outputEl.textContent = evt.detail || "";
           const header = item.card.querySelector(".tool-card-header");
           if (header)
             header.onclick = () => item.card.classList.toggle("expanded");
-          item.group.classList.remove("running");
+          item.group.classList.remove("running", "expanded");
           item.group.classList.add("done");
         }
       });
@@ -1501,9 +1516,9 @@
     _syncEvolveChrome(tab, scope);
   }
 
-  /** Show a "thinking" indicator below the last text block */
+  /** Show a "thinking" indicator below the last text block (idempotent — no remove/create if already present) */
   function _evolveShowThinking(container, state) {
-    _evolveHideThinking(container);
+    if (container.querySelector(".evolve-thinking")) return;
     const el = document.createElement("div");
     el.className = "evolve-thinking";
     el.innerHTML = `<span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-dot"></span><span class="evolve-thinking-label">${(window.esc || String)(_tt("evolve.status.aiGenerating"))}</span>`;
@@ -1668,7 +1683,8 @@
         break;
       }
       case "text":
-        _finalizeToolGroup(state);
+        // Only finalize tool group if no tools are still running
+        if (!state.toolGroupRunning) _finalizeToolGroup(state);
         progressState.starting = false;
         state.blockText += evt.content;
         if (!state.textBlock) {
@@ -1676,13 +1692,22 @@
           state.textBlock.className = "text-block";
           container.appendChild(state.textBlock);
         }
-        state.textBlock.innerHTML = window.renderMarkdownSimple
-          ? window.renderMarkdownSimple(state.blockText)
-          : `<pre>${esc(state.blockText)}</pre>`;
-        _updateProgressSummary(tab, progressState, true);
+        // Throttle markdown re-render to once per animation frame
+        if (!state._textRafPending) {
+          state._textRafPending = true;
+          requestAnimationFrame(() => {
+            state._textRafPending = false;
+            if (state.textBlock) {
+              state.textBlock.innerHTML = window.renderMarkdownSimple
+                ? window.renderMarkdownSimple(state.blockText)
+                : `<pre>${esc(state.blockText)}</pre>`;
+            }
+            _updateProgressSummary(tab, progressState, true);
+            if (tab === evolveActiveTab) _evolveAutoScroll();
+          });
+        }
         // Show a thinking indicator after text — tool generation can take 60s+
-        _evolveShowThinking(container, state);
-        if (isActiveTab) _evolveAutoScroll();
+        if (!state.toolGroupRunning) _evolveShowThinking(container, state);
         break;
       case "result":
         _finalizeToolGroup(state);
